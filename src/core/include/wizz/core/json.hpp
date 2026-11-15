@@ -9,6 +9,11 @@
 // text and never passes through double (06 §3, 03 §7.1). Object lookup is ordinal
 // and case-sensitive; for duplicate names the last member wins (04 §9.4).
 //
+// Unpaired surrogate escapes (D-28): the grammar allows them, so the document parses,
+// but that one string cannot be read — as_string, get_string and Member::name throw
+// TypeError with the text JsonElement.GetString throws (InvalidOperationException),
+// and so does an object lookup that reaches a member name holding one.
+//
 // Writer (04 §9.3, 01 §13, 01 §17.3, 02 §6.9): Utf8JsonWriter / JsonSerializer
 // defaults — strings escaped like JavaScriptEncoder.Default, compact or indented.
 
@@ -45,7 +50,9 @@ public:
 
 /// An accessor was used on the wrong kind of value (InvalidOperationException), e.g.
 /// "The requested operation requires an element of type 'Object', but the target
-/// element has type 'Array'." (05 CT-SRCH-04).
+/// element has type 'Array'." (05 CT-SRCH-04), or the text read holds an unpaired
+/// surrogate escape (D-28), e.g. "Cannot read incomplete UTF-16 JSON text as string
+/// with missing low surrogate.".
 class TypeError : public Error {
 public:
     using Error::Error;
@@ -60,7 +67,7 @@ public:
 /// JSON value kinds. `true` and `false` share `boolean` (JsonValueKind True/False).
 enum class Kind : std::uint8_t { null, boolean, number, string, array, object };
 
-struct Member;
+class Member;
 
 namespace detail {
 class Parser;
@@ -74,7 +81,10 @@ public:
     /// The literal null.
     Value() noexcept = default;
 
-    [[nodiscard]] Kind kind() const noexcept { return static_cast<Kind>(storage_.index()); }
+    [[nodiscard]] Kind kind() const noexcept
+    {
+        return std::holds_alternative<UnreadableText>(storage_) ? Kind::string : static_cast<Kind>(storage_.index());
+    }
     [[nodiscard]] bool is_null() const noexcept { return kind() == Kind::null; }
     [[nodiscard]] bool is_bool() const noexcept { return kind() == Kind::boolean; }
     [[nodiscard]] bool is_number() const noexcept { return kind() == Kind::number; }
@@ -87,7 +97,8 @@ public:
     /// GetBoolean. TypeError unless a bool.
     [[nodiscard]] bool as_bool() const;
 
-    /// GetString: the decoded UTF-8 text. TypeError unless a string.
+    /// GetString: the decoded UTF-8 text. TypeError unless a string, or when its escapes
+    /// hold an unpaired surrogate (D-28).
     [[nodiscard]] std::string_view as_string() const&;
     std::string_view as_string() const&& = delete;
 
@@ -117,13 +128,16 @@ public:
     [[nodiscard]] std::span<const Member> as_object() const&;
     std::span<const Member> as_object() const&& = delete;
 
-    /// TryGetProperty: ordinal, case-sensitive lookup where the last duplicate wins;
-    /// nullptr when absent. TypeError unless an object.
+    /// TryGetProperty: ordinal, case-sensitive lookup that scans from the last member to
+    /// the first, so the last duplicate wins; nullptr when absent. TypeError unless an
+    /// object, or when the scan reaches a member name holding an unpaired surrogate
+    /// before a match (D-28).
     [[nodiscard]] const Value* find(std::string_view name) const&;
     const Value* find(std::string_view name) const&& = delete;
 
     /// Str(e, n) of 02 §5.1: the member's text when `name` exists and its (last) value
-    /// is a JSON string; nullopt otherwise. TypeError unless an object.
+    /// is a JSON string; nullopt otherwise. TypeError unless an object, and when find()
+    /// or reading that text does (D-28).
     [[nodiscard]] std::optional<std::string_view> get_string(std::string_view name) const&;
     std::optional<std::string_view> get_string(std::string_view name) const&& = delete;
 
@@ -133,25 +147,47 @@ private:
     struct NumberText {
         std::string lexeme;
     };
-    // Alternative order mirrors Kind.
-    using Storage = std::variant<std::monostate, bool, NumberText, std::string, std::vector<Value>, std::vector<Member>>;
+    /// A string whose escapes hold an unpaired surrogate (D-28): reading its text
+    /// throws TypeError with `message`.
+    struct UnreadableText {
+        std::string message;
+    };
+    // Alternative order mirrors Kind; UnreadableText, last, is a second kind of string.
+    using Storage = std::variant<std::monostate, bool, NumberText, std::string, std::vector<Value>, std::vector<Member>,
+                                 UnreadableText>;
 
     explicit Value(Storage storage) noexcept : storage_(std::move(storage)) {}
 
     Storage storage_;
 };
 
-/// One object member as written in the source.
-struct Member {
-    std::string name;
-    Value value;
+/// One object member as written in the source (JsonProperty).
+class Member {
+public:
+    /// JsonProperty.Name: the decoded name. TypeError when its escapes hold an unpaired
+    /// surrogate (D-28); the value stays readable.
+    [[nodiscard]] std::string_view name() const&;
+    std::string_view name() const&& = delete;
+
+    /// JsonProperty.Value.
+    [[nodiscard]] const Value& value() const& noexcept { return value_; }
+    const Value& value() const&& = delete;
+
+private:
+    friend class detail::Parser;
+
+    Member(Value name, Value value) noexcept : name_(std::move(name)), value_(std::move(value)) {}
+
+    Value name_;  ///< always of kind string
+    Value value_;
 };
 
 /// Parses one UTF-8 JSON document (JsonDocument.Parse with default options).
 /// Throws ParseError on anything RFC 8259 rejects, on nesting deeper than kMaxDepth,
-/// on ill-formed UTF-8, unescaped control characters or lone surrogate escapes in
-/// strings, and on any non-white-space content after the root value. A byte order
-/// mark is not white space: decode bodies first (http::decode_body_text strips it).
+/// on ill-formed UTF-8 or unescaped control characters in strings, and on any
+/// non-white-space content after the root value. Unpaired surrogate escapes parse
+/// (D-28). A byte order mark is not white space: decode bodies first
+/// (http::decode_body_text strips it).
 [[nodiscard]] Value parse(std::string_view utf8);
 
 /// Writer layout. `compact` has no white space (JsonSerializer defaults, 04 §9.3).

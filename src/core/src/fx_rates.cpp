@@ -209,14 +209,14 @@ FxRates parse_fawaz(std::string_view json_text, std::string_view source_name)
         }
     }
     for (const json::Member& member : eur->as_object()) {
-        if (!is_three_letter_code(member.name)) {
+        if (!is_three_letter_code(member.name())) {
             continue;
         }
-        const Decimal per_eur = decimal_of(member.value);
+        const Decimal per_eur = decimal_of(member.value());
         if (per_eur.signum() <= 0) {
             continue;
         }
-        rates.per_eur.insert_or_assign(text::to_upper_invariant(member.name), per_eur);
+        rates.per_eur.insert_or_assign(text::to_upper_invariant(member.name()), per_eur);
     }
     return rates;
 }
@@ -262,7 +262,7 @@ FxRates parse_rates_cache(std::string_view json_text)
     }
     FxRates rates;
     for (const json::Member& member : per_eur->as_object()) {
-        rates.per_eur.insert_or_assign(text::to_upper_invariant(member.name), decimal_of(member.value));
+        rates.per_eur.insert_or_assign(text::to_upper_invariant(member.name()), decimal_of(member.value()));
     }
     if (rates.per_eur.empty()) {
         throw FormatError("FX cache has no rates.");

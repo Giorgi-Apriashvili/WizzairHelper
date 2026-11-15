@@ -203,6 +203,18 @@ TEST(Settings, Unicode_escapes_and_surrogate_pairs_are_decoded)
     EXPECT_EQ(settings.to, "\u00C1rhus");
 }
 
+TEST(Settings, Unpaired_surrogates_fail_the_file_only_where_they_are_read)
+{
+    // D-28 (verified on .NET 10): the serializer turns GetString's InvalidOperationException
+    // into a JsonException, so a known string or any property name holding an unpaired
+    // surrogate escape gives all defaults; an unknown property's value is skipped unread.
+    EXPECT_EQ(AppSettings::parse("{\"MaxNights\": 12, \"From\": \"\\ud800\"}"), AppSettings{});
+    EXPECT_EQ(AppSettings::parse("{\"MaxNights\": 12, \"\\udc00\": 1}"), AppSettings{});
+    AppSettings expected;
+    expected.max_nights = 12;
+    EXPECT_EQ(AppSettings::parse("{\"MaxNights\": 12, \"Comment\": \"\\ud800\"}"), expected);
+}
+
 TEST(Settings, Values_are_not_clamped_on_load)
 {
     const AppSettings settings = AppSettings::parse(R"({"FromRadiusKm": -5, "Adults": 12, "MinNights": 70})");

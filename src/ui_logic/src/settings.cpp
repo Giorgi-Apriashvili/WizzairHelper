@@ -55,8 +55,8 @@ struct WrongType {};
 
 void apply_member(AppSettings& settings, const json::Member& member)
 {
-    const std::string& name = member.name;
-    const json::Value& value = member.value;
+    const std::string_view name = member.name();
+    const json::Value& value = member.value();
     if (name == "From") {
         settings.from = read_string(value);
     } else if (name == "To") {

@@ -227,19 +227,20 @@ using CacheRead = std::expected<T, CorruptCache>;
     }
     PlaceDto dto;
     for (const json::Member& member : element.as_object()) {
-        if (member.name == "Name" || member.name == "Detail" || member.name == "Kind") {
-            auto text = read_string_property(member.value);
+        const std::string_view name = member.name();
+        if (name == "Name" || name == "Detail" || name == "Kind") {
+            auto text = read_string_property(member.value());
             if (!text) {
                 return std::unexpected(text.error());
             }
-            std::string& target = member.name == "Name" ? dto.name : member.name == "Detail" ? dto.detail : dto.kind;
+            std::string& target = name == "Name" ? dto.name : name == "Detail" ? dto.detail : dto.kind;
             target = std::move(*text);
-        } else if (member.name == "Lat" || member.name == "Lon") {
-            const auto number = read_double_property(member.value);
+        } else if (name == "Lat" || name == "Lon") {
+            const auto number = read_double_property(member.value());
             if (!number) {
                 return std::unexpected(number.error());
             }
-            (member.name == "Lat" ? dto.lat : dto.lon) = *number;
+            (name == "Lat" ? dto.lat : dto.lon) = *number;
         }
     }
     return std::optional<PlaceDto>{std::move(dto)};
@@ -490,17 +491,24 @@ std::vector<GeocodeCacheEntry> parse_geocode_cache(std::string_view json)
     }
     std::vector<GeocodeCacheEntry> entries;
     std::unordered_map<std::string, std::size_t> index;
-    for (const json::Member& member : root.as_object()) {
-        auto hits = read_cached_hits(member.value);
-        if (!hits) {
-            return {};
+    try {
+        for (const json::Member& member : root.as_object()) {
+            std::string key{member.name()};
+            auto hits = read_cached_hits(member.value());
+            if (!hits) {
+                return {};
+            }
+            if (const auto found = index.find(key); found != index.end()) {
+                entries[found->second].hits = std::move(*hits);  // dictionary[key] = value: position kept
+            } else {
+                index.emplace(key, entries.size());
+                entries.push_back(GeocodeCacheEntry{.key = std::move(key), .hits = std::move(*hits)});
+            }
         }
-        if (const auto found = index.find(member.name); found != index.end()) {
-            entries[found->second].hits = std::move(*hits);  // dictionary[key] = value: position kept
-        } else {
-            index.emplace(member.name, entries.size());
-            entries.push_back(GeocodeCacheEntry{.key = member.name, .hits = std::move(*hits)});
-        }
+    } catch (const json::TypeError&) {
+        // A key, property name or text with an unpaired surrogate (D-28): the serializer
+        // turns GetString's InvalidOperationException into a JsonException.
+        return {};
     }
     return entries;
 }

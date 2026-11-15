@@ -77,8 +77,8 @@ constexpr std::array<std::string_view, 15> kKnownFields{
         throw ReplayConfigError(std::format("replay.json rule {} is not an object.", index));
     }
     for (const json::Member& member : element.as_object()) {
-        if (std::ranges::find(kKnownFields, member.name) == kKnownFields.end()) {
-            throw ReplayConfigError(std::format("replay.json rule {}: unknown field \"{}\".", index, member.name));
+        if (std::ranges::find(kKnownFields, member.name()) == kKnownFields.end()) {
+            throw ReplayConfigError(std::format("replay.json rule {}: unknown field \"{}\".", index, member.name()));
         }
     }
     ReplayTransport::Rule rule;
@@ -118,7 +118,7 @@ constexpr std::array<std::string_view, 15> kKnownFields{
             throw ReplayConfigError(std::format("replay.json rule {}: \"headers\" must be an object.", index));
         }
         for (const json::Member& header : headers->as_object()) {
-            rule.headers.emplace_back(header.name, string_field(header.value, header.name, index));
+            rule.headers.emplace_back(header.name(), string_field(header.value(), header.name(), index));
         }
     }
     if (const json::Value* delay = element.find("delayMs")) {
@@ -152,16 +152,21 @@ constexpr std::array<std::string_view, 15> kKnownFields{
     } catch (const json::Error& error) {
         throw ReplayConfigError(std::format("{} is not valid JSON: {}", manifest.string(), error.what()));
     }
-    const json::Value* rules = root.is_object() ? root.find("rules") : nullptr;
-    if (!rules || !rules->is_array()) {
-        throw ReplayConfigError(std::format("{} has no \"rules\" array.", manifest.string()));
+    try {
+        const json::Value* rules = root.is_object() ? root.find("rules") : nullptr;
+        if (!rules || !rules->is_array()) {
+            throw ReplayConfigError(std::format("{} has no \"rules\" array.", manifest.string()));
+        }
+        std::vector<ReplayTransport::Rule> parsed;
+        std::size_t index = 0;
+        for (const json::Value& element : rules->as_array()) {
+            parsed.push_back(parse_rule(element, index++, directory));
+        }
+        return parsed;
+    } catch (const json::TypeError& error) {
+        // A name or text holding an unpaired surrogate escape (D-28).
+        throw ReplayConfigError(std::format("{} cannot be read: {}", manifest.string(), error.what()));
     }
-    std::vector<ReplayTransport::Rule> parsed;
-    std::size_t index = 0;
-    for (const json::Value& element : rules->as_array()) {
-        parsed.push_back(parse_rule(element, index++, directory));
-    }
-    return parsed;
 }
 
 } // namespace

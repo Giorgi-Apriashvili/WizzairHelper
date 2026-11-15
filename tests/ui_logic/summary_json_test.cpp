@@ -24,7 +24,7 @@ using test::ui::en;
 {
     std::vector<std::string> names;
     for (const json::Member& member : object.as_object()) {
-        names.push_back(member.name);
+        names.emplace_back(member.name());
     }
     return names;
 }

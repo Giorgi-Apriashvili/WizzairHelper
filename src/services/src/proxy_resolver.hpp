@@ -31,6 +31,10 @@ public:
     [[nodiscard]] std::optional<std::string> proxy_for(const std::string& url, std::string_view scheme,
                                                        std::string_view host);
 
+    /// False when proxy_for answers `host` at once; true when it may wait for WinHTTP
+    /// (automatic detection or a setup script applies).
+    [[nodiscard]] bool may_block(std::string_view host) const;
+
 private:
     struct WinHttpCloser {
         void operator()(HINTERNET handle) const noexcept { ::WinHttpCloseHandle(handle); }

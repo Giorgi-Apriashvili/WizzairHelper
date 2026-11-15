@@ -11,13 +11,19 @@
 #include <array>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <exception>
 #include <format>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
+#include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -309,6 +315,111 @@ struct UrlParts {
     return static_cast<long>(std::clamp<std::chrono::milliseconds::rep>(value.count(), 1, LONG_MAX));
 }
 
+/// The time left until `deadline`, rounded up to whole milliseconds; TimeoutError when none is.
+[[nodiscard]] std::chrono::milliseconds time_left(SteadyClock::time_point deadline, const std::string& url)
+{
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - SteadyClock::now());
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        throw TimeoutError(std::format("The request to {} timed out before it could be sent", url));
+    }
+    return remaining;
+}
+
+// --- proxy discovery --------------------------------------------------------------
+
+/// Runs proxy lookups that may block (WinHTTP automatic detection or setup script, an
+/// injected selector) on threads of their own, so that a send stops waiting the moment
+/// its deadline passes or `stop` fires (04 §11.2). An abandoned lookup runs to completion
+/// in the background; finished threads are joined by later lookups, the rest by the
+/// destructor.
+class ProxyLookups {
+public:
+    using Lookup = std::function<std::optional<std::string>()>;
+
+    ProxyLookups() = default;
+    ProxyLookups(const ProxyLookups&) = delete;
+    ProxyLookups& operator=(const ProxyLookups&) = delete;
+    ~ProxyLookups() = default; // every jthread joins
+
+    /// The lookup's answer, or what it threw; TimeoutError at `deadline` and
+    /// OperationCancelled when `stop` fires (a cancel wins).
+    [[nodiscard]] std::optional<std::string> run(Lookup lookup, SteadyClock::time_point deadline,
+                                                 const std::stop_token& stop, const std::string& url)
+    {
+        const auto outcome = std::make_shared<Outcome>();
+        {
+            const std::scoped_lock lock(mutex_);
+            std::erase_if(workers_, [](const Worker& worker) { return worker.outcome->finished(); });
+            workers_.reserve(workers_.size() + 1); // push_back cannot throw once the thread runs
+            workers_.push_back(
+                Worker{outcome, std::jthread{[outcome, lookup = std::move(lookup)] { outcome->complete(lookup); }}});
+        }
+        return outcome->wait(deadline, stop, url);
+    }
+
+private:
+    class Outcome {
+    public:
+        void complete(const Lookup& lookup) noexcept
+        {
+            std::optional<std::string> proxy;
+            std::exception_ptr failure;
+            try {
+                proxy = lookup();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            {
+                const std::scoped_lock lock(mutex_);
+                proxy_ = std::move(proxy);
+                failure_ = std::move(failure);
+                finished_ = true;
+            }
+            done_.notify_all();
+        }
+
+        [[nodiscard]] bool finished()
+        {
+            const std::scoped_lock lock(mutex_);
+            return finished_;
+        }
+
+        [[nodiscard]] std::optional<std::string> wait(SteadyClock::time_point deadline, const std::stop_token& stop,
+                                                      const std::string& url)
+        {
+            std::unique_lock lock(mutex_);
+            const auto is_finished = [this] { return finished_; };
+            const bool finished = deadline == SteadyClock::time_point::max()
+                                      ? done_.wait(lock, stop, is_finished)
+                                      : done_.wait_until(lock, stop, deadline, is_finished);
+            if (!finished) {
+                lock.unlock();
+                throw_if_cancelled(stop);
+                throw TimeoutError(std::format("The request to {} timed out while its proxy was being looked up", url));
+            }
+            if (failure_) {
+                std::rethrow_exception(failure_);
+            }
+            return std::move(proxy_);
+        }
+
+    private:
+        std::mutex mutex_; // guards the members below
+        std::condition_variable_any done_;
+        bool finished_ = false;
+        std::optional<std::string> proxy_;
+        std::exception_ptr failure_;
+    };
+
+    struct Worker {
+        std::shared_ptr<Outcome> outcome;
+        std::jthread thread;
+    };
+
+    std::mutex mutex_; // guards workers_
+    std::vector<Worker> workers_;
+};
+
 // --- one transfer -----------------------------------------------------------------
 
 /// Receives one response. Status lines reset the header list, so only the headers of
@@ -486,7 +597,10 @@ std::size_t on_body(char* data, std::size_t size, std::size_t count, void* user)
 
 class CurlTransport::Impl {
 public:
-    explicit Impl(std::optional<WindowsProxyConfig> proxy) : proxy_(std::move(proxy)) {}
+    explicit Impl(std::optional<WindowsProxyConfig> proxy) : proxy_(std::make_shared<ProxyResolver>(std::move(proxy)))
+    {
+    }
+    explicit Impl(ProxySelector select_proxy) : select_proxy_(std::move(select_proxy)) {}
 
     [[nodiscard]] Response send(const Request& request, const std::stop_token& stop);
 
@@ -511,12 +625,17 @@ private:
 
     [[nodiscard]] HopResult perform(const Hop& hop, SteadyClock::time_point deadline,
                                     std::chrono::milliseconds connect_timeout, const std::stop_token& stop);
-    void configure_proxy(CURL* easy, const std::string& url);
+    /// The proxy for `url` (nullopt: libcurl's environment rules). A lookup that may
+    /// block runs on a helper thread and is waited for until `deadline` or `stop`.
+    [[nodiscard]] std::optional<std::string> choose_proxy(const std::string& url, SteadyClock::time_point deadline,
+                                                          const std::stop_token& stop);
 
     LibraryGuard library_;
     SharedDnsCache dns_;     // must outlive every session and transfer
     SessionPool sessions_;
-    ProxyResolver proxy_;
+    std::shared_ptr<ProxyResolver> proxy_; // null when `select_proxy_` decides
+    ProxySelector select_proxy_;
+    ProxyLookups lookups_; // last: joins abandoned lookups first
 };
 
 Response CurlTransport::Impl::send(const Request& request, const std::stop_token& stop)
@@ -549,10 +668,13 @@ CurlTransport::Impl::HopResult CurlTransport::Impl::perform(const Hop& hop, Stea
                                                             const std::stop_token& stop)
 {
     throw_if_cancelled(stop); // checked before the deadline: a user cancel wins over a timeout
-    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - SteadyClock::now());
-    if (remaining <= std::chrono::milliseconds::zero()) {
-        throw TimeoutError(std::format("The request to {} timed out before it could be sent", hop.url));
-    }
+    static_cast<void>(time_left(deadline, hop.url)); // no time left: not even the proxy lookup starts
+    // 04 §11.2: the attempt's timer covers proxy discovery too, so the transfer gets
+    // only what is left after it.
+    const std::optional<std::string> proxy = choose_proxy(hop.url, deadline, stop);
+    throw_if_cancelled(stop);
+    const std::chrono::milliseconds remaining = time_left(deadline, hop.url);
+
     const bool is_post = hop.method == "POST";
     ResponseSink sink;
     std::array<char, CURL_ERROR_SIZE> error_buffer{};
@@ -592,7 +714,15 @@ CurlTransport::Impl::HopResult CurlTransport::Impl::perform(const Hop& hop, Stea
     } else {
         set_option(easy, CURLOPT_HTTPGET, 1L);
     }
-    configure_proxy(easy, hop.url);
+    if (proxy) { // nullopt: environment variables, libcurl's own rules
+        set_option(easy, CURLOPT_PROXY, proxy->c_str());
+        set_option(easy, CURLOPT_NOPROXY, ""); // the choice above is final
+        if (!proxy->empty()) {
+            // Corporate proxies: Negotiate/NTLM through SSPI with the signed-in user's credentials.
+            set_option(easy, CURLOPT_PROXYAUTH, static_cast<long>(CURLAUTH_NEGOTIATE | CURLAUTH_NTLM));
+            set_option(easy, CURLOPT_PROXYUSERPWD, ":");
+        }
+    }
 
     CURLcode result = CURLE_OK;
     {
@@ -624,28 +754,32 @@ CurlTransport::Impl::HopResult CurlTransport::Impl::perform(const Hop& hop, Stea
     return HopResult{sink.take_response(static_cast<int>(status)), std::move(redirect_url)};
 }
 
-void CurlTransport::Impl::configure_proxy(CURL* easy, const std::string& url)
+std::optional<std::string> CurlTransport::Impl::choose_proxy(const std::string& url, SteadyClock::time_point deadline,
+                                                             const std::stop_token& stop)
 {
-    const auto parts = parse_url(url);
+    if (select_proxy_) {
+        return lookups_.run([select = select_proxy_, url] { return select(url); }, deadline, stop, url);
+    }
+    auto parts = parse_url(url);
     if (!parts) {
-        return; // libcurl reports the malformed URL
+        return std::nullopt; // libcurl reports the malformed URL
     }
-    const std::optional<std::string> proxy = proxy_.proxy_for(url, parts->scheme, parts->host);
-    if (!proxy) {
-        return; // environment variables: libcurl's own rules
+    if (!proxy_->may_block(parts->host)) {
+        return proxy_->proxy_for(url, parts->scheme, parts->host); // direct, manual or environment: no wait
     }
-    set_option(easy, CURLOPT_PROXY, proxy->c_str());
-    set_option(easy, CURLOPT_NOPROXY, ""); // the choice above is final
-    if (!proxy->empty()) {
-        // Corporate proxies: Negotiate/NTLM through SSPI with the signed-in user's credentials.
-        set_option(easy, CURLOPT_PROXYAUTH, static_cast<long>(CURLAUTH_NEGOTIATE | CURLAUTH_NTLM));
-        set_option(easy, CURLOPT_PROXYUSERPWD, ":");
-    }
+    return lookups_.run([resolver = proxy_, url, parts = std::move(*parts)] {
+        return resolver->proxy_for(url, parts.scheme, parts.host);
+    }, deadline, stop, url);
 }
 
 CurlTransport::CurlTransport() : impl_(std::make_unique<Impl>(std::nullopt)) {}
 
-CurlTransport::CurlTransport(WindowsProxyConfig proxy) : impl_(std::make_unique<Impl>(std::move(proxy))) {}
+CurlTransport::CurlTransport(WindowsProxyConfig proxy)
+    : impl_(std::make_unique<Impl>(std::optional<WindowsProxyConfig>{std::move(proxy)}))
+{
+}
+
+CurlTransport::CurlTransport(ProxySelector select_proxy) : impl_(std::make_unique<Impl>(std::move(select_proxy))) {}
 
 CurlTransport::~CurlTransport() = default;
 

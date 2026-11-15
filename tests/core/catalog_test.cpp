@@ -1049,6 +1049,22 @@ TEST(Catalog, FromMapJson_shape_errors_are_json_errors)
     EXPECT_NO_THROW((void)parse_map(R"({"cities":[{"iata":"","connections":[5]},{"iata":"BUD"}]})"));
 }
 
+TEST(Catalog, FromMapJson_keeps_stations_whose_unread_fields_hold_lone_surrogates)
+{
+    // D-28: an unpaired surrogate escape fails only when its text is read (GetString), so
+    // junk in a field the parser never reads keeps the map usable (02 §5.1).
+    const AirportCatalogPtr catalog =
+        parse_map("{\"cities\":[{\"iata\":\"BUD\",\"shortName\":\"Budapest\",\"aliases\":[\"\\ud83d\"],"
+                  "\"connections\":[{\"iata\":\"LTN\",\"note\":\"\\udc00\"}]}]}");
+    ASSERT_EQ(catalog->all().size(), 1u);
+    EXPECT_EQ(catalog->find("BUD")->name, "Budapest");
+    EXPECT_EQ(catalog->find("BUD")->connections, (std::vector<wizz::RouteConnection>{{"LTN", std::nullopt}}));
+
+    // A field that is read fails like .NET (InvalidOperationException), so callers fall back.
+    EXPECT_THROW((void)parse_map("{\"cities\":[{\"iata\":\"BUD\",\"shortName\":\"\\ud83d\"}]}"),
+                 wizz::json::TypeError);
+}
+
 TEST(Catalog, FromMapJson_applies_strict_kind_tests_trimming_and_upper_casing)
 {
     const AirportCatalogPtr catalog = parse_map(R"js({"cities":[
