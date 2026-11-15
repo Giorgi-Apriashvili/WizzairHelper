@@ -92,6 +92,12 @@ private:
 {
     return at_midnight(d) + std::chrono::hours{hour} + std::chrono::minutes{minute} + std::chrono::seconds{second};
 }
+/// The UTC instant at a civil date and UTC wall-clock time (fixed clocks, expected WaitUntilUtc values).
+[[nodiscard]] constexpr UtcInstant make_utc(Date d, int hour, int minute, int second = 0) noexcept
+{
+    return UtcInstant{std::chrono::duration_cast<Ticks>(d.sys_days().time_since_epoch())} + std::chrono::hours{hour} +
+           std::chrono::minutes{minute} + std::chrono::seconds{second};
+}
 
 /// Injectable clock: UTC instant, machine-local wall clock and a monotonic counter.
 class Clock {
