@@ -16,6 +16,15 @@ without a window.
   `%LOCALAPPDATA%` text). `details` = exception type + message + `std::stacktrace`. Hooks:
   try/catch around posted tasks and event dispatch (`QApplication::notify` override),
   `SetUnhandledExceptionFilter`, `std::set_terminate`; worker-thread exceptions are posted to the UI.
+  - `Application` (`application.hpp`) is the `QApplication` subclass whose `notify()` runs every
+    event through `CrashReporter::run_guarded`; the app keeps running after the box.
+  - Workers: `catch (...) { CrashReporter::post_current_exception(); }` at the top of the thread
+    function (describes the exception there, shows the box on the UI thread).
+  - MSVC x64 runs a catch block only after the throwing frames are unwound, so `install()` also
+    adds a vectored exception handler that records the stack of each C++ throw per thread; the
+    log then starts at the throw site. MSVC keeps terminate handlers per thread
+    (`CrashReporter::install_terminate_handler()` for worker threads).
+  - The dialog is injectable (tests); `set_data_root()` applies `--data-root` after parsing.
 - Logical pixels: Qt widget coordinates are already DPI-independent, so 01's `L(x)` is just `x`.
   Settings `WindowWidth/Height` are *device* pixels: multiply/divide by `devicePixelRatio()`.
 
@@ -29,11 +38,11 @@ without a window.
 | `FractionalSpinBox` (QAbstractSpinBox) | 01 §4.4 notes | Displays whole numbers (half away from zero), accepts typed fractions with the locale separator, keeps the fractional value; `int_value()` truncates toward zero. |
 | `FlightGrid` (QWidget: top bar + QTableView) | 01 §8 | `FlightTableModel` (QAbstractTableModel over an index vector; one `beginResetModel`/`beginInsertRows` per batch), view combo, summary label, header-click sort via ui_logic comparator (stable, nulls first, secondary collation), row colouring, explicit pick (identity), RestoreSelection, context menu, copy, open URL, Enter/double-click open, self-test accessors. |
 | `RoundTripGrid` (QWidget) | 01 §9 | Two checkboxes, summary, `RoundTripTableModel`, sort, open combined/both URLs, context menu. |
-| `BusyPanel` (QWidget) | 01 §10 | Renders `ui::BusyPanelModel` on a 40 ms `QTimer`: `SpinnerWidget`, `QProgressBar` (0..1001, marquee = range 0..0), elapsed (Courier New 9.5 pt bold), status (elided), wait note (DarkOrange bold), Cancel; metrics from font metrics (§10.1); drives `TaskbarProgress`. |
+| `BusyPanel` (QWidget) | 01 §10 | Renders `ui::BusyPanelModel` on a 40 ms `QTimer`: `SpinnerWidget`, `QProgressBar` (0..1001, marquee = range 0..0), elapsed (Courier New 9.5 pt bold), status (`ElidedLabel`, tooltip when cut), wait note (DarkOrange bold), Cancel; metrics from font metrics (§10.1); drives `TaskbarProgress`. ControlLight / ControlText come from `system_colour()` (GetSysColor), because Qt styles repaint palette roles (the `windows11` style makes Midlight white and draws a thin Fluent bar; `windowsvista` reproduces the WinForms bar). Esc must call `request_cancel()` (D-11). |
 | `SpinnerWidget` | 01 §10.8 | QPainter arc/track/dot exactly as specified. |
 | `TaskbarProgress` | 01 §10.9 | `ITaskbarList3` RAII wrapper with the state/value de-duplication rules. |
 | `PlaceChooserDialog` (QDialog) | 01 §11.5 | Modal chooser, exact texts, `Use this place` default, Cancel rightmost, double-click = OK. |
-| `LogView` | 01 §12 | Read-only `QPlainTextEdit`, Courier New 9 pt, `[HH:mm:ss] ` prefix (culture time separator), unlimited, scroll to end. |
+| `LogView` | 01 §12 | Read-only `QPlainTextEdit`, Courier New 9 pt, `[HH:mm:ss] ` prefix (culture time separator), unlimited, scroll to end; background SystemColors.Window (viewport kept filled after the style's polish); `text()` keeps the CRLF text for `summary.json`. |
 
 ## Controller and threading (01 §7, §11, §14; 06 §2)
 
