@@ -15,6 +15,7 @@ target_include_directories(wizzairhelper_tests PRIVATE "${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(wizzairhelper_tests PRIVATE
     wizz::core
     wizz::services
+    wizz::ui_logic
     GTest::gtest
     GTest::gtest_main)
 

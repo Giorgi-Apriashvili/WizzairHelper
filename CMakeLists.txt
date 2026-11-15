@@ -33,6 +33,7 @@ include(WizzProjectOptions)
 
 add_subdirectory(src/core)
 add_subdirectory(src/services)
+add_subdirectory(src/ui_logic)
 
 if(WIZZ_BUILD_GUI)
     add_subdirectory(src/app)
