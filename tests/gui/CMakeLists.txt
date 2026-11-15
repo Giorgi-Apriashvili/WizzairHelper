@@ -8,7 +8,10 @@ wizz_collect_sources(WIZZ_GUI_TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
-add_executable(wizzairhelper_gui_tests ${WIZZ_GUI_TEST_SOURCES})
+add_executable(wizzairhelper_gui_tests ${WIZZ_GUI_TEST_SOURCES}
+    # Fixture access (CAT, RATES, 05 §0.3) shared with the conformance suite.
+    "${PROJECT_SOURCE_DIR}/tests/support/fixtures.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/support/fake_transport.cpp")
 set_target_properties(wizzairhelper_gui_tests PROPERTIES AUTOMOC ON)
 
 target_include_directories(wizzairhelper_gui_tests PRIVATE
