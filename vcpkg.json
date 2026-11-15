@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "wizzairhelper",
+  "version": "1.0.0",
+  "description": "Finds the cheapest Wizz Air trips from airports near a chosen starting place.",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
+  "dependencies": [
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [ "ssl", "brotli" ]
+    }
+  ],
+  "features": {
+    "gui": {
+      "description": "Qt 6 Widgets desktop application (WizzairHelper.exe)",
+      "dependencies": [
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [ "gui", "widgets", "png", "windeployqt" ]
+        }
+      ]
+    },
+    "tests": {
+      "description": "Offline conformance test suite (wizzairhelper_tests)",
+      "dependencies": [ "gtest" ]
+    }
+  },
+  "overrides": [
+    { "name": "curl", "version": "8.23.0" },
+    { "name": "qtbase", "version": "6.11.2" },
+    { "name": "gtest", "version": "1.18.0" }
+  ]
+}
