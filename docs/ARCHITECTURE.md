@@ -35,10 +35,11 @@ directory needs no CMake edit.
 |---|---|---|---|
 | `wizzairhelper_core` (`wizz::core`) | `src/core` | Pure logic, no I/O: time, decimal, JSON, Unicode text, locale/formatting, geo, domain values, airport catalog + offline place matching, planner, pricing/FX tables, result views, booking links, round trips; abstract `Clock`, `http::Transport`, cancellation, progress records | C++ std, Windows ICU |
 | `wizzairhelper_services` (`wizz::services`) | `src/services` | Everything that performs I/O or owns threads: libcurl transport, file cache + AppPaths, request gate, Wizz client, currency service, geocoder + place resolver, flight search service, system clock | core, libcurl, Win32 |
-| `WizzairHelper` | `src/app` | Qt 6 Widgets UI, settings, diagnostics, crash reporting, `--autotest` | core, services, Qt |
-| `wizzairhelper_tests` | `tests` | GoogleTest conformance suite: fake transport, fixed clock, recording delay, fixture replay | core, services, gtest |
+| `wizzairhelper_ui_logic` (`wizz::ui_logic`) | `src/ui_logic` | Qt-free presenter / view-model logic of the desktop app (05 §7.2), namespace `wizz::ui`: string catalogue, leg status / log texts, BusyPanel state machine, date and nights coupling, request building, settings.json, `--autotest` options + replay transport (D-30), summary.json, grid models (sort, selection, streaming) | core, services |
+| `WizzairHelper` | `src/app` | Qt 6 Widgets UI (thin widgets over `ui_logic`), diagnostics, crash reporting, `--autotest` driver | core, services, ui_logic, Qt |
+| `wizzairhelper_tests` | `tests` | GoogleTest conformance suite: fake transport, fixed clock, recording delay, fixture replay | core, services, ui_logic, gtest |
 
-Core and services never include Qt. Nothing in core performs I/O.
+Core, services and ui_logic never include Qt. Nothing in core performs I/O.
 
 Header layout: public headers under `src/<target>/include/wizz/<target>/…`, included as
 `#include "wizz/core/decimal.hpp"`. Private helpers live next to the `.cpp` files in `src/<target>/src/`.

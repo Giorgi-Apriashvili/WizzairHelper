@@ -22,6 +22,7 @@ target_compile_definitions(WizzairHelper PRIVATE
 target_link_libraries(WizzairHelper PRIVATE
     wizz::core
     wizz::services
+    wizz::ui_logic
     Qt6::Widgets
     ole32           # ITaskbarList3 (COM)
     windowscodecs   # WIC PNG encoder for --autotest screenshots
