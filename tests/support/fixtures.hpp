@@ -19,6 +19,17 @@ namespace wizz::test {
 /// cannot be read.
 [[nodiscard]] std::string read_fixture(std::string_view name);
 
+/// `<directory of the running test executable>/LiveCache`: the frozen live dataset of
+/// 02 §14 (map.json, geocode.json, fx.json, api-url.txt), copied post-build (D-24).
+[[nodiscard]] std::filesystem::path live_cache_dir();
+
+/// The whole file `<test-exe-dir>/LiveCache/<name>`, byte-exact. Throws
+/// std::runtime_error naming the path if it cannot be read.
+[[nodiscard]] std::string read_live_cache(std::string_view name);
+
+/// Lower-case hexadecimal SHA-256 of `bytes` (05 §9 and 02 §14 integrity checks).
+[[nodiscard]] std::string sha256_hex(std::string_view bytes);
+
 /// `HOME_HTML` (05 §1.6): the synthetic wizzair.com homepage advertising API 29.23.1.
 inline constexpr std::string_view kHomeHtml =
     R"(<html><script>window.__NUXT__={};window.__NUXT__.config={public:{baseUrl:"https://www.wizzair.com",apiUrl:"https://be.wizzair.com/29.23.1/Api",x:1}}</script></html>)";
