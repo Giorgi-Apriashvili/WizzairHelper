@@ -1,0 +1,12 @@
+# Build trees
+/build/
+/out/
+/install/
+/package/
+CMakeUserPresets.json
+# vcpkg manifest-mode install tree
+/vcpkg_installed/
+# IDE
+/.vs/
+/.vscode/
+*.user

@@ -1,0 +1,7 @@
+# Everything: normalise to LF in the repository.
+* text=auto
+*.png binary
+*.ico binary
+# Fixtures are byte-exact test inputs (SHA-256 pinned in 05 §9): never normalise line endings.
+# (Must come after "* text=auto": later lines take precedence.)
+fixtures/** -text
