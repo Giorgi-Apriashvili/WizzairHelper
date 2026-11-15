@@ -77,6 +77,7 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     }
     table_->setColumnHidden(section(TripColumn::idx), true);
     table_->set_fill_column(section(TripColumn::booking_notes), kNotesMinimumWidth);
+    setTabOrder({table_, same_home_, same_away_});  // the grid before its filters (01 §6.3)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

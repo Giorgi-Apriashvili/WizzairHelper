@@ -23,6 +23,9 @@
 #include <QLabel>
 #include <QMenu>
 #include <QScrollBar>
+#include <QTabBar>
+#include <QTabWidget>
+#include <QVBoxLayout>
 
 #include <gtest/gtest.h>
 
@@ -245,6 +248,35 @@ TEST(RoundTripGridWidget, Set_trips_resets_the_selection_to_the_top)
     EXPECT_EQ(f.grid.summary_text(), "No combination with a stay of 9–10 nights. Change the nights or the dates.");
 }
 
+TEST(RoundTripGridWidget, Set_trips_scrolls_the_Total_cell_of_row_0_into_view)
+{
+    // 01 §9.3 "make row 0 current (at the Total column)": DataGridView.CurrentCell scrolls
+    // that cell into view, so a grid scrolled right to read "Booking / notes" comes back left.
+    TripFixture f;
+    f.grid.resize(600, 300);
+    f.grid.show();
+    const ui::TripsView view = section11_trips(2, 5);
+    f.grid.set_trips(view.trips, view.currency, view.summary);
+    app::GridTableView& table = *f.grid.table();
+    // The user widened "Outbound": the columns no longer fit and the grid scrolls horizontally
+    // (whatever the width the two checkboxes need on this platform).
+    table.setColumnWidth(col(TripColumn::outbound), 2 * f.grid.width());
+    settle();
+    QScrollBar& bar = *table.horizontalScrollBar();
+    ASSERT_GT(bar.maximum(), 0);
+    bar.setValue(bar.maximum());
+    settle();
+    ASSERT_EQ(bar.value(), bar.maximum());
+
+    f.grid.set_trips(view.trips, view.currency, view.summary);  // a recompute (nights, filters)
+    settle();
+    EXPECT_EQ(current_view_row(f.grid), 0);
+    EXPECT_EQ(table.currentIndex().column(), col(TripColumn::total));
+    EXPECT_EQ(bar.value(), 0);
+    EXPECT_TRUE(table.viewport()->rect().contains(table.visualRect(table.currentIndex())));
+    EXPECT_EQ(table.verticalScrollBar()->value(), 0);
+}
+
 TEST(RoundTripGridWidget, Default_sort_ties_keep_the_combiner_order_and_header_sorts_persist)
 {
     TripFixture f;
@@ -284,6 +316,57 @@ TEST(RoundTripGridWidget, Default_sort_ties_keep_the_combiner_order_and_header_s
     f.grid.set_trips(rt01_trips(), "EUR", "");  // the user sort persists
     EXPECT_EQ(text_at(f.grid, 0, TripColumn::nights), "5");
     EXPECT_EQ(header.sortIndicatorSection(), col(TripColumn::nights));
+}
+
+TEST(RoundTripGridWidget, A_double_click_on_a_header_sorts_once)
+{
+    // The second click of a double-click is no header click in WinForms (01 §8.4, §9.1).
+    TripFixture f;
+    f.grid.resize(1600, 400);
+    f.grid.show();
+    f.grid.set_trips(rt01_trips(), "EUR", "");
+    settle();
+    int layouts = 0;
+    QObject::connect(f.grid.model(), &QAbstractItemModel::layoutChanged, [&] { ++layouts; });
+    QHeaderView& header = *f.grid.table()->horizontalHeader();
+
+    double_click_header(header, col(TripColumn::nights));
+    EXPECT_EQ(layouts, 1);
+    ASSERT_TRUE(f.grid.model()->state().user_sort());
+    EXPECT_EQ(f.grid.model()->state().user_sort()->column, TripColumn::nights);
+    EXPECT_EQ(f.grid.model()->state().user_sort()->direction, ui::SortDirection::ascending);
+    EXPECT_EQ(header.sortIndicatorSection(), col(TripColumn::nights));
+    EXPECT_EQ(header.sortIndicatorOrder(), Qt::AscendingOrder);
+    EXPECT_EQ(text_at(f.grid, 0, TripColumn::nights), "2");
+
+    click_header(f.grid, TripColumn::nights);  // the next click toggles
+    EXPECT_EQ(layouts, 2);
+    EXPECT_EQ(header.sortIndicatorOrder(), Qt::DescendingOrder);
+    EXPECT_EQ(text_at(f.grid, 0, TripColumn::nights), "5");
+}
+
+TEST(RoundTripGridWidget, Tab_visits_the_grid_before_the_filter_checkboxes)
+{
+    // 01 §6.3: "Within a result tab, visit the grid before its view or filter controls."
+    // The grid sits on a tab page the way MainWindow builds it.
+    QWidget window;
+    auto* tabs = new QTabWidget(&window);
+    auto* grid = new RoundTripGrid(Locale::en_us(), tabs);
+    tabs->addTab(grid, QStringLiteral("Round trips"));
+    auto* layout = new QVBoxLayout(&window);
+    layout->addWidget(tabs);
+    window.resize(1200, 500);
+    window.show();
+    grid->set_trips(rt01_trips(), "EUR", "");
+    settle();
+    EXPECT_EQ(tab_stops(window), (std::vector<QWidget*>{tabs->tabBar(), grid->table(), grid->same_home_box(),
+                                                        grid->same_away_box()}));
+
+    // Tab on the tab strip goes to the grid.
+    tabs->tabBar()->setFocus(Qt::TabFocusReason);
+    ASSERT_EQ(window.focusWidget(), tabs->tabBar());
+    send_key(tabs->tabBar(), QEvent::KeyPress, Qt::Key_Tab);
+    EXPECT_EQ(window.focusWidget(), grid->table());
 }
 
 TEST(RoundTripGridWidget, CT_RT_01_Open_one_combined_booking_or_both_one_way_bookings)

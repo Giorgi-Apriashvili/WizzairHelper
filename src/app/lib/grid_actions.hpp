@@ -6,7 +6,6 @@
 
 #include <QMessageBox>
 #include <QString>
-#include <QUrl>
 
 #include <chrono>
 #include <expected>
@@ -16,16 +15,17 @@
 namespace wizz::app {
 
 struct GridActions {
-    /// Opens `url` in the default browser. The error text is what follows
-    /// "Could not open the browser:\n" in the Warning box.
-    std::function<std::expected<void, QString>(const QUrl& url)> open_url;
+    /// Shell-executes `url`, so the default browser opens it. The error text is what
+    /// follows "Could not open the browser:\n" in the Warning box.
+    std::function<std::expected<void, QString>(const QString& url)> open_url;
     /// One non-blocking attempt to put `text` on the clipboard; false while another
     /// program holds the clipboard (the grid retries, 01 §8.9).
     std::function<bool(const QString& text)> try_set_clipboard;
     /// An unowned MessageBox: caption "WizzairHelper", the icon, an OK button (01 §18.1).
     std::function<void(QMessageBox::Icon icon, const QString& text)> show_message;
 
-    /// QDesktopServices::openUrl, the system clipboard and QMessageBox.
+    /// ShellExecuteExW reporting the system's message for a failure (the predecessor's
+    /// Win32Exception.Message), the system clipboard and QMessageBox.
     [[nodiscard]] static GridActions system();
 };
 

@@ -141,6 +141,7 @@ void FlightTableModel::append(std::span<const FlightResultPtr> batch)
         return;
     }
     if (grid_.mode() != ui::ViewMode::all_fares) {
+        keep_horizontal_scroll_ = grid_.explicit_selection() == nullptr;  // Rebuild(false): no RestoreSelection
         reset_with([&] { grid_.append(batch); });  // grouped views rebuild on every flush
         return;
     }

@@ -30,6 +30,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <utility>
 
 namespace wizz::app {
 
@@ -96,6 +97,10 @@ public:
     [[nodiscard]] FlightResultPtr fare_at(int row) const;
     /// The view's scroll duty after the last change (taken once).
     [[nodiscard]] ui::ScrollRequest take_scroll_request() noexcept { return grid_.take_scroll_request(); }
+    /// True once after a flush into a grouped view without an explicit pick: that rebuild runs
+    /// no RestoreSelection (01 §8.6), so it returns to the top without making a cell current
+    /// through CurrentCell, and the horizontal scroll position stays.
+    [[nodiscard]] bool take_keep_horizontal_scroll() noexcept { return std::exchange(keep_horizontal_scroll_, false); }
 
 private:
     /// The `Idx` of display row `row` (the key that persistent indexes follow).
@@ -105,6 +110,7 @@ private:
     ui::FlightGridModel grid_;
     QFont bold_;
     QBrush gray_text_;
+    bool keep_horizontal_scroll_ = false;
 };
 
 } // namespace wizz::app

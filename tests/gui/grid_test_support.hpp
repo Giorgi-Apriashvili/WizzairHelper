@@ -1,8 +1,8 @@
 #pragma once
 // Helpers of the result-grid widget tests: a recorder for the grids' side
 // effects (no browser, no system clipboard, no modal box), synthetic mouse and
-// key input sent through QApplication like real input, and an event-loop wait
-// without sleeping.
+// key input sent through QApplication like real input, the Tab stops of a
+// window, and an event-loop wait without sleeping.
 
 #include "grid_actions.hpp"
 
@@ -11,6 +11,7 @@
 #include <QContextMenuEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QHeaderView>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -37,11 +38,11 @@ struct ActionRecorder {
     [[nodiscard]] app::GridActions actions()
     {
         return app::GridActions{
-            .open_url = [this](const QUrl& url) -> std::expected<void, QString> {
+            .open_url = [this](const QString& url) -> std::expected<void, QString> {
                 if (open_error) {
                     return std::unexpected(*open_error);
                 }
-                opened.push_back(url.toString());
+                opened.push_back(url);
                 return {};
             },
             .try_set_clipboard = [this](const QString& text) {
@@ -85,6 +86,22 @@ inline void double_click(QTableView& view, QPoint pos)
     send_mouse(view.viewport(), QEvent::MouseButtonRelease, pos, Qt::LeftButton);
 }
 
+/// Centre of a header section in the header viewport's coordinates.
+[[nodiscard]] inline QPoint header_center(const QHeaderView& header, int section)
+{
+    return QPoint{header.sectionViewportPosition(section) + header.sectionSize(section) / 2, header.height() / 2};
+}
+
+/// A left double-click on a header section, in the Windows sequence (see double_click).
+inline void double_click_header(QHeaderView& header, int section)
+{
+    const QPoint pos = header_center(header, section);
+    send_mouse(header.viewport(), QEvent::MouseButtonPress, pos, Qt::LeftButton);
+    send_mouse(header.viewport(), QEvent::MouseButtonRelease, pos, Qt::LeftButton);
+    send_mouse(header.viewport(), QEvent::MouseButtonDblClick, pos, Qt::LeftButton);
+    send_mouse(header.viewport(), QEvent::MouseButtonRelease, pos, Qt::LeftButton);
+}
+
 /// Sends one key event; returns whether a receiver accepted it.
 inline bool send_key(QWidget* target, QEvent::Type type, int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
 {
@@ -98,6 +115,33 @@ inline void tap_key(QWidget* target, int key)
 {
     send_key(target, QEvent::KeyPress, key);
     send_key(target, QEvent::KeyRelease, key);
+}
+
+/// Types printable text: a press and a release with the character for each one.
+inline void type_text(QWidget* target, const QString& text)
+{
+    for (const QChar character : text) {
+        const int key = character.toUpper().unicode();
+        QKeyEvent press{QEvent::KeyPress, key, Qt::NoModifier, QString{character}};
+        QApplication::sendEvent(target, &press);
+        QKeyEvent release{QEvent::KeyRelease, key, Qt::NoModifier, QString{character}};
+        QApplication::sendEvent(target, &release);
+    }
+}
+
+/// The widgets Tab visits in `window`, in order: Qt's focus chain filtered like
+/// QWidget::focusNextPrevChild (tab focus, no focus proxy, visible, enabled).
+[[nodiscard]] inline std::vector<QWidget*> tab_stops(QWidget& window)
+{
+    std::vector<QWidget*> stops;
+    for (QWidget* widget = window.nextInFocusChain(); widget != nullptr && widget != &window;
+         widget = widget->nextInFocusChain()) {
+        if ((widget->focusPolicy() & Qt::TabFocus) == Qt::TabFocus && widget->focusProxy() == nullptr &&
+            widget->isVisibleTo(&window) && widget->isEnabled()) {
+            stops.push_back(widget);
+        }
+    }
+    return stops;
 }
 
 /// A right-click context-menu event on the table's viewport.

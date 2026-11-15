@@ -87,6 +87,7 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     table_ = new GridTableView(this);
     table_->setModel(model_);
     build_columns();
+    setTabOrder(table_, view_);  // the grid before its view combo (01 §6.3)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -374,10 +375,11 @@ void FlightGrid::update_sort_indicator()
 void FlightGrid::sync_current_row()
 {
     const ScrollRequest request = model_->take_scroll_request();
+    const bool keep_horizontal = model_->take_keep_horizontal_scroll();
     const std::optional<std::size_t> row = model_->state().current_row();
     const QScopedValueRollback guard{syncing_, true};
     table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
-                             section(FlightColumn::date));
+                             section(FlightColumn::date), keep_horizontal);
 }
 
 } // namespace wizz::app

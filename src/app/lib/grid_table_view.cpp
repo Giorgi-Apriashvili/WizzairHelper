@@ -164,7 +164,8 @@ int GridTableView::row_height() const
     return fontMetrics().height() + 9;
 }
 
-void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest request, int column)
+void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest request, int column,
+                                     bool keep_horizontal)
 {
     QItemSelectionModel* selection = selectionModel();
     if (!row) {
@@ -187,14 +188,16 @@ void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest r
     }
     switch (request) {
     case ui::ScrollRequest::top:
-        scrollToTop();  // row 0 is the first displayed row
+    case ui::ScrollRequest::top_then_current:
+        scrollToTop();  // the full reload shows row 0 first (01 §8.6) ...
+        if (!keep_horizontal) {
+            // ... then the current cell (row 0 or the restored pick) is scrolled into view, horizontally
+            // too, as setting DataGridView.CurrentCell does (01 §8.7, §9.3).
+            scrollTo(target);
+        }
         break;
     case ui::ScrollRequest::current:
         scrollTo(target);
-        break;
-    case ui::ScrollRequest::top_then_current:
-        scrollToTop();     // the full reload shows row 0 first (01 §8.6) ...
-        scrollTo(target);  // ... then the restored pick is scrolled into view (§8.7)
         break;
     case ui::ScrollRequest::none:
         break;  // keep the first displayed row (streaming in All fares)
@@ -248,6 +251,11 @@ void GridTableView::keyPressEvent(QKeyEvent* event)
         return;
     }
     QTableView::keyPressEvent(event);
+}
+
+void GridTableView::keyboardSearch(const QString& /*search*/)
+{
+    // No type-ahead: a read-only DataGridView ignores typed characters (01 §8.8).
 }
 
 void GridTableView::keyReleaseEvent(QKeyEvent* event)

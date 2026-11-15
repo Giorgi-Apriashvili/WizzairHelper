@@ -50,11 +50,16 @@ public:
 
     /// Mirrors the grid model's current row into the view: `row` (display order) becomes the
     /// current, selected row — at `column`, or at the current column when nothing scrolls —
-    /// and the scroll request is applied: `top` shows row 0 first, `current` scrolls the row
-    /// into view, `none` keeps the first displayed row. No row clears the selection.
-    void show_current_row(std::optional<int> row, ui::ScrollRequest request, int column);
+    /// and the scroll request is applied: `top` and `top_then_current` show row 0 first, then
+    /// scroll the current cell into view (horizontally too) unless `keep_horizontal` asks only
+    /// for the top (a reload without RestoreSelection); `current` scrolls the current cell into
+    /// view; `none` keeps the first displayed row. No row clears the selection.
+    void show_current_row(std::optional<int> row, ui::ScrollRequest request, int column,
+                          bool keep_horizontal = false);
     /// The header glyph of the user's sort; `section` -1 shows none (the default sort).
     void show_sort_indicator(int section, Qt::SortOrder order);
+    /// Does nothing: typed characters never move the current row (no type-ahead, 01 §8.8).
+    void keyboardSearch(const QString& search) override;
 
 Q_SIGNALS:
     /// Mouse button pressed on a data cell (`row` in display order), before the view
