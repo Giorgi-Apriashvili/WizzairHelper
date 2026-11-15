@@ -12,11 +12,17 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <format>
 #include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -642,6 +648,115 @@ TEST(CurlTransport, Cancelled_token_sends_nothing_and_wins_over_a_timeout)
 
     EXPECT_THROW(static_cast<void>(transport.send(request, source.get_token())), wizz::OperationCancelled);
     EXPECT_TRUE(server.requests().empty());
+}
+
+// --- proxy discovery is part of the attempt (04 §11.2) -----------------------------------
+
+/// Stands in for a slow WinHTTP proxy discovery: the lookup blocks until the gate opens
+/// (or `limit` passes, so that a failing test cannot hang), then connects directly.
+struct ProxyGate {
+    std::mutex mutex;
+    std::condition_variable opened;
+    bool is_open = false;
+    std::atomic<int> calls{0};
+
+    void open()
+    {
+        {
+            const std::scoped_lock lock{mutex};
+            is_open = true;
+        }
+        opened.notify_all();
+    }
+};
+
+CurlTransport::ProxySelector gated_selector(const std::shared_ptr<ProxyGate>& gate,
+                                            std::chrono::milliseconds limit = 3s)
+{
+    return [gate, limit](const std::string&) -> std::optional<std::string> {
+        ++gate->calls;
+        std::unique_lock lock{gate->mutex};
+        gate->opened.wait_for(lock, limit, [&] { return gate->is_open; });
+        return std::string{};
+    };
+}
+
+/// Opens the gate when a test ends; declared after the transport, so it runs before the
+/// transport waits for an abandoned lookup.
+class GateOpener {
+public:
+    explicit GateOpener(std::shared_ptr<ProxyGate> gate) : gate_(std::move(gate)) {}
+    ~GateOpener() { gate_->open(); }
+    GateOpener(const GateOpener&) = delete;
+    GateOpener& operator=(const GateOpener&) = delete;
+
+private:
+    std::shared_ptr<ProxyGate> gate_;
+};
+
+TEST(CurlTransport, Proxy_discovery_counts_against_the_request_timeout)
+{
+    LoopbackServer server{respond_with(http_response(200, {}, "too late"))};
+    const auto gate = std::make_shared<ProxyGate>();
+    CurlTransport transport{gated_selector(gate)};
+    const GateOpener open_at_end{gate};
+    Request request = get(server.url("/"));
+    request.timeout = 200ms;
+
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_THROW(static_cast<void>(transport.send(request, {})), wizz::http::TimeoutError);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    EXPECT_GE(elapsed, 150ms);
+    EXPECT_LT(elapsed, 1s); // the wait ends at the deadline, not when the lookup returns
+    EXPECT_TRUE(server.requests().empty());
+}
+
+TEST(CurlTransport, Proxy_discovery_time_is_taken_from_the_transfer_budget)
+{
+    LoopbackServer server{[](const ReceivedRequest&, LoopbackConnection& connection) {
+        std::this_thread::sleep_for(250ms);
+        connection.send(http_response(200, {}, "slow"));
+    }};
+    CurlTransport transport{[](const std::string&) -> std::optional<std::string> {
+        std::this_thread::sleep_for(200ms);
+        return std::string{};
+    }};
+    Request request = get(server.url("/"));
+    request.timeout = 350ms; // the lookup and the answer each fit, together they do not
+
+    EXPECT_THROW(static_cast<void>(transport.send(request, {})), wizz::http::TimeoutError);
+}
+
+TEST(CurlTransport, Cancel_during_proxy_discovery_returns_within_300_ms)
+{
+    LoopbackServer server{respond_with(http_response(200))};
+    const auto gate = std::make_shared<ProxyGate>();
+    CurlTransport transport{gated_selector(gate)};
+    const GateOpener open_at_end{gate};
+    std::stop_source source;
+
+    auto pending = std::async(std::launch::async, [&] { return transport.send(get(server.url("/")), source.get_token()); });
+    ASSERT_TRUE(wait_until([&] { return gate->calls.load() == 1; }));
+    const auto cancelled_at = std::chrono::steady_clock::now();
+    source.request_stop();
+
+    EXPECT_THROW(static_cast<void>(pending.get()), wizz::OperationCancelled);
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelled_at, 300ms);
+    EXPECT_TRUE(server.requests().empty());
+}
+
+TEST(CurlTransport, Proxy_selector_chooses_the_proxy_for_each_request)
+{
+    LoopbackServer proxy{[](const ReceivedRequest& request, LoopbackConnection& connection) {
+        connection.send(http_response(200, {}, "proxied " + request.target));
+    }};
+    LoopbackServer server{respond_with(http_response(200, {}, "direct"))};
+    CurlTransport transport{[port = proxy.port()](const std::string& url) -> std::optional<std::string> {
+        return url.starts_with("http://wizz.test/") ? std::format("http://127.0.0.1:{}", port) : std::string{};
+    }};
+
+    EXPECT_EQ(transport.send(get("http://wizz.test/data?x=1"), {}).body, "proxied http://wizz.test/data?x=1");
+    EXPECT_EQ(transport.send(get(server.url("/")), {}).body, "direct");
 }
 
 // --- proxies (06 §3; selection rules in windows_proxy_test.cpp) --------------------------

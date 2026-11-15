@@ -325,14 +325,97 @@ TEST(JsonReader, Rejects_invalid_escapes)
                          R"("\a")", R"("\0")", R"("\v")", R"("\ ")", R"("\u 123")"});
 }
 
-TEST(JsonReader, Rejects_lone_surrogate_escapes)
+// D-28: JsonDocument.Parse accepts unpaired surrogate escapes (RFC 8259 allows them); only
+// reading that text throws InvalidOperationException (verified on .NET 10). Escapes are
+// spelled "\\u" in ordinary literals here so that every input is visibly literal.
+constexpr std::string_view kIncompleteUtf16 =
+    "Cannot read incomplete UTF-16 JSON text as string with missing low surrogate.";
+
+std::string invalid_utf16(std::string_view unit)
 {
-    expect_all_rejected({R"("\uD800")", R"("\uD800x")", R"("\uDBFF\u0041")", R"("\uDC00")", R"("\uDFFF")",
-                         R"("\uDE00\uD83D")", R"("\uD83D\uD83D")", R"("\uD800\n")", "\"\\uD800\\", R"("\uD800\u")",
-                         R"(["\uD800"])", R"({"\uDC00":1})"});
-    EXPECT_EQ(parse_error_message(R"("ab\uD800")"),
-              "Invalid surrogate escape: \\uD800 is not followed by a low surrogate escape. LineNumber: 0 | "
-              "BytePositionInLine: 3.");
+    return std::format("Cannot read invalid UTF-16 JSON text as string. Invalid surrogate value: '{}'.", unit);
+}
+
+TEST(JsonReader, Lone_surrogate_escapes_parse_but_their_text_cannot_be_read)
+{
+    const struct {
+        std::string_view text;
+        std::string message;
+    } cases[] = {
+        {"\"\\uD800\"", std::string{kIncompleteUtf16}},                    // high surrogate at the end
+        {"\"ab\\ud83d\"", std::string{kIncompleteUtf16}},                  // lower-case hex
+        {"\"\\uD800x\"", std::string{kIncompleteUtf16}},                   // followed by a character
+        {"\"\\uD800\\n\"", std::string{kIncompleteUtf16}},                 // followed by another escape
+        {"\"\\uD83D\\uDE00\\uD800\"", std::string{kIncompleteUtf16}},      // after a valid pair
+        {"\"\\uDC00\"", invalid_utf16("0xDC00")},                         // a low surrogate first
+        {"\"x\\udfff\"", invalid_utf16("0xDFFF")},                        //
+        {"\"\\uDBFF\\u0041\"", invalid_utf16("0x41")},                    // high + an escape that is not low: that unit (X2)
+        {"\"\\uD800\\uE000\"", invalid_utf16("0xE000")},                  //
+        {"\"\\uD83D\\uD83D\"", invalid_utf16("0xD83D")},                  // two high surrogates
+        {"\"\\uD800\\uD83D\\uDE00\"", invalid_utf16("0xD83D")},           //
+        {"\"\\uDE00\\uD83D\"", invalid_utf16("0xDE00")},                  // the first problem wins
+        {"\"x\\uDC00\\uD800\"", invalid_utf16("0xDC00")},                 //
+    };
+    for (const auto& [text, message] : cases) {
+        SCOPED_TRACE(text);
+        const json::Value value = json::parse(text);
+        EXPECT_EQ(value.kind(), json::Kind::string);
+        EXPECT_TRUE(value.is_string());
+        EXPECT_EQ(type_error_message([&] { (void)value.as_string(); }), message);
+    }
+}
+
+TEST(JsonReader, Lone_surrogates_leave_the_rest_of_the_document_usable)
+{
+    const json::Value root =
+        json::parse("{\"aliases\":[\"\\ud83d\",\"ok\"],\"county\":\"\\udc00\",\"name\":\"Graz\",\"n\":5}");
+    EXPECT_EQ(root.get_string("name"), "Graz");
+    EXPECT_EQ(root.find("n")->number_lexeme(), "5");
+    const json::Value& aliases = *root.find("aliases");
+    ASSERT_EQ(aliases.as_array().size(), 2u);
+    EXPECT_EQ(aliases.at(1).as_string(), "ok");
+    EXPECT_EQ(type_error_message([&] { (void)aliases.at(0).as_string(); }), kIncompleteUtf16);
+
+    // get_string reads the text, so it throws like GetString; other accessors see a String.
+    EXPECT_EQ(type_error_message([&] { (void)root.get_string("county"); }), invalid_utf16("0xDC00"));
+    const json::Value& county = *root.find("county");
+    EXPECT_EQ(type_error_message([&] { (void)county.as_bool(); }),
+              "The requested operation requires an element of type 'Boolean', but the target element has type "
+              "'String'.");
+    EXPECT_EQ(county.try_int32(), std::nullopt);
+    EXPECT_FALSE(county.is_true());
+
+    const json::Value copy = root;
+    EXPECT_THROW((void)copy.get_string("county"), json::TypeError);
+    EXPECT_EQ(copy.get_string("name"), "Graz");
+}
+
+TEST(JsonReader, Lone_surrogate_in_a_member_name_fails_the_lookups_that_reach_it)
+{
+    // find / get_string scan from the last member to the first (like TryGetProperty) and throw
+    // when they reach the unreadable name before a match; Member::name throws like JsonProperty.Name.
+    const json::Value root = json::parse("{\"x\":1,\"\\ud800\":2,\"y\":3}");
+    EXPECT_EQ(root.find("y")->number_lexeme(), "3");
+    EXPECT_EQ(type_error_message([&] { (void)root.find("x"); }), kIncompleteUtf16);
+    EXPECT_THROW((void)root.find("missing"), json::TypeError);
+    EXPECT_THROW((void)root.get_string("x"), json::TypeError);
+
+    const auto members = root.as_object();
+    ASSERT_EQ(members.size(), 3u);
+    EXPECT_EQ(members[0].name(), "x");
+    EXPECT_EQ(type_error_message([&] { (void)members[1].name(); }), kIncompleteUtf16);
+    EXPECT_EQ(members[1].value().number_lexeme(), "2");
+    EXPECT_EQ(members[2].name(), "y");
+
+    const json::Value low = json::parse("{\"a\\uDC00\":true}");
+    EXPECT_EQ(type_error_message([&] { (void)low.find("a"); }), invalid_utf16("0xDC00"));
+}
+
+TEST(JsonReader, Surrogate_escapes_keep_the_strict_escape_grammar)
+{
+    // Only the pairing is relaxed: malformed or truncated escapes and encoded surrogates still fail.
+    expect_all_rejected({"\"\\uD800\\u12G4\"", "\"\\uD800\\u\"", "\"\\uD800\\u12\"", "\"\\uD800\\\"",
+                         "\"\\uD800\\x\"", "\"\\uDC00", "[\"\\uD800\",]", "{\"\\uD800\"}", "\"\xED\xA0\x80\""});
 }
 
 TEST(JsonReader, Rejects_ill_formed_UTF8)
@@ -623,11 +706,11 @@ TEST(JsonValue, Objects_keep_every_member_in_source_order)
     const json::Value root = json::parse(R"({"b":1,"a":2,"b":3})");
     const auto members = root.as_object();
     ASSERT_EQ(members.size(), 3u);
-    EXPECT_EQ(members[0].name, "b");
-    EXPECT_EQ(members[0].value.number_lexeme(), "1");
-    EXPECT_EQ(members[1].name, "a");
-    EXPECT_EQ(members[2].name, "b");
-    EXPECT_EQ(members[2].value.number_lexeme(), "3");
+    EXPECT_EQ(members[0].name(), "b");
+    EXPECT_EQ(members[0].value().number_lexeme(), "1");
+    EXPECT_EQ(members[1].name(), "a");
+    EXPECT_EQ(members[2].name(), "b");
+    EXPECT_EQ(members[2].value().number_lexeme(), "3");
 }
 
 TEST(JsonValue, Find_is_ordinal_case_sensitive_and_the_last_duplicate_wins)

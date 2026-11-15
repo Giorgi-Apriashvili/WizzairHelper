@@ -35,6 +35,12 @@ std::optional<std::string> ProxyResolver::proxy_for(const std::string& url, std:
     return select_manual_proxy(config_.proxy, scheme);
 }
 
+bool ProxyResolver::may_block(std::string_view host) const
+{
+    // Mirrors the order of proxy_for; config_ and use_environment_ never change.
+    return !is_loopback_host(host) && !use_environment_ && (config_.auto_detect || !config_.auto_config_url.empty());
+}
+
 std::optional<std::string> ProxyResolver::automatic_proxy(const std::string& url, std::string_view scheme,
                                                           std::string_view host)
 {

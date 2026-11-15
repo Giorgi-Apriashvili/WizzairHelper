@@ -96,6 +96,9 @@ bool Value::as_bool() const
 
 std::string_view Value::as_string() const&
 {
+    if (const auto* unreadable = std::get_if<UnreadableText>(&storage_)) {
+        throw TypeError(unreadable->message);
+    }
     const std::string* text = std::get_if<std::string>(&storage_);
     if (text == nullptr) {
         throw_type_error("String", *this);
@@ -170,9 +173,21 @@ std::span<const Member> Value::as_object() const&
 
 const Value* Value::find(std::string_view name) const&
 {
+    // From the last member to the first, like TryGetProperty: the last duplicate wins.
+    // name() throws at an unreadable name (D-28; .NET throws there only when the
+    // escaped name is longer than `name` and agrees with it up to its first backslash).
     const std::span<const Member> members = as_object();
-    const auto last = std::ranges::find_last(members, name, &Member::name);
-    return last.empty() ? nullptr : &last.front().value;
+    for (auto member = members.rbegin(); member != members.rend(); ++member) {
+        if (member->name() == name) {
+            return &member->value();
+        }
+    }
+    return nullptr;
+}
+
+std::string_view Member::name() const&
+{
+    return name_.as_string();
 }
 
 std::optional<std::string_view> Value::get_string(std::string_view name) const&
@@ -228,7 +243,7 @@ private:
         switch (text_[pos_]) {
         case '{': return parse_object();
         case '[': return parse_array();
-        case '"': return Value{Storage{std::in_place_type<std::string>, parse_string()}};
+        case '"': return parse_string();
         case 't': return parse_literal("true", Value{Storage{std::in_place_type<bool>, true}});
         case 'f': return parse_literal("false", Value{Storage{std::in_place_type<bool>, false}});
         case 'n': return parse_literal("null", Value{});
@@ -305,7 +320,7 @@ private:
             if (at_end() || text_[pos_] != '"') {
                 fail(std::format("Expected a property name starting with '\"', but found {}.", found()));
             }
-            std::string name = parse_string();
+            Value name = parse_string();
             skip_whitespace();
             if (!consume(':')) {
                 fail(std::format("Expected ':' after a property name, but found {}.", found()));
@@ -326,11 +341,13 @@ private:
         }
     }
 
-    /// Reads a string token starting at its opening quote; returns the decoded text.
-    [[nodiscard]] std::string parse_string()
+    /// Reads a string token starting at its opening quote: the decoded text, or an
+    /// UnreadableText carrying the first unpaired-surrogate problem (D-28).
+    [[nodiscard]] Value parse_string()
     {
         ++pos_;  // opening quote
         std::string text;
+        std::optional<std::string> unreadable;
         std::size_t run = pos_;  // start of the not yet copied verbatim bytes
         for (;;) {
             if (at_end()) {
@@ -340,11 +357,15 @@ private:
             if (byte == '"') {
                 text.append(text_.substr(run, pos_ - run));
                 ++pos_;
-                return text;
+                if (unreadable) {
+                    return Value{Storage{std::in_place_type<Value::UnreadableText>,
+                                         Value::UnreadableText{std::move(*unreadable)}}};
+                }
+                return Value{Storage{std::in_place_type<std::string>, std::move(text)}};
             }
             if (byte == '\\') {
                 text.append(text_.substr(run, pos_ - run));
-                parse_escape(text);
+                parse_escape(text, unreadable);
                 run = pos_;
             } else if (byte < 0x20) {
                 fail(std::format("{} is invalid within a JSON string. The string should be correctly escaped.",
@@ -363,7 +384,9 @@ private:
     }
 
     /// Decodes the escape sequence at `pos_` (the backslash) and appends it as UTF-8.
-    void parse_escape(std::string& text)
+    /// An unpaired surrogate escape is valid JSON; it records in `unreadable` (first
+    /// problem only) what JsonElement.GetString would throw (D-28).
+    void parse_escape(std::string& text, std::optional<std::string>& unreadable)
     {
         ++pos_;  // backslash
         if (at_end()) {
@@ -380,33 +403,30 @@ private:
         case 'r': text += '\r'; break;
         case 't': text += '\t'; break;
         case 'u': {
-            const std::size_t escape_start = pos_ - 1;
             ++pos_;
-            char32_t code_point = parse_hex4();
-            if (code_point >= 0xDC00 && code_point <= 0xDFFF) {
-                pos_ = escape_start;
-                fail(std::format("Invalid surrogate escape: \\u{:04X} is a low surrogate without a preceding high "
-                                 "surrogate.",
-                                 static_cast<std::uint32_t>(code_point)));
+            const char32_t unit = parse_hex4();  // parse_hex4 advances past the digits
+            if (unit < 0xD800 || unit > 0xDFFF) {
+                append_utf8(text, unit);
+                return;
             }
-            if (code_point >= 0xD800 && code_point <= 0xDBFF) {
-                const char32_t high = code_point;
-                const bool escape_follows = text_.substr(pos_, 2) == "\\u";
-                char32_t low = 0;
-                if (escape_follows) {
-                    pos_ += 2;
-                    low = parse_hex4();
-                }
-                if (!escape_follows || low < 0xDC00 || low > 0xDFFF) {
-                    pos_ = escape_start;
-                    fail(std::format("Invalid surrogate escape: \\u{:04X} is not followed by a low surrogate "
-                                     "escape.",
-                                     static_cast<std::uint32_t>(high)));
-                }
-                code_point = 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+            // JsonReaderHelper.TryUnescape (verified on .NET 10): a low surrogate first is
+            // invalid; a high one needs a following \u escape, which must be a low surrogate.
+            if (unit >= 0xDC00) {
+                note_unreadable(unreadable, unit);
+                return;
             }
-            append_utf8(text, code_point);
-            return;  // parse_hex4 already advanced past the digits
+            if (text_.substr(pos_, 2) != "\\u") {
+                note_unreadable(unreadable, std::nullopt);
+                return;
+            }
+            pos_ += 2;
+            const char32_t low = parse_hex4();  // still a ParseError when malformed
+            if (low < 0xDC00 || low > 0xDFFF) {
+                note_unreadable(unreadable, low);
+                return;
+            }
+            append_utf8(text, 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00));
+            return;
         }
         default:
             fail(std::format("{} is not a valid escapable character within a JSON string. The string should be "
@@ -441,6 +461,20 @@ private:
             ++pos_;
         }
         return value;
+    }
+
+    /// Keeps the first problem of a string: the missing low surrogate (`invalid_unit`
+    /// nullopt) or the code unit .NET names as invalid (formatted "0x{:X2}").
+    static void note_unreadable(std::optional<std::string>& unreadable, std::optional<char32_t> invalid_unit)
+    {
+        if (unreadable) {
+            return;
+        }
+        unreadable = invalid_unit ? std::format("Cannot read invalid UTF-16 JSON text as string. Invalid surrogate "
+                                                "value: '0x{:02X}'.",
+                                                static_cast<std::uint32_t>(*invalid_unit))
+                                  : std::string{"Cannot read incomplete UTF-16 JSON text as string with missing low "
+                                                "surrogate."};
     }
 
     static void append_utf8(std::string& text, char32_t code_point)

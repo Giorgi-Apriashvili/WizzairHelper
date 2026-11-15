@@ -1200,6 +1200,32 @@ TEST(Geocoding, ParsePhoton_feature_without_properties_fails_the_whole_response)
     EXPECT_EQ(rig.transport->urls(), (Codes{photon("Graz"), nominatim("Graz")}));
 }
 
+TEST(Geocoding, ParsePhoton_keeps_a_hit_whose_unread_property_holds_a_lone_surrogate)
+{
+    // D-28: a "county" holding a lone low surrogate escape parses and is never read, so the
+    // hit stays (02 §6.6).
+    const auto body = [](std::string_view county, std::string_view state) {
+        return std::format("{{\"features\":[{{\"geometry\":{{\"coordinates\":[15.4382786,47.0708678]}},"
+                           "\"properties\":{{\"name\":\"Graz\",\"county\":\"{}\",\"state\":\"{}\","
+                           "\"country\":\"Austria\",\"osm_value\":\"city\"}}}}]}}",
+                           county, state);
+    };
+    const std::string junk_county = body("\\udc00", "Styria");
+    EXPECT_EQ(geocoding::parse_photon(junk_county), std::vector<PlaceDto>{kGrazDto});
+
+    // Through the resolver: Photon's answer counts, Nominatim is not asked.
+    ResolverRig rig(photon_answers(junk_county));
+    const auto result = rig.resolver.geocode("Graz", {}, {});
+    EXPECT_FALSE(result.failed);
+    EXPECT_EQ(result.found, std::vector<PlaceDto>{kGrazDto});
+    EXPECT_EQ(rig.transport->urls(), Codes{photon("Graz")});
+
+    // A property that is read throws like GetString (InvalidOperationException, a service failure).
+    expect_throws_exactly<json::TypeError>([&] { (void)geocoding::parse_photon(body("x", "\\udc00")); },
+                                           "Cannot read invalid UTF-16 JSON text as string. Invalid surrogate "
+                                           "value: '0xDC00'.");
+}
+
 TEST(Geocoding, ParsePhoton_error_kinds)
 {
     expect_throws_exactly<json::ParseError>([] { (void)geocoding::parse_photon("not json"); });
@@ -1454,6 +1480,21 @@ TEST(GeocodeCache, Corrupt_content_gives_an_empty_memo)
         SCOPED_TRACE(text);
         EXPECT_TRUE(geocoding::parse_geocode_cache(text).empty());
     }
+}
+
+TEST(GeocodeCache, Unpaired_surrogates_fail_the_file_only_where_the_serializer_reads_them)
+{
+    // D-28 (verified on .NET 10): a key, a property name or a known text holding an unpaired
+    // surrogate escape is a JsonException for the whole file; an unknown property is skipped unread.
+    for (const std::string_view text : {"{\"\\ud800\":[]}"sv, "{\"a\":[{\"Name\":\"x\"}],\"zz\\ud800zz\":null}"sv,
+                                        "{\"a\":[{\"\\udc00\":1}]}"sv, "{\"a\":[{\"Name\":\"\\ud800\"}]}"sv}) {
+        SCOPED_TRACE(text);
+        EXPECT_TRUE(geocoding::parse_geocode_cache(text).empty());
+    }
+    const auto entries = geocoding::parse_geocode_cache("{\"a\":[{\"Name\":\"x\",\"Note\":\"\\ud800\"}]}");
+    ASSERT_EQ(entries.size(), 1u);
+    ASSERT_EQ(entries[0].hits.size(), 1u);
+    EXPECT_EQ(entries[0].hits[0].name, "x");
 }
 
 TEST(GeocodeCache, Serialize_writes_compact_PascalCase_JSON_like_dotnet)
