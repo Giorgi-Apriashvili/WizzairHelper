@@ -1,0 +1,76 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": { "major": 3, "minor": 30, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "msvc-x64",
+      "displayName": "MSVC x64 — app + tests",
+      "inherits": "windows-base",
+      "cacheVariables": { "WIZZ_BUILD_GUI": "ON", "WIZZ_BUILD_TESTS": "ON" }
+    },
+    {
+      "name": "msvc-x64-core",
+      "displayName": "MSVC x64 — core, services and tests (no Qt)",
+      "inherits": "windows-base",
+      "cacheVariables": { "WIZZ_BUILD_GUI": "OFF", "WIZZ_BUILD_TESTS": "ON" }
+    },
+    {
+      "name": "msvc-x64-release",
+      "displayName": "MSVC x64 — release package (app only)",
+      "inherits": "windows-base",
+      "cacheVariables": { "WIZZ_BUILD_GUI": "ON", "WIZZ_BUILD_TESTS": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "msvc-x64", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "msvc-x64", "configuration": "Release" },
+    { "name": "core-debug", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
+    { "name": "core-release", "configurePreset": "msvc-x64-core", "configuration": "Release" },
+    { "name": "package", "configurePreset": "msvc-x64-release", "configuration": "Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
+    },
+    { "name": "debug", "inherits": "test-base", "configurePreset": "msvc-x64", "configuration": "Debug" },
+    { "name": "release", "inherits": "test-base", "configurePreset": "msvc-x64", "configuration": "Release" },
+    { "name": "core-debug", "inherits": "test-base", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
+    { "name": "core-release", "inherits": "test-base", "configurePreset": "msvc-x64-core", "configuration": "Release" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "core",
+      "displayName": "Configure, build and test core/services (no Qt)",
+      "steps": [
+        { "type": "configure", "name": "msvc-x64-core" },
+        { "type": "build", "name": "core-debug" },
+        { "type": "test", "name": "core-debug" }
+      ]
+    },
+    {
+      "name": "full",
+      "displayName": "Configure, build and test everything",
+      "steps": [
+        { "type": "configure", "name": "msvc-x64" },
+        { "type": "build", "name": "debug" },
+        { "type": "test", "name": "debug" }
+      ]
+    }
+  ]
+}

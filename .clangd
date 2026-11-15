@@ -1,0 +1,4 @@
+# Editor support only (clangd). Regenerate the database after adding files:
+#   cmake -S . -B build/clangd -G Ninja -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ...
+CompileFlags:
+  CompilationDatabase: build/clangd
