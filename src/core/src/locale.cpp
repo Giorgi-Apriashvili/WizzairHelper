@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <iterator>
@@ -22,6 +23,7 @@ namespace wizz {
 namespace {
 
 using text::UnicodeCategory;
+using text::utf16_to_utf8;
 
 // ---------------------------------------------------------------------------
 // ICU plumbing
@@ -103,8 +105,6 @@ template <typename Fill>
     return buffer.data();
 }
 
-[[nodiscard]] std::string to_utf8(std::u16string_view s) { return text::utf16_to_utf8(s); }
-
 // ---------------------------------------------------------------------------
 // Number symbols (CultureData.GetNFIValues on ICU)
 // ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ template <typename Fill>
     const NumberFormatHandle format{unum_open(UNUM_DECIMAL, nullptr, 0, id.c_str(), nullptr, &error)};
     check(error, "unum_open");
     const auto symbol = [&](UNumberFormatSymbol which) {
-        return to_utf8(read_icu_string("unum_getSymbol", [&](UChar* buffer, int32_t capacity, UErrorCode* status) {
+        return utf16_to_utf8(read_icu_string("unum_getSymbol", [&](UChar* buffer, int32_t capacity, UErrorCode* status) {
             return unum_getSymbol(format.get(), which, buffer, capacity, status);
         }));
     };
@@ -292,7 +292,7 @@ constexpr std::u16string_view kTimeParts = u"Hhms";
         read_icu_string("udat_toPattern", [&](UChar* buffer, int32_t capacity, UErrorCode* status) {
             return udat_toPattern(format.get(), false, buffer, capacity, status);
         });
-    return to_utf8(time_separator_of(convert_icu_time_pattern(pattern)));
+    return utf16_to_utf8(time_separator_of(convert_icu_time_pattern(pattern)));
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ struct CalendarNames {
         udat_open(UDAT_DEFAULT, UDAT_DEFAULT, gregorian.c_str(), nullptr, 0, nullptr, 0, &error)};
     check(error, "udat_open");
     const auto symbol = [&](UDateFormatSymbolType type, int32_t index) {
-        return to_utf8(read_icu_string("udat_getSymbols", [&](UChar* buffer, int32_t capacity, UErrorCode* status) {
+        return utf16_to_utf8(read_icu_string("udat_getSymbols", [&](UChar* buffer, int32_t capacity, UErrorCode* status) {
             return udat_getSymbols(format.get(), type, index, buffer, capacity, status);
         }));
     };
@@ -914,19 +914,19 @@ namespace {
 void apply_user_overrides(NumberSymbols& numbers, std::string& time_separator)
 {
     if (const auto value = user_locale_info(LOCALE_SDECIMAL)) {
-        numbers.decimal_separator = to_utf8(*value);
+        numbers.decimal_separator = utf16_to_utf8(*value);
     }
     if (const auto value = user_locale_info(LOCALE_STHOUSAND)) {
-        numbers.group_separator = to_utf8(*value);
+        numbers.group_separator = utf16_to_utf8(*value);
     }
     if (const auto value = user_locale_info(LOCALE_SNEGATIVESIGN)) {
-        numbers.negative_sign = to_utf8(*value);
+        numbers.negative_sign = utf16_to_utf8(*value);
     }
     if (const auto value = user_locale_info(LOCALE_SGROUPING)) {
         numbers.group_sizes = convert_win32_group_string(*value);
     }
     if (const auto value = user_locale_info(LOCALE_STIMEFORMAT)) {
-        time_separator = to_utf8(time_separator_of(reescape_win32_string(*value)));
+        time_separator = utf16_to_utf8(time_separator_of(reescape_win32_string(*value)));
     }
 }
 
@@ -946,7 +946,7 @@ std::shared_ptr<const Locale> Locale::user_default()
         std::u16string name(buffer.begin(), buffer.begin() + (length - 1));
         name.resize(std::min(name.size(), name.find(u'_')));
         try {
-            auto impl = std::make_unique<Impl>(to_utf8(name));
+            auto impl = std::make_unique<Impl>(utf16_to_utf8(name));
             apply_user_overrides(impl->numbers, impl->time_separator);
             return std::make_shared<const Locale>(PassKey{}, std::move(impl));
         } catch (const std::invalid_argument&) {
@@ -1036,13 +1036,13 @@ bool Locale::starts_with(std::string_view text, std::string_view prefix, Collati
 
 std::string Locale::title_case(std::string_view text) const
 {
-    return to_utf8(title_case_utf16(text::utf8_to_utf16(text), impl_->turkish_casing, impl_->dutch));
+    return utf16_to_utf8(title_case_utf16(text::utf8_to_utf16(text), impl_->turkish_casing, impl_->dutch));
 }
 
 std::string Locale::to_upper(std::string_view text) const
 {
     const bool turkish = impl_->turkish_casing;
-    return to_utf8(change_case(text::utf8_to_utf16(text), [&](char32_t c) { return culture_upper(c, turkish); }));
+    return utf16_to_utf8(change_case(text::utf8_to_utf16(text), [&](char32_t c) { return culture_upper(c, turkish); }));
 }
 
 } // namespace wizz

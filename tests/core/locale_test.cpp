@@ -575,6 +575,49 @@ TEST(LocaleTitleCase, Mixed_case_input_follows_dotnet)
     EXPECT_EQ(locale("tr-TR").title_case("ISTANBUL istanbul"), "ISTANBUL İstanbul");
 }
 
+TEST(LocaleTitleCase, Matches_dotnet_edge_cases)
+{
+    // TextInfo.ToTitleCase results recorded with .NET 10 (en-US).
+    const std::vector<std::pair<std::string_view, std::string_view>> vectors{
+        {"hello\0world"sv, "Hello\0World"sv}, // U+0000 (Cc) separates words
+        {"a--b", "A--B"},
+        {"a''b", "A''b"},
+        {"'abc", "'Abc"},
+        {"abc'", "Abc'"},
+        {"ABC'DEF", "ABC'def"}, // lower case after an apostrophe even in an acronym
+        {"x­y", "X­Y"}, // soft hyphen (Cf) separates words
+        {"Ⅰbc", "ⅠBc"}, // a letter number does not start a word
+        {"a٠b", "A٠b"}, // a decimal digit continues it
+        {"é́e", "É́e"},
+        {"MAC-donald's", "MAC-Donald's"},
+        {"l'aquila", "L'aquila"},
+        {"L'AQUILA", "L'aquila"},
+        {"rock'n'roll", "Rock'n'roll"},
+        {"ǳ", "ǲ"},
+        {"Ǳ", "ǲ"},
+        {"ab", "Ab"}, // private use continues a word
+        {"a’s", "A’S"},
+        {"SS", "SS"},
+        {"ßx", "ßx"}, // ß has no simple upper case
+    };
+    for (const auto& [input, expected] : vectors) {
+        EXPECT_EQ(en_us().title_case(input), expected) << "input: " << input;
+    }
+}
+
+TEST(LocaleDateFormat, Matches_dotnet_for_other_cultures)
+{
+    // DateTime.ToString(pattern, culture) recorded with .NET 10 on the same system ICU.
+    const Date date = Date::from_ymd(2026, 11, 20);
+    EXPECT_EQ(locale("fr-FR").format_date(date, "ddd dd MMM yyyy"), "ven. 20 nov. 2026");
+    EXPECT_EQ(locale("fr-FR").format_date(date, "MMM yyyy"), "nov. 2026");
+    EXPECT_EQ(locale("pl-PL").format_date(date, "ddd dd MMM yyyy"), "pt. 20 lis 2026");
+    EXPECT_EQ(locale("pl-PL").format_date(date, "d MMM"), "20 lis");
+    EXPECT_EQ(locale("ru-RU").format_date(date, "ddd dd MMM yyyy"),
+              "пт 20 нояб. 2026");
+    EXPECT_EQ(locale("ru-RU").format_date(date, "MMM yyyy"), "нояб. 2026");
+}
+
 TEST(LocaleCasing, Culture_upper_case)
 {
     EXPECT_EQ(en_us().to_upper("istanbul"), "ISTANBUL");
