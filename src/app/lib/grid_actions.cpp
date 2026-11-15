@@ -5,28 +5,99 @@
 #include "wizz/ui/strings.hpp"
 
 #include <QClipboard>
-#include <QDesktopServices>
 #include <QGuiApplication>
+#include <QScopeGuard>
 
 #include <windows.h>
 
+#include <objbase.h>
+#include <shellapi.h>
+
 #include <string>
+#include <thread>
 
 namespace wizz::app {
 
 namespace {
 
-/// QDesktopServices reports only success or failure (ShellExecute's code goes to a Qt
-/// warning), so the box names the failing step instead of a Win32 message.
-constexpr QStringView kBrowserFailure = u"Windows could not start the default browser for this link.";
-
-[[nodiscard]] std::expected<void, QString> open_with_desktop_services(const QUrl& url)
+/// The Win32 error behind a ShellExecute SE_ERR_* result (.NET's Process.GetShellError).
+[[nodiscard]] DWORD shell_error(HINSTANCE result) noexcept
 {
-    if (!url.isValid()) {
-        return std::unexpected(QStringLiteral("The link is not a valid address."));
+    const auto code = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(result));
+    switch (code) {
+    case SE_ERR_FNF:
+        return ERROR_FILE_NOT_FOUND;
+    case SE_ERR_PNF:
+        return ERROR_PATH_NOT_FOUND;
+    case SE_ERR_ACCESSDENIED:
+        return ERROR_ACCESS_DENIED;
+    case SE_ERR_OOM:
+        return ERROR_NOT_ENOUGH_MEMORY;
+    case SE_ERR_DDEFAIL:
+    case SE_ERR_DDEBUSY:
+    case SE_ERR_DDETIMEOUT:
+        return ERROR_DDE_FAIL;
+    case SE_ERR_SHARE:
+        return ERROR_SHARING_VIOLATION;
+    case SE_ERR_NOASSOC:
+        return ERROR_NO_ASSOCIATION;
+    case SE_ERR_DLLNOTFOUND:
+        return ERROR_DLL_NOT_FOUND;
+    default:
+        return code;
     }
-    if (!QDesktopServices::openUrl(url)) {
-        return std::unexpected(kBrowserFailure.toString());
+}
+
+/// Win32Exception.Message: the system's text for `code` without its trailing line break.
+[[nodiscard]] QString system_message(DWORD code)
+{
+    LPWSTR buffer = nullptr;
+    const DWORD length =
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    const auto release = qScopeGuard([buffer] { LocalFree(buffer); });
+    QString text = QString::fromWCharArray(buffer, static_cast<qsizetype>(length));
+    while (!text.isEmpty() && text.back().unicode() <= u' ') {
+        text.chop(1);
+    }
+    if (text.isEmpty()) {
+        return QStringLiteral("Unknown error (0x%1)").arg(QString::number(code, 16));
+    }
+    return text;
+}
+
+/// Process.Start with UseShellExecute, as the predecessor's OpenUrl: ShellExecuteExW without
+/// error UI; returns the Win32 error, ERROR_SUCCESS when the target was started. The call runs
+/// on its own STA thread, as QDesktopServices does, so the shell never spins the UI thread's
+/// event loop.
+[[nodiscard]] DWORD shell_execute(const std::wstring& target)
+{
+    DWORD error = ERROR_SUCCESS;
+    std::jthread worker{[&target, &error] {
+        const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        SHELLEXECUTEINFOW info{};
+        info.cbSize = static_cast<DWORD>(sizeof(info));
+        info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        info.lpFile = target.c_str();
+        info.nShow = SW_SHOWNORMAL;
+        if (ShellExecuteExW(&info) == FALSE) {
+            error = GetLastError();
+            if (error == ERROR_SUCCESS) {
+                error = shell_error(info.hInstApp);
+            }
+        }
+        if (SUCCEEDED(com)) {
+            CoUninitialize();
+        }
+    }};
+    worker.join();
+    return error;
+}
+
+[[nodiscard]] std::expected<void, QString> open_with_shell(const QString& url)
+{
+    if (const DWORD error = shell_execute(url.toStdWString()); error != ERROR_SUCCESS) {
+        return std::unexpected(system_message(error));
     }
     return {};
 }
@@ -55,7 +126,7 @@ void show_unowned_message(QMessageBox::Icon icon, const QString& text)
 GridActions GridActions::system()
 {
     return GridActions{
-        .open_url = open_with_desktop_services,
+        .open_url = open_with_shell,
         .try_set_clipboard = try_set_system_clipboard,
         .show_message = show_unowned_message,
     };
@@ -64,8 +135,7 @@ GridActions GridActions::system()
 std::expected<void, QString> open_url_or_warn(const GridActions& actions, std::string_view url)
 {
     const QString text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
-    std::expected<void, QString> opened = actions.open_url ? actions.open_url(QUrl{text})
-                                                           : std::expected<void, QString>{};
+    std::expected<void, QString> opened = actions.open_url ? actions.open_url(text) : std::expected<void, QString>{};
     if (!opened && actions.show_message) {
         actions.show_message(QMessageBox::Warning,
                              QString::fromStdString(ui::strings::browser_error(opened.error().toStdString(), url)));

@@ -19,6 +19,9 @@
 #include <QLabel>
 #include <QMenu>
 #include <QScrollBar>
+#include <QTabBar>
+#include <QTabWidget>
+#include <QVBoxLayout>
 
 #include <gtest/gtest.h>
 
@@ -107,6 +110,35 @@ TEST(FlightGridBehaviour, Header_sort_is_one_layout_change_and_keeps_the_current
     EXPECT_EQ(f.grid.model()->fare_at(current_view_row(f.grid)), picked);
     EXPECT_TRUE(table.selectionModel()->isRowSelected(current_view_row(f.grid)));
     EXPECT_EQ(table.currentIndex().column(), col(FlightColumn::to));
+}
+
+TEST(FlightGridBehaviour, A_double_click_on_a_header_sorts_once)
+{
+    // WinForms raises MouseDoubleClick, not MouseClick, for the second click of a
+    // double-click, so the DataGridView sorts once: ascending first (01 §8.4).
+    Fixture f;
+    f.grid.resize(1600, 500);
+    f.grid.show();
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    int layouts = 0;
+    QObject::connect(f.grid.model(), &QAbstractItemModel::layoutChanged, [&] { ++layouts; });
+    QHeaderView& header = *f.grid.table()->horizontalHeader();
+
+    double_click_header(header, col(FlightColumn::date));
+    EXPECT_EQ(layouts, 1);
+    ASSERT_TRUE(f.grid.model()->state().user_sort());
+    EXPECT_EQ(f.grid.model()->state().user_sort()->column, FlightColumn::date);
+    EXPECT_EQ(f.grid.model()->state().user_sort()->direction, ui::SortDirection::ascending);
+    EXPECT_EQ(header.sortIndicatorSection(), col(FlightColumn::date));
+    EXPECT_EQ(header.sortIndicatorOrder(), Qt::AscendingOrder);
+    EXPECT_EQ(route_at(f.grid, 0), "BUD>LTN 2026-11-10");
+
+    // The next click is a click again: it toggles.
+    click_header(f.grid, FlightColumn::date);
+    EXPECT_EQ(layouts, 2);
+    EXPECT_EQ(f.grid.model()->state().user_sort()->direction, ui::SortDirection::descending);
+    EXPECT_EQ(header.sortIndicatorOrder(), Qt::DescendingOrder);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +348,59 @@ TEST(FlightGridBehaviour, Rebuild_with_a_pick_returns_to_the_top_before_showing_
     EXPECT_EQ(bar.value(), 0);  // top first, and row 1 is already in view
 }
 
+TEST(FlightGridBehaviour, Rebuild_without_a_pick_scrolls_the_Date_cell_of_row_0_into_view)
+{
+    // 01 §8.7 RestoreSelection: "make row 0 current [at the Date column]" scrolls that cell
+    // into view (DataGridView.CurrentCell), so a grid scrolled to the right comes back left.
+    Fixture f;
+    f.grid.resize(600, 300);  // narrower than the columns: the grid scrolls horizontally
+    f.grid.show();
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    app::GridTableView& table = *f.grid.table();
+    QScrollBar& bar = *table.horizontalScrollBar();
+    ASSERT_GT(bar.maximum(), 0);
+    bar.setValue(bar.maximum());
+    settle();
+    ASSERT_EQ(bar.value(), bar.maximum());
+
+    f.grid.set_results(fss01(), "EUR", "");  // the end of a search with no pick
+    settle();
+    EXPECT_EQ(f.grid.explicit_selection(), nullptr);
+    EXPECT_EQ(current_view_row(f.grid), 0);
+    EXPECT_EQ(table.currentIndex().column(), col(FlightColumn::date));
+    EXPECT_EQ(bar.value(), 0);
+    EXPECT_TRUE(table.viewport()->rect().contains(table.visualRect(table.currentIndex())));
+    EXPECT_EQ(table.verticalScrollBar()->value(), 0);
+}
+
+TEST(FlightGridBehaviour, A_grouped_flush_without_a_pick_keeps_the_horizontal_position)
+{
+    // 01 §8.6: a grouped-view flush is Rebuild(keepTopIfNotPicked=false). Without a pick it runs
+    // no RestoreSelection: the reload makes row 0 current and returns to the top, but no cell is
+    // made current through CurrentCell, so the grid stays scrolled to the right.
+    Fixture f;
+    f.grid.resize(600, 300);
+    f.grid.show();
+    f.grid.clear("EUR", true, "");  // anywhere: Cheapest per destination
+    ASSERT_EQ(f.grid.mode(), ViewMode::cheapest_per_destination);
+    const std::vector<FlightResultPtr> fares = fss01();
+    f.grid.append(std::span{fares}.first(11));
+    settle();
+    app::GridTableView& table = *f.grid.table();
+    QScrollBar& bar = *table.horizontalScrollBar();
+    ASSERT_GT(bar.maximum(), 0);
+    bar.setValue(bar.maximum());
+    settle();
+
+    f.grid.append(std::span{fares}.subspan(11));
+    settle();
+    EXPECT_EQ(f.grid.explicit_selection(), nullptr);
+    EXPECT_EQ(current_view_row(f.grid), 0);
+    EXPECT_EQ(table.verticalScrollBar()->value(), 0);
+    EXPECT_EQ(bar.value(), bar.maximum());
+}
+
 TEST(FlightGridBehaviour, Cheapest_per_destination_restores_the_picks_group)
 {
     Fixture f;
@@ -505,6 +590,60 @@ TEST(FlightGridBehaviour, Double_click_and_Enter_open_the_booking_url_and_Enter_
     // Esc is not the grid's: it reaches the window (Esc == Cancel, D-11).
     send_key(&table, QEvent::KeyPress, Qt::Key_Escape);
     EXPECT_EQ(window.presses, 1);
+}
+
+TEST(FlightGridBehaviour, Typing_text_does_not_move_the_current_row)
+{
+    // A read-only DataGridView has no type-ahead search: only the keys of 01 §8.8 move
+    // the current row (Selected, 01 §8.7).
+    Fixture f;
+    f.grid.resize(1600, 500);
+    f.grid.show();
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    app::GridTableView& table = *f.grid.table();
+    ASSERT_EQ(current_view_row(f.grid), 0);
+    ASSERT_EQ(table.currentIndex().column(), col(FlightColumn::date));
+    const FlightResultPtr current = f.grid.selected();
+
+    // The first letter of a later row's Date text ("Fri 13 Nov 2026" below "Thu 12 Nov 2026").
+    const QString top = QString::fromStdString(text_at(f.grid, 0, FlightColumn::date));
+    QString letter;
+    for (int row = 1; row < f.grid.model()->rowCount() && letter.isEmpty(); ++row) {
+        const QString text = QString::fromStdString(text_at(f.grid, row, FlightColumn::date));
+        if (!text.isEmpty() && text.front() != top.front()) {
+            letter = text.left(1);
+        }
+    }
+    ASSERT_FALSE(letter.isEmpty());
+    type_text(&table, letter);
+    type_text(&table, letter.toLower());
+    EXPECT_EQ(current_view_row(f.grid), 0);
+    EXPECT_EQ(f.grid.selected(), current);
+    EXPECT_EQ(f.grid.explicit_selection(), nullptr);
+}
+
+TEST(FlightGridBehaviour, Tab_visits_the_grid_before_the_view_combo)
+{
+    // 01 §6.3: "Within a result tab, visit the grid before its view or filter controls."
+    // The grid sits on a tab page the way MainWindow builds it.
+    QWidget window;
+    auto* tabs = new QTabWidget(&window);
+    auto* grid = new FlightGrid(Locale::en_us(), true, tabs);
+    tabs->addTab(grid, QStringLiteral("Outbound"));
+    auto* layout = new QVBoxLayout(&window);
+    layout->addWidget(tabs);
+    window.resize(1200, 500);
+    window.show();
+    grid->set_results(fss01(), "EUR", "");
+    settle();
+    EXPECT_EQ(tab_stops(window), (std::vector<QWidget*>{tabs->tabBar(), grid->table(), grid->view_combo()}));
+
+    // Tab on the tab strip goes to the grid.
+    tabs->tabBar()->setFocus(Qt::TabFocusReason);
+    ASSERT_EQ(window.focusWidget(), tabs->tabBar());
+    send_key(tabs->tabBar(), QEvent::KeyPress, Qt::Key_Tab);
+    EXPECT_EQ(window.focusWidget(), grid->table());
 }
 
 TEST(FlightGridBehaviour, Browser_failure_shows_the_warning_box)
