@@ -419,7 +419,8 @@ TEST(FlightGrid, U_09_Pick_survives_rebuilds_by_identity_and_key)
     grid.choose_view(ViewMode::cheapest_per_day);
     grid.choose_view(ViewMode::all_fares);
     EXPECT_EQ(grid.selected(), pick);
-    EXPECT_EQ(grid.take_scroll_request(), ScrollRequest::current);
+    // Full reload: back to the top first, then the pick into view (01 §8.6-§8.7).
+    EXPECT_EQ(grid.take_scroll_request(), ScrollRequest::top_then_current);
 
     // Re-priced objects: restored by (From, To, Date); the stored pick stays the old object.
     std::vector<FlightResultPtr> repriced;
@@ -483,7 +484,7 @@ TEST(FlightGrid, Cheapest_per_destination_falls_back_to_the_picks_group)
     const FlightResultPtr bcn = test::samples::builder_a("BTS", "BCN", day(11, 12), "50");
     grid.set_results(std::vector<FlightResultPtr>{rows[0], rows[1], rows[3], bcn}, "EUR", "");
     EXPECT_EQ(grid.selected(), bcn);  // same ToAirport.GroupKey
-    EXPECT_EQ(grid.take_scroll_request(), ScrollRequest::current);
+    EXPECT_EQ(grid.take_scroll_request(), ScrollRequest::top_then_current);
 }
 
 TEST(FlightGrid, Restore_selection_takes_the_first_display_match)

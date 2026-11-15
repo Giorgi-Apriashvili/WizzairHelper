@@ -192,6 +192,10 @@ void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest r
     case ui::ScrollRequest::current:
         scrollTo(target);
         break;
+    case ui::ScrollRequest::top_then_current:
+        scrollToTop();     // the full reload shows row 0 first (01 §8.6) ...
+        scrollTo(target);  // ... then the restored pick is scrolled into view (§8.7)
+        break;
     case ui::ScrollRequest::none:
         break;  // keep the first displayed row (streaming in All fares)
     }

@@ -286,6 +286,36 @@ TEST(FlightGridBehaviour, Clear_resets_the_pick_and_SetResults_keeps_view_sort_a
     EXPECT_EQ(table.verticalScrollBar()->value(), 0);  // no pick: row 0 and the top
 }
 
+TEST(FlightGridBehaviour, Rebuild_with_a_pick_returns_to_the_top_before_showing_the_pick)
+{
+    // 01 §8.6-§8.7: a full reload makes row 0 current and scrolls to the top;
+    // RestoreSelection then only scrolls the pick into view from there. A pick
+    // near the top must therefore end with the view at the top, even when the
+    // user had scrolled down before the rebuild (review finding UI-SCROLL-01).
+    Fixture f;
+    f.grid.resize(1600, 220);  // a few rows visible, the 12 fares need scrolling
+    f.grid.show();
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    app::GridTableView& table = *f.grid.table();
+    QScrollBar& bar = *table.verticalScrollBar();
+    ASSERT_GT(bar.maximum(), 1);
+
+    click(table, cell_center(table, 1, col(FlightColumn::from)));
+    const FlightResultPtr pick = f.grid.selected();
+    ASSERT_TRUE(pick);
+    bar.setValue(bar.maximum());
+    settle();
+    ASSERT_EQ(bar.value(), bar.maximum());
+
+    f.grid.set_results(fss01(), "EUR", "");  // full reload; the pick is restored by key
+    settle();
+    ASSERT_TRUE(f.grid.selected());
+    EXPECT_EQ(f.grid.selected()->date(), pick->date());
+    EXPECT_EQ(current_view_row(f.grid), 1);
+    EXPECT_EQ(bar.value(), 0);  // top first, and row 1 is already in view
+}
+
 TEST(FlightGridBehaviour, Cheapest_per_destination_restores_the_picks_group)
 {
     Fixture f;

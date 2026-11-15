@@ -628,6 +628,13 @@ std::optional<std::size_t> FlightGridModel::position_of(std::size_t idx) const n
 void FlightGridModel::make_current(std::size_t display_row, ScrollRequest scroll)
 {
     current_ = order_[display_row];
+    // A rebuild has already asked for the top; restoring the pick then only
+    // scrolls it into view from there (01 §8.6-§8.7), so keep both steps.
+    if (scroll == ScrollRequest::current &&
+        (scroll_ == ScrollRequest::top || scroll_ == ScrollRequest::top_then_current)) {
+        scroll_ = ScrollRequest::top_then_current;
+        return;
+    }
     scroll_ = scroll;
 }
 

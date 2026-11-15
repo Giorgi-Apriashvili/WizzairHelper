@@ -148,6 +148,9 @@ enum class ScrollRequest {
     none,    ///< keep the first displayed row index (streaming in All fares)
     top,     ///< full reload: row 0 current and first displayed
     current, ///< scroll the current row into view (pick restored)
+    /// Full reload that restored a pick: first scroll to the top (row 0 first
+    /// displayed, 01 §8.6), then scroll the current row into view (§8.7).
+    top_then_current,
 };
 
 enum class MouseButton { left, right, middle };
