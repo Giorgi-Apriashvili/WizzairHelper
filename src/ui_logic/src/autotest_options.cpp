@@ -262,6 +262,19 @@ std::optional<AutoTestOptions> AutoTestOptions::parse(std::span<const std::strin
     return options;
 }
 
+std::optional<std::filesystem::path> AutoTestOptions::parse_data_root(std::span<const std::string> args,
+                                                                      const std::filesystem::path& current_dir)
+{
+    if (!value_of(args, "--autotest")) {
+        return std::nullopt;
+    }
+    const std::optional<std::string> root = value_of(args, "--data-root");
+    if (!root || root->empty()) {
+        return std::nullopt;
+    }
+    return full_path(*root, current_dir);
+}
+
 std::optional<std::string> AutoTestOptions::listed_currency() const
 {
     if (currency && strings::is_listed_currency(*currency)) {

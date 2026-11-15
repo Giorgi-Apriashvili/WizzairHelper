@@ -82,6 +82,13 @@ struct AutoTestOptions {
                                                               const std::filesystem::path& current_dir,
                                                               const NumberSymbols& number_symbols = NumberSymbols{});
 
+    /// The `--data-root` of an --autotest command line, made absolute, read on its own
+    /// with the rules of parse(): a start-up crash over another bad value still belongs
+    /// in that isolated profile's errors.log (D-30). nullopt for a normal run and when
+    /// there is no `--data-root` value or it is empty.
+    [[nodiscard]] static std::optional<std::filesystem::path> parse_data_root(std::span<const std::string> args,
+                                                                             const std::filesystem::path& current_dir);
+
     /// `--currency` when it is in the "Prices in" list (exact), else nullopt.
     [[nodiscard]] std::optional<std::string> listed_currency() const;
     /// `--then-currency` when it is listed, else nullopt.

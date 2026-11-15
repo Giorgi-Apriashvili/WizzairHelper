@@ -42,6 +42,10 @@ constexpr std::size_t kCapturedFrames = CrashReporter::kMaxFrames + 48;
 /// the exception is raised: the vectored handler sees every throw before any catch.
 thread_local std::stacktrace t_last_throw;
 
+/// The original throw site of the exception that TracedException::rethrow raises next on
+/// this thread: the tracer records it instead of the rethrow's own stack.
+thread_local std::optional<std::stacktrace> t_carried_throw;
+
 LONG CALLBACK record_throw_site(EXCEPTION_POINTERS* pointers) noexcept
 {
     const EXCEPTION_RECORD* record = pointers != nullptr ? pointers->ExceptionRecord : nullptr;
@@ -50,6 +54,11 @@ LONG CALLBACK record_throw_site(EXCEPTION_POINTERS* pointers) noexcept
     }
     if (record->ExceptionInformation[1] == 0) {
         return EXCEPTION_CONTINUE_SEARCH;  // `throw;` re-raises the current exception: keep its site
+    }
+    if (t_carried_throw) {
+        t_last_throw = std::move(*t_carried_throw);
+        t_carried_throw.reset();
+        return EXCEPTION_CONTINUE_SEARCH;
     }
     try {
         t_last_throw = std::stacktrace::current(0, kCapturedFrames);
@@ -257,6 +266,36 @@ ExceptionReport describe_current_exception(std::size_t skip_frames)
 }
 
 // ---------------------------------------------------------------------------
+// TracedException
+// ---------------------------------------------------------------------------
+
+TracedException TracedException::current() noexcept
+{
+    TracedException caught;
+    caught.error_ = std::current_exception();
+    if (caught.error_ && g_throw_tracer.load() != nullptr) {
+        try {
+            caught.trace_ = t_last_throw;
+        } catch (...) {
+            caught.trace_ = std::stacktrace{};  // no memory for the frames: the exception still travels
+        }
+    }
+    return caught;
+}
+
+void TracedException::rethrow() const
+{
+    if (error_ && !trace_.empty() && g_throw_tracer.load() != nullptr) {
+        try {
+            t_carried_throw = trace_;  // taken by record_throw_site for the raise below
+        } catch (...) {
+            t_carried_throw.reset();
+        }
+    }
+    std::rethrow_exception(error_);
+}
+
+// ---------------------------------------------------------------------------
 // CrashReporter
 // ---------------------------------------------------------------------------
 
@@ -271,7 +310,10 @@ void CrashReporter::show_message_box(const std::string& caption, const std::stri
 
 CrashReporter::CrashReporter(const Clock& clock, std::optional<std::filesystem::path> data_root, Dialog dialog,
                              QObject* parent)
-    : QObject(parent), clock_(clock), dialog_(std::move(dialog)), data_root_(std::move(data_root))
+    : QObject(parent),
+      dialog_(std::move(dialog)),
+      clock_(std::shared_ptr<const Clock>{}, &clock),  // aliasing, owns nothing
+      data_root_(std::move(data_root))
 {
 }
 
@@ -284,6 +326,15 @@ void CrashReporter::set_data_root(std::optional<std::filesystem::path> data_root
 {
     const std::scoped_lock lock(mutex_);
     data_root_ = std::move(data_root);
+}
+
+void CrashReporter::set_clock(std::shared_ptr<const Clock> clock)
+{
+    if (!clock) {
+        throw std::invalid_argument("CrashReporter::set_clock needs a clock.");
+    }
+    const std::scoped_lock lock(mutex_);
+    clock_ = std::move(clock);
 }
 
 std::filesystem::path CrashReporter::log_path() const
@@ -299,9 +350,9 @@ std::filesystem::path CrashReporter::log_path() const
 bool CrashReporter::append_to_log(std::string_view details) noexcept
 {
     try {
-        const std::filesystem::path path = log_path();
-        const std::string entry = ui::strings::errors_log_entry(clock_.local_now(), details);
         const std::scoped_lock lock(mutex_);
+        const std::filesystem::path path = app_paths::errors_log(data_root_);
+        const std::string entry = ui::strings::errors_log_entry(clock_->local_now(), details);
         std::error_code ignored;
         std::filesystem::create_directories(path.parent_path(), ignored);
         std::ofstream file(path, std::ios::binary | std::ios::app);

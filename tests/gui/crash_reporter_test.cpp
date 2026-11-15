@@ -5,6 +5,9 @@
 #include "application.hpp"
 #include "crash_reporter.hpp"
 #include "diagnostics_test_support.hpp"
+#include "job_runner.hpp"
+#include "task.hpp"
+#include "task_scope.hpp"
 
 #include "wizz/core/clocks.hpp"
 
@@ -18,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -28,6 +32,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -40,6 +45,34 @@ struct ParseFailure : std::runtime_error {
 __declspec(noinline) void throw_from_named_function()
 {
     throw ParseFailure("Wizz Air sent a timetable that could not be read.");
+}
+
+__declspec(noinline) int worker_throw_site()
+{
+    throw std::logic_error("The transport broke its contract.");
+}
+
+/// Throws on the UI thread before its first suspension.
+wizz::app::Task<int> throwing_child()
+{
+    co_return worker_throw_site();
+}
+
+wizz::app::Task<> awaits_throwing_child()
+{
+    static_cast<void>(co_await throwing_child());
+}
+
+/// A leg flow's shape: a child flow awaits a worker job that throws.
+wizz::app::Task<int> job_result(wizz::app::JobRunner& runner)
+{
+    co_return co_await runner.run(runner.new_job_id(), {},
+                                  [](const wizz::app::JobChannel&) { return worker_throw_site(); });
+}
+
+wizz::app::Task<> awaits_job(wizz::app::JobRunner& runner)
+{
+    static_cast<void>(co_await job_result(runner));
 }
 
 /// An event handler that fails, like a slot that throws on the UI thread.
@@ -197,6 +230,17 @@ TEST_F(CrashReporterTest, The_data_root_can_change_after_start_up)
     EXPECT_EQ(reporter_.log_path().parent_path().filename(), "WizzairHelper");  // %LOCALAPPDATA%\WizzairHelper
 }
 
+TEST_F(CrashReporterTest, The_record_clock_can_change_after_start_up)
+{
+    reporter_.show_crash({.message = "one", .details = "A: one"});
+    // --fixed-now 2026-12-24T18:30:00Z (D-30): the run's FixedClock, local zone UTC.
+    reporter_.set_clock(std::make_shared<FixedClock>(wizz::make_utc(wizz::Date::from_ymd(2026, 12, 24), 18, 30)));
+    reporter_.show_crash({.message = "two", .details = "B: two"});
+
+    EXPECT_EQ(read_file(root_.path() / "errors.log"),
+              "[2026-11-02T11:00:00] A: one\r\n\r\n[2026-12-24T18:30:00] B: two\r\n\r\n");
+}
+
 // ---------------------------------------------------------------------------
 // Exception descriptions (ex.Message / ex.ToString())
 // ---------------------------------------------------------------------------
@@ -267,6 +311,68 @@ TEST_F(CrashReporterTest, The_stack_trace_starts_at_the_throw_site)
     EXPECT_NE(first_frame.find("throw_from_named_function"), std::string::npos) << report.details;
     EXPECT_NE(first_frame.find("crash_reporter_test.cpp:line "), std::string::npos) << report.details;
     EXPECT_EQ(report.details.find("CxxThrowException"), std::string::npos) << report.details;
+}
+
+/// The "   at " lines of the first errors.log record in `log`.
+[[nodiscard]] std::vector<std::string> first_record_frames(const std::string& log)
+{
+    const std::string record = log.substr(0, log.find("\r\n\r\n"));
+    std::vector<std::string> frames;
+    for (std::size_t start = 0; start < record.size();) {
+        const std::size_t end = std::min(record.find("\r\n", start), record.size());
+        if (const std::string line = record.substr(start, end - start); line.starts_with("   at ")) {
+            frames.push_back(line);
+        }
+        start = end + 2;
+    }
+    return frames;
+}
+
+/// The record's frames start in `function`; the rethrow plumbing between the throw site
+/// and the report (TaskPromise::take, JobAwaiter::await_resume, TaskScope) is not in it.
+void expect_logged_from(const std::string& log, std::string_view function)
+{
+    EXPECT_TRUE(log.starts_with("[2026-11-02T11:00:00] std::logic_error: The transport broke its contract.\r\n   at "))
+        << log;
+    const std::vector<std::string> frames = first_record_frames(log);
+    ASSERT_FALSE(frames.empty()) << log;
+    EXPECT_NE(frames.front().find(function), std::string::npos) << log;
+    for (const std::string& frame : frames) {
+        EXPECT_EQ(frame.find("record_throw_site"), std::string::npos) << log;
+        EXPECT_EQ(frame.find("rethrow_exception"), std::string::npos) << log;
+        EXPECT_EQ(frame.find("ExceptionPtrRethrow"), std::string::npos) << log;
+    }
+}
+
+TEST_F(CrashReporterTest, A_worker_exception_rethrown_through_co_await_is_logged_from_its_throw_site)
+{
+#ifdef NDEBUG
+    GTEST_SKIP() << "Release builds carry no PDB, so frames have no function names or lines.";
+#endif
+    reporter_.install();
+    {
+        wizz::app::JobRunner runner;
+        wizz::app::TaskScope scope;  // what escapes a root flow goes to the installed reporter
+        scope.spawn(wizz_crash_test::awaits_job(runner));
+        ASSERT_TRUE(wizz::test::pump_until([this] { return !recorder_.snapshot().empty(); }));
+    }
+    reporter_.uninstall();
+    expect_logged_from(read_file(root_.path() / "errors.log"), "worker_throw_site");
+}
+
+TEST_F(CrashReporterTest, A_ui_thread_exception_rethrown_through_nested_tasks_is_logged_from_its_throw_site)
+{
+#ifdef NDEBUG
+    GTEST_SKIP() << "Release builds carry no PDB, so frames have no function names or lines.";
+#endif
+    reporter_.install();
+    {
+        wizz::app::TaskScope scope;
+        scope.spawn(wizz_crash_test::awaits_throwing_child());  // reported before spawn returns
+    }
+    reporter_.uninstall();
+    ASSERT_EQ(recorder_.snapshot().size(), 1U);
+    expect_logged_from(read_file(root_.path() / "errors.log"), "worker_throw_site");
 }
 
 // ---------------------------------------------------------------------------

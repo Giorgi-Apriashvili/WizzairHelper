@@ -19,15 +19,25 @@ from Budapest over 105 days (42-day chunks).
 
 summary.json carries no booking URLs (01 §17.3, 01-digest C-07); the links the grids
 open are asserted by the in-process GUI tests (ControllerFlows.*).
+
+The crash_* scenarios start the exe with a command line that fails at start-up (01 §3.2,
+D-30): they wait for the crash box, check that the process is per-monitor-v2 DPI aware
+by then and the box is not DPI-unaware, i.e. not bitmap-stretched (01 §3, 06 §4), and
+that it shows the error, press OK, and check the errors.log record in the --data-root
+profile (and that the real %LOCALAPPDATA%\\WizzairHelper\\errors.log did not grow).
 """
 import argparse
+import ctypes
 import datetime
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
 import sys
+import time
+from ctypes import wintypes
 
 FIXED_NOW = '2026-11-02T10:00:00Z'
 STARTED = ('[10:00:00] WizzairHelper started. Fares: wizzair.com (unofficial website API). Geocoding: Photon / '
@@ -517,12 +527,206 @@ SCENARIOS = {
 }
 
 
+# --- Start-up crashes (01 §3.2, D-30) ----------------------------------------------------------
+
+CRASH_BOX_END = '\n\nDetails were written to %LOCALAPPDATA%\\WizzairHelper\\errors.log.'
+REAL_NOW = r'\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\] '
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+DPI_AWARENESS_UNAWARE = 0
+WM_CLOSE = 0x0010  # an MB_OK box ends with IDOK (its button's control ID is IDCANCEL)
+MESSAGE_BOX_TEXT_ID = 0xFFFF
+
+
+def prepare_bad_replay(replay_root, work_dir):
+    """A replay.json rule with a field the format does not know: rejected at start-up (D-30)."""
+    target = os.path.join(work_dir, 'replay')
+    os.makedirs(target)
+    with open(os.path.join(target, 'replay.json'), 'w', encoding='utf-8', newline='\n') as f:
+        json.dump({'rules': [{'urlPrefix': 'https://www.wizzair.com', 'body': '', 'bogus': 1}]}, f)
+    return target
+
+
+# name: (extra flags for the replay dir, prepare, errors.log record pattern, text in the box)
+CRASH_SCENARIOS = {
+    # Parsing fails before QApplication exists (and before any fixed clock): real local time.
+    'crash_bad_fixed_now': (lambda replay: ['--fixed-now', 'not-a-time'], None,
+                            REAL_NOW + re.escape("wizz::FormatError: String 'not-a-time' was not recognized as a "
+                                                 "valid UTC date and time.\r\n   at "),
+                            "String 'not-a-time' was not recognized as a valid UTC date and time."),
+    # The replay fails after parsing: the record carries the --fixed-now instant, local zone UTC.
+    'crash_bad_replay': (lambda replay: ['--replay', replay, '--fixed-now', FIXED_NOW], prepare_bad_replay,
+                         re.escape('[2026-11-02T10:00:00] wizz::ui::ReplayConfigError: ') + r'[^\r\n]*"bogus"',
+                         '"bogus"'),
+}
+
+
+ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+
+def user32_functions():
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    user32.EnumWindows.argtypes = [ENUM_WINDOWS_PROC, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetDlgItemTextW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetDlgItemTextW.restype = wintypes.UINT
+    user32.GetWindowDpiAwarenessContext.argtypes = [wintypes.HWND]
+    user32.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+    user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.AreDpiAwarenessContextsEqual.restype = wintypes.BOOL
+    user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
+    user32.GetDpiAwarenessContextForProcess.argtypes = [wintypes.HANDLE]
+    user32.GetDpiAwarenessContextForProcess.restype = ctypes.c_void_p
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    return user32
+
+
+def find_crash_box(user32, pid):
+    """The visible 'WizzairHelper' dialog (#32770) of process `pid`, or None."""
+    found = []
+
+    def visit(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value != pid or not user32.IsWindowVisible(hwnd):
+            return True
+        name = ctypes.create_unicode_buffer(64)
+        title = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, name, 64)
+        user32.GetWindowTextW(hwnd, title, 64)
+        if name.value == '#32770' and title.value == 'WizzairHelper':
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(ENUM_WINDOWS_PROC(visit), 0)
+    return found[0] if found else None
+
+
+def process_dpi_awareness_context(user32, pid):
+    """The DPI_AWARENESS_CONTEXT of process `pid` (None when it cannot be opened)."""
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    process_query_limited_information = 0x1000
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return None
+    try:
+        return user32.GetDpiAwarenessContextForProcess(handle)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def real_errors_log():
+    """%LOCALAPPDATA%\\WizzairHelper\\errors.log of the user running the tests."""
+    buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+    csidl_local_appdata = 0x1C
+    ctypes.windll.shell32.SHGetFolderPathW(None, csidl_local_appdata, None, 0, buffer)
+    return os.path.join(buffer.value, 'WizzairHelper', 'errors.log')
+
+
+def undo_real_log_growth(path, size_before, folder_existed, marker):
+    """True when the real errors.log grew; a record of this run is removed again (with the
+    file and the folder when this run created them)."""
+    if not os.path.isfile(path) or os.path.getsize(path) <= (size_before or 0):
+        return False
+    with open(path, 'rb') as f:
+        f.seek(size_before or 0)
+        added = f.read()
+    if marker.encode('utf-8') in added:
+        if size_before is None:
+            os.remove(path)  # this run created it
+            if not folder_existed and not os.listdir(os.path.dirname(path)):
+                os.rmdir(os.path.dirname(path))
+        else:
+            with open(path, 'r+b') as f:
+                f.truncate(size_before)
+    return True
+
+
+def run_crash(args, env, work_dir, replay_root):
+    flags, prepare, record_pattern, box_part = CRASH_SCENARIOS[args.scenario]
+    out_dir = os.path.join(work_dir, 'out')
+    data_root = os.path.join(work_dir, 'data')
+    replay = prepare(replay_root, work_dir) if prepare else None
+    command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root] + flags(replay)
+    real_log = real_errors_log()
+    real_size = os.path.getsize(real_log) if os.path.isfile(real_log) else None
+    real_folder_existed = os.path.isdir(os.path.dirname(real_log))
+    user32 = user32_functions()
+    failures = []
+    print('running:', subprocess.list2cmdline(command))
+    process = subprocess.Popen(command, env=env)
+    try:
+        box = None
+        deadline = time.monotonic() + args.timeout
+        while box is None and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+            box = find_crash_box(user32, process.pid)
+        if box is None:
+            failures.append('no crash box appeared (exit code %r)' % process.poll())
+        else:
+            # 01 §3 / 06 §4: per-monitor DPI handling before anything is shown. In a per-monitor-v2
+            # process Windows creates a MessageBox system-DPI aware (as for every later crash box);
+            # in a DPI-unaware one it is bitmap-stretched above 100 %.
+            process_context = process_dpi_awareness_context(user32, process.pid)
+            if not user32.AreDpiAwarenessContextsEqual(process_context, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+                failures.append('the process is not per-monitor-v2 DPI aware when the crash box shows '
+                                '(DPI_AWARENESS %d)' % user32.GetAwarenessFromDpiAwarenessContext(process_context))
+            box_awareness = user32.GetAwarenessFromDpiAwarenessContext(user32.GetWindowDpiAwarenessContext(box))
+            if box_awareness == DPI_AWARENESS_UNAWARE:
+                failures.append('the crash box is DPI-unaware (bitmap-stretched)')
+            text = ctypes.create_unicode_buffer(4096)
+            user32.GetDlgItemTextW(box, MESSAGE_BOX_TEXT_ID, text, 4096)
+            shown = text.value.replace('\r\n', '\n')
+            if not (shown.startswith('Something went wrong:\n\n') and box_part in shown and
+                    shown.endswith(CRASH_BOX_END)):
+                failures.append('crash box text: %r' % shown)
+            user32.PostMessageW(box, WM_CLOSE, 0, 0)
+        exit_code = process.wait(timeout=30)
+        if box is not None and exit_code != 1:
+            failures.append('exit code %d after the crash box, expected 1' % exit_code)
+    except subprocess.TimeoutExpired:
+        failures.append('WizzairHelper.exe did not end after the crash box was closed')
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if undo_real_log_growth(real_log, real_size, real_folder_existed, box_part):
+            failures.append('the record went to the real %s (removed again)' % real_log)
+
+    data_log = os.path.join(data_root, 'errors.log')
+    if not os.path.isfile(data_log):
+        failures.append('no errors.log in the --data-root profile %s' % data_root)
+    else:
+        with open(data_log, encoding='utf-8', newline='') as f:
+            log = f.read()
+        if not re.match(record_pattern, log) or not log.endswith('\r\n\r\n') or log.count('\r\n\r\n') != 1:
+            failures.append('errors.log: expected one record matching %r, got %r' % (record_pattern, log[:400]))
+        else:
+            print('errors.log: %s' % log.splitlines()[0])
+    if os.path.exists(os.path.join(out_dir, 'summary.json')):
+        failures.append('summary.json written although the start-up failed')
+    if failures:
+        for failure in failures:
+            print('FAILED:', failure)
+        return 1
+    print('OK: %s' % args.scenario)
+    return 0
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--exe', required=True)
     parser.add_argument('--replay-root', required=True)
-    parser.add_argument('--scenario', required=True, choices=sorted(SCENARIOS))
+    parser.add_argument('--scenario', required=True, choices=sorted(list(SCENARIOS) + list(CRASH_SCENARIOS)))
     parser.add_argument('--work-dir', required=True)
     parser.add_argument('--timeout', type=float, default=150)
     parser.add_argument('--scale', help='QT_SCALE_FACTOR for the run, e.g. 1.5 or 2')
@@ -530,16 +734,10 @@ def main():
                         help='limit for the longest gap of the 40 ms progress timer (05 §5: 100 ms)')
     args = parser.parse_args()
 
-    flags, check, prepare = SCENARIOS[args.scenario]
     work_dir = os.path.abspath(args.work_dir)
     replay_root = os.path.abspath(args.replay_root)
-    out_dir = os.path.join(work_dir, 'out')
-    data_root = os.path.join(work_dir, 'data')
     shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir)
-    replay = prepare(replay_root, work_dir) if prepare else os.path.join(replay_root, args.scenario)
-    command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root, '--replay', replay,
-               '--fixed-now', FIXED_NOW, '--diagnostics'] + flags
     env = dict(os.environ)
     env.pop('QT_SCREEN_SCALE_FACTORS', None)
     env.pop('QT_QPA_PLATFORM', None)  # PrintWindow needs the real "windows" platform
@@ -547,6 +745,15 @@ def main():
         env['QT_SCALE_FACTOR'] = args.scale
     else:
         env.pop('QT_SCALE_FACTOR', None)
+    if args.scenario in CRASH_SCENARIOS:
+        return run_crash(args, env, work_dir, replay_root)
+
+    flags, check, prepare = SCENARIOS[args.scenario]
+    out_dir = os.path.join(work_dir, 'out')
+    data_root = os.path.join(work_dir, 'data')
+    replay = prepare(replay_root, work_dir) if prepare else os.path.join(replay_root, args.scenario)
+    command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root, '--replay', replay,
+               '--fixed-now', FIXED_NOW, '--diagnostics'] + flags
     print('running:', subprocess.list2cmdline(command), '(QT_SCALE_FACTOR=%s)' % (args.scale or 'unset'))
     try:
         completed = subprocess.run(command, timeout=args.timeout, env=env)

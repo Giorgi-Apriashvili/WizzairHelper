@@ -14,13 +14,17 @@
 //   * JobMailbox coalesces a worker's frequent events (progress, row batches) into
 //     one delivery per burst, in order and still ahead of the completion.
 //   * Completion resumes the awaiting coroutine on the UI thread: the UI never
-//     blocks on a future or joins a running worker.
+//     blocks on a future or joins a running worker. The job's exception is
+//     rethrown there with the worker's throw site (TracedException), which a
+//     crash record then starts at.
 //   * Cancellation: the caller's std::stop_token is linked to the job's own stop
 //     source, so one stop request reaches every wait inside the job. Destroying the
 //     runner stops and joins all workers (application shutdown).
 //
 // The runner must live on the UI thread. Its public members are UI-thread only,
 // except JobChannel, which belongs to the worker.
+
+#include "crash_reporter.hpp"
 
 #include <QObject>
 #include <QPointer>
@@ -30,7 +34,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -217,7 +220,7 @@ public:
                         state->value.emplace(work(channel));
                     }
                 } catch (...) {
-                    state->error = std::current_exception();
+                    state->error = TracedException::current();  // with the worker's throw site
                 }
             },
             [state = state_] {
@@ -231,7 +234,7 @@ public:
     R await_resume()
     {
         if (state_->error) {
-            std::rethrow_exception(state_->error);
+            state_->error.rethrow();
         }
         if constexpr (!std::is_void_v<R>) {
             return std::move(*state_->value);
@@ -246,7 +249,7 @@ private:
         // Written by the worker before it posts the completion; read on the UI thread
         // after the completion was delivered (the event queue orders the two).
         std::optional<std::conditional_t<std::is_void_v<R>, Empty, R>> value;
-        std::exception_ptr error;
+        TracedException error;
         // UI thread only.
         std::coroutine_handle<> continuation;
         bool started = false;

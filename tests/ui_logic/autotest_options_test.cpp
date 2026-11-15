@@ -201,6 +201,28 @@ TEST(AutoTestOptions, D_30_Data_root_replay_and_fixed_now)
     EXPECT_THROW((void)parse({"--autotest", "o", "--data-root", ""}), std::invalid_argument);
 }
 
+TEST(AutoTestOptions, D_30_Data_root_is_read_even_when_another_value_is_bad)
+{
+    // A bad value makes parse throw before the window opens; the crash record still
+    // belongs in the isolated profile (main reads the root first).
+    const std::vector<std::string> bad_fixed_now{"--autotest", "o", "--data-root", "profile", "--fixed-now", "soon"};
+    EXPECT_THROW((void)AutoTestOptions::parse(bad_fixed_now, kCurrentDir), FormatError);
+    EXPECT_EQ(AutoTestOptions::parse_data_root(bad_fixed_now, kCurrentDir), fs::path{L"C:\\work\\run\\profile"});
+    const std::vector<std::string> bad_out{"--out", "2026-13-01", "--autotest", "o", "--data-root", "D:\\iso\\.\\p"};
+    EXPECT_EQ(AutoTestOptions::parse_data_root(bad_out, kCurrentDir), fs::path{L"D:\\iso\\p"});
+
+    // The parse rules: only with --autotest, first occurrence, value = next argument.
+    const auto root = [](std::vector<std::string> args) { return AutoTestOptions::parse_data_root(args, kCurrentDir); };
+    EXPECT_EQ(root({"--autotest", "o", "--data-root", "a", "--data-root", "b"}), fs::path{L"C:\\work\\run\\a"});
+    EXPECT_EQ(root({"--autotest", "o", "--data-root", "--keep-open"}), fs::path{L"C:\\work\\run\\--keep-open"});
+    EXPECT_FALSE(root({"--data-root", "profile"}));                    // a normal run: the user's own profile
+    EXPECT_FALSE(root({"--data-root", "profile", "--autotest"}));      // --autotest without a value
+    EXPECT_FALSE(root({"--autotest", "o"}));
+    EXPECT_FALSE(root({"--autotest", "o", "--data-root"}));
+    EXPECT_FALSE(root({"--autotest", "o", "--DATA-ROOT", "profile"}));
+    EXPECT_FALSE(root({"--autotest", "o", "--data-root", ""}));        // no root to recover: parse throws
+}
+
 TEST(AutoTestOptions, D_30_Fixed_now_formats)
 {
     EXPECT_EQ(parse_fixed_now("2026-11-02T10:00:00"), FixedClock::kDefaultUtcNow);

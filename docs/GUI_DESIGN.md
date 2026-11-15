@@ -9,8 +9,11 @@ without a window.
 
 - `main.cpp`: install the crash handler; parse `--autotest` options (ui_logic, from the UTF-16
   command line so `--to ""` and non-ASCII places survive) *before* `QApplication` — a bad date or
-  `--fixed-now` goes to the crash box before any window; point the reporter at `--data-root`;
-  `PassThrough` rounding (per-monitor DPI v2 is Qt 6's default); `Application`;
+  `--fixed-now` goes to the crash box before any window; the reporter is pointed at `--data-root`
+  first (`AutoTestOptions::parse_data_root`), so that record lands in the isolated profile, and
+  at the `--fixed-now` clock after parsing; `PassThrough` rounding; `Application`. Per-monitor
+  DPI v2 comes from the application manifest (`resources/WizzairHelper.manifest`), so the early
+  crash box is DPI aware too (Qt finds the awareness it would set);
   `style::apply_application_look()` (windowsvista + Segoe UI 9 pt); `FontWarmup` (a worker resolves
   the busy panel's "⏳" font fallback, 0.2–0.4 s the first time, D-33); `AppServices::create`
   (`ServiceConfig::for_run`: CurlTransport / ReplayTransport, SystemClock / FixedClock, user
@@ -30,9 +33,13 @@ without a window.
     function (describes the exception there, shows the box on the UI thread).
   - MSVC x64 runs a catch block only after the throwing frames are unwound, so `install()` also
     adds a vectored exception handler that records the stack of each C++ throw per thread; the
-    log then starts at the throw site. MSVC keeps terminate handlers per thread
-    (`CrashReporter::install_terminate_handler()` for worker threads).
-  - The dialog is injectable (tests); `set_data_root()` applies `--data-root` after parsing.
+    log then starts at the throw site. `std::rethrow_exception` is a throw of its own, so `Task`
+    and `JobAwaiter` carry a coroutine's or worker job's exception as a `TracedException` (the
+    exception plus its recorded throw site), whose `rethrow()` hands that site to the tracer: a
+    record still starts where the exception was first thrown, also on a worker. MSVC keeps
+    terminate handlers per thread (`CrashReporter::install_terminate_handler()` for worker threads).
+  - The dialog is injectable (tests); `set_data_root()` / `set_clock()` apply `--data-root` and
+    `--fixed-now`.
 - Logical pixels: Qt widget coordinates are already DPI-independent, so 01's `L(x)` is just `x`.
   Settings `WindowWidth/Height` are *device* pixels: multiply/divide by `devicePixelRatio()`.
 - Window size (01 §4.1, §13): a WinForms `Size` / `Bounds` is the whole window rectangle, the
