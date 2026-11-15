@@ -555,14 +555,21 @@ std::vector<std::string> parse_validation_codes(std::string_view body)
     if (!root || !root->is_object()) {
         return codes;
     }
-    const json::Value* list = root->find("validationCodes");
-    if (list == nullptr || !list->is_array()) {
-        return codes;
-    }
-    for (const json::Value& code : list->as_array()) {
-        if (code.is_string()) {
-            codes.emplace_back(code.as_string());
+    // A body whose text cannot be read (e.g. a lone-surrogate escape, DECISIONS
+    // D-28) counts as "no codes": the response then classifies as an ordinary
+    // 400 WizzApiError instead of escaping the client (D-29).
+    try {
+        const json::Value* list = root->find("validationCodes");
+        if (list == nullptr || !list->is_array()) {
+            return codes;
         }
+        for (const json::Value& code : list->as_array()) {
+            if (code.is_string()) {
+                codes.emplace_back(code.as_string());
+            }
+        }
+    } catch (const json::Error&) {
+        return {};
     }
     return codes;
 }

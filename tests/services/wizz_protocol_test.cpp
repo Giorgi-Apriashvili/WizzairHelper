@@ -924,6 +924,18 @@ TEST(WizzProtocol, P_30_Parses_the_BUD_NAP_fixture)
 // ParseValidationCodes, LooksLikeJson, Snippet (04 §11.5)
 // ---------------------------------------------------------------------------
 
+TEST(WizzProtocol, Unreadable_validation_codes_count_as_none_D_29)
+{
+    // A lone surrogate makes the code (or a member name) unreadable (D-28); the
+    // body must then count as "no codes" instead of escaping the client.
+    EXPECT_TRUE(parse_validation_codes("{\"validationCodes\":[\"Invalid\\ud800Market\"]}").empty());
+    // Lookups scan members last to first (D-28): a bad name after the match is
+    // reached first and makes the body unreadable; one before it is never read.
+    EXPECT_TRUE(parse_validation_codes("{\"validationCodes\":[\"InvalidMarket\"],\"\\udc00\":1}").empty());
+    EXPECT_EQ(parse_validation_codes("{\"\\udc00\":1,\"validationCodes\":[\"InvalidMarket\"]}"),
+              (std::vector<std::string>{"InvalidMarket"}));
+}
+
 TEST(WizzProtocol, CT_APIP_08_Validation_codes_are_parsed)
 {
     // [A]
