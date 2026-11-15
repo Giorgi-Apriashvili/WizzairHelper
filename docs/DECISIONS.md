@@ -25,6 +25,7 @@ below are binding for this code base. Each entry names both sides.
 | D-15 | `api-url.txt` strict regex | 04 §7.4 (empty code block) | protocol-reference §3 | Full-string match of the trimmed file against `^https://be\.wizzair\.com/\d+(\.\d+)+/Api$` (ASCII digits). |
 | D-16 | `InvalidFromDate` shifts | protocol-reference §5/§6 "retry once" | 04 §9.2 code: up to two shifts | 04 wins: original + up to 2 shifts (3 sends), P-02. |
 | D-17 | `FormatDuration` rounding | 07 §2 labels round half away from zero | 01 §11.10 banker's rounding; 07 exempts values "specified as nearest-even" | `FormatDuration` under 60 s uses round-half-to-even (`2.5 s → "2 s"`). Distance/duration **labels** (`{x:0}`, `{x:0.0}`) use the 07 §2 label algorithm. |
+| D-19 | `MatchLegs` with an empty leg | 03 §10.2 prose: "if either leg has zero flights, there is no problem" | 03 §10.2 pseudocode checks each leg separately | Pseudocode: F4 is reported when the outbound has fares landing outside the return's origin area even if the return is empty (and F5 symmetrically). |
 | D-18 | Test count | 05 heading "112 cases" | 05 intro / 06 §5 "114 baseline" | 112 catalogue cases + CT-LATENT-01/02 = 114. The 05 §7 scenarios (P-xx, U-xx, R-xx) are implemented as additional tests. |
 
 ## Pathological inputs (spec allows a choice; recorded here as 02/04 request)
@@ -36,6 +37,14 @@ below are binding for this code base. Each entry names both sides.
 | D-22 | Timetable / map date-times carrying `Z` or an offset (02 §2.4, 04 §9.4) | Keep the wall-clock value and ignore the offset (Wizz never sends offsets). Accepted forms: `yyyy-MM-dd`, `yyyy-MM-ddTHH:mm[:ss[.fffffff]]` (also with a space instead of `T`), optional surrounding white space, and invariant `MM/dd/yyyy`. Anything else is unparsable. |
 | D-23 | `geocode.json` entry whose value is `null` or not an array (02 §6.9) | Treat as a cache miss (the .NET predecessor crashed with a NullReferenceException). |
 | D-24 | Frozen live dataset `history/live-cache-2026-11-02/` | Supplied by the user and committed byte-exact (hashes match 02 §14). Tests read it from `<test-binary-dir>/LiveCache/`. The 114 baseline cases use only `fixtures/`; the live-map "[verified]" tables of 02/03 are added as extra tests on top. |
+
+## Naming and emulation notes
+
+| # | Topic | Decision |
+|---|---|---|
+| D-25 | `AirportCatalog.Near` | Exposed as `airports_near(point, radius_km)`: `<windows.h>` defines `near` as an empty macro, which breaks any member named `near`. |
+| D-26 | Hand-written replacements for the .NET regexes (`CityNameOfFake`, `TrailingCodeRegex`, `ExtractApiUrl`) | Mirror .NET semantics exactly (verified against .NET 10): `\s` = `char.IsWhiteSpace`, `\d` = any BMP decimal digit, `\b` word characters = L*, Mn, Nd, Pc, U+200C/U+200D per UTF-16 unit, IgnoreCase = en-US case equivalences. No `std::regex`. |
+| D-27 | Amount that does not fit a decimal in a timetable | `json::FormatError` with the .NET text "One of the identified items was in an invalid format."; the client wraps any `json::Error` as `Wizz Air sent a timetable that could not be read: …` (04 §9.2). |
 
 ## Planned test-only extensions
 
