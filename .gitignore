@@ -10,3 +10,5 @@ CMakeUserPresets.json
 /.vs/
 /.vscode/
 *.user
+# Agent worktrees and local tool state
+/.claude/

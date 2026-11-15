@@ -23,7 +23,10 @@ add_custom_command(TARGET wizzairhelper_tests POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
             "${PROJECT_SOURCE_DIR}/fixtures"
             "$<TARGET_FILE_DIR:wizzairhelper_tests>/Fixtures"
-    COMMENT "Copying conformance fixtures")
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/history/live-cache-2026-11-02"
+            "$<TARGET_FILE_DIR:wizzairhelper_tests>/LiveCache"
+    COMMENT "Copying conformance fixtures and the frozen live dataset (02 §14)")
 
 gtest_discover_tests(wizzairhelper_tests
     DISCOVERY_MODE PRE_TEST

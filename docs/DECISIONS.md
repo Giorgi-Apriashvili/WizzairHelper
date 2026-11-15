@@ -35,10 +35,10 @@ below are binding for this code base. Each entry names both sides.
 | D-21 | HTTP version | Force HTTP/1.1 (`CURL_HTTP_VERSION_1_1`), as .NET does. |
 | D-22 | Timetable / map date-times carrying `Z` or an offset (02 §2.4, 04 §9.4) | Keep the wall-clock value and ignore the offset (Wizz never sends offsets). Accepted forms: `yyyy-MM-dd`, `yyyy-MM-ddTHH:mm[:ss[.fffffff]]` (also with a space instead of `T`), optional surrounding white space, and invariant `MM/dd/yyyy`. Anything else is unparsable. |
 | D-23 | `geocode.json` entry whose value is `null` or not an array (02 §6.9) | Treat as a cache miss (the .NET predecessor crashed with a NullReferenceException). |
-| D-24 | Frozen live dataset `history/live-cache-2026-11-02/` | Not present in this checkout. The live-map "[verified]" tables in 02/03 are documentation; the 114 baseline cases use only `fixtures/`. Live-map cases can be added if the snapshot is supplied. |
+| D-24 | Frozen live dataset `history/live-cache-2026-11-02/` | Supplied by the user and committed byte-exact (hashes match 02 §14). Tests read it from `<test-binary-dir>/LiveCache/`. The 114 baseline cases use only `fixtures/`; the live-map "[verified]" tables of 02/03 are added as extra tests on top. |
 
 ## Planned test-only extensions
 
 | # | Extension | Reason |
 |---|---|---|
-| D-30 | Hidden `--autotest` companions (designed in the GUI milestone), e.g. a data-root override and a fixture replay transport | 05 §5 requires unattended GUI checks on an isolated profile and CI "uses fixtures only", which the documented flags alone cannot provide. Documented flags and `summary.json` stay unchanged. |
+| D-30 | Hidden `--autotest` companions, approved by the user (2026-11-15): a data-root override (isolated profile) and a fixture replay transport (offline GUI runs). Exact flags are designed in the GUI milestone. | 05 §5 requires unattended GUI checks on an isolated profile and CI "uses fixtures only", which the documented flags alone cannot provide. Documented flags and `summary.json` stay unchanged. |
