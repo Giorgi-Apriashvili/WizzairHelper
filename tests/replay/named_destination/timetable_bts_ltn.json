@@ -1,0 +1,1 @@
+{"outboundFlights":[{"departureStation":"BTS","arrivalStation":"LTN","departureDate":"2026-11-12T07:15:00","price":{"amount":14.99,"currencyCode":"EUR"},"priceType":"price","departureDates":[{"date":"2026-11-12T07:15:00","isCheapestOfTheDay":true}],"hasMacFlight":false}],"returnFlights":null}

@@ -7,3 +7,5 @@
 fixtures/** -text
 # Frozen live dataset (SHA-256 pinned in 02 §14): byte-exact too.
 history/live-cache-2026-11-02/** -text
+# Replay scenarios of the --autotest checks (D-30): fixture copies served byte for byte.
+tests/replay/** -text

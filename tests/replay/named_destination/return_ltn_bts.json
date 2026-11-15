@@ -1,0 +1,1 @@
+{"outboundFlights":[{"departureStation":"LTN","arrivalStation":"BTS","departureDate":"2026-11-15T12:00:00","price":{"amount":19.99,"currencyCode":"GBP"},"priceType":"price","departureDates":[{"date":"2026-11-15T12:00:00","isCheapestOfTheDay":true}],"hasMacFlight":false}],"returnFlights":null}

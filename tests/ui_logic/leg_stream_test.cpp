@@ -112,4 +112,26 @@ TEST(LegStream, Events_of_another_job_are_dropped)
     EXPECT_TRUE(stream.finished());
 }
 
+TEST(LegStream, Take_pending_hands_over_the_queued_rows_until_finished)
+{
+    const std::vector<FlightResultPtr> all = fares();
+    LegStream stream{3};
+    EXPECT_TRUE(stream.take_pending().empty());
+
+    stream.on_partial(3, std::span<const FlightResultPtr>{all}.first(2));
+    stream.on_partial(4, std::span<const FlightResultPtr>{all}.subspan(2, 1));  // another job: dropped
+    stream.on_partial(3, std::span<const FlightResultPtr>{all}.subspan(3, 1));
+    const std::vector<FlightResultPtr> taken = stream.take_pending();
+    ASSERT_EQ(taken.size(), 3u);
+    EXPECT_EQ(taken[0], all[0]);
+    EXPECT_EQ(taken[1], all[1]);
+    EXPECT_EQ(taken[2], all[3]);
+    EXPECT_EQ(stream.pending_count(), 0u);
+
+    stream.on_partial(std::span<const FlightResultPtr>{all}.first(1));
+    stream.finish();
+    stream.on_partial(std::span<const FlightResultPtr>{all}.first(1));  // late: ignored
+    EXPECT_TRUE(stream.take_pending().empty());
+}
+
 } // namespace
