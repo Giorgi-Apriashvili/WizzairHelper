@@ -9,6 +9,7 @@
 //                      main window: true only for Yes;
 //   choose_place       the modal PlaceChooserDialog: the index of the chosen
 //                      candidate, nullopt for Cancel / Esc / close.
+// The two MessageBoxes show their text verbatim (Qt::PlainText), like WinForms.
 
 #include "wizz/core/domain.hpp"
 

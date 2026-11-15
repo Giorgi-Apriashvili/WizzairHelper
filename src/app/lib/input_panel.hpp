@@ -82,8 +82,13 @@ public:
     /// nights ≥ min nights). No coupling handler runs and no signal is emitted.
     void load_from(const ui::AppSettings& settings);
     /// Stores From/To (trimmed), the radii, adults and nights (truncated toward
-    /// zero), DiscountClub and Currency. Window fields are left alone.
+    /// zero), DiscountClub and Currency. Window fields are left alone. The numbers are
+    /// the committed values: call commit_numeric_edits() first.
     void store_to(ui::AppSettings& settings) const;
+    /// Commits text typed into a numeric box but not yet entered (no Enter, no focus
+    /// loss), in the 01 §13 save order — what reading NumericUpDown.Value does. The
+    /// usual handlers run (a night limit drags the other one along, 01 §6.2).
+    void commit_numeric_edits();
 
     // --- Inputs ------------------------------------------------------------------------
     [[nodiscard]] std::string from_text() const;

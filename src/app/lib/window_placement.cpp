@@ -26,6 +26,25 @@ namespace {
 
 } // namespace
 
+WindowShowState window_show_state(unsigned show_cmd) noexcept
+{
+    switch (show_cmd) {
+    case SW_SHOWMAXIMIZED:
+        return WindowShowState::maximized;
+    case SW_SHOWMINIMIZED:
+    case SW_MINIMIZE:
+    case SW_SHOWMINNOACTIVE:
+        return WindowShowState::minimized;
+    default:
+        return WindowShowState::normal;
+    }
+}
+
+QSize bounds_to_save(WindowShowState state, QSize bounds, QSize restore_bounds) noexcept
+{
+    return state == WindowShowState::normal ? bounds : restore_bounds;
+}
+
 std::optional<QMargins> native_frame_margins(const QWidget& window, double device_pixel_ratio)
 {
     const HWND hwnd = native_window(window);
@@ -42,7 +61,7 @@ std::optional<QMargins> native_frame_margins(const QWidget& window, double devic
     return QMargins{-rect.left, -rect.top, rect.right, rect.bottom};
 }
 
-std::optional<QSize> native_normal_outer_size(const QWidget& window)
+std::optional<NativeBounds> native_bounds(const QWidget& window)
 {
     const HWND hwnd = native_window(window);
     if (hwnd == nullptr) {
@@ -50,11 +69,14 @@ std::optional<QSize> native_normal_outer_size(const QWidget& window)
     }
     WINDOWPLACEMENT placement{};
     placement.length = sizeof(placement);
-    if (!GetWindowPlacement(hwnd, &placement)) {
+    RECT rect{};
+    if (!GetWindowPlacement(hwnd, &placement) || !GetWindowRect(hwnd, &rect)) {
         return std::nullopt;
     }
     const RECT& normal = placement.rcNormalPosition;
-    return QSize{normal.right - normal.left, normal.bottom - normal.top};
+    return NativeBounds{.state = window_show_state(placement.showCmd),
+                        .bounds = QSize{rect.right - rect.left, rect.bottom - rect.top},
+                        .restore_bounds = QSize{normal.right - normal.left, normal.bottom - normal.top}};
 }
 
 } // namespace wizz::app

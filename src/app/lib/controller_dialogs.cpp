@@ -19,12 +19,14 @@ ControllerDialogs ControllerDialogs::system(QWidget* owner)
             [parent](const QString& text) {
                 QMessageBox box{QMessageBox::Information, to_qstring(ui::strings::kAppCaption), text, QMessageBox::Ok,
                                 parent.data()};
+                box.setTextFormat(Qt::PlainText);  // typed text and exception messages, never markup
                 box.exec();
             },
         .confirm_big_search =
             [parent](const QString& text) {
                 QMessageBox box{QMessageBox::Question, to_qstring(ui::strings::kBigSearchCaption), text,
                                 QMessageBox::Yes | QMessageBox::No, parent.data()};
+                box.setTextFormat(Qt::PlainText);
                 return box.exec() == QMessageBox::Yes;
             },
         .choose_place =

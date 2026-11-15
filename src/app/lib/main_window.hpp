@@ -5,8 +5,8 @@
 //   * Title "WizzairHelper — cheapest Wizz Air flights from nearby airports".
 //   * Geometry (§4.1): outer size L(1320) × L(820), or the saved device-pixel size
 //     clamped to [L(980) × L(600), work area of the cursor's screen]; centred on that
-//     screen's work area; maximised from settings unless --autotest. The position is
-//     never saved.
+//     screen's work area, never above or left of it; maximised from settings unless
+//     --autotest. The position is never saved.
 //   * Layout (§4.2): the BusyPanel docked at the bottom with its fixed height (it gets
 //     its height first), the InputPanel at the top, the result tabs filling the rest
 //     with header padding (12, 4): Outbound / Return / Round trips / Log (§5).
@@ -16,7 +16,8 @@
 //     Esc anywhere in the window, while working and with no drop-down open, is the
 //     Cancel button (BusyPanel::request_cancel, D-11). Focus starts in From.
 //   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest.
-//   * Closing (§13): stop running work first, then save settings.json (not in autotest).
+//   * Closing (§13): stop running work first, then commit a number typed but not yet
+//     entered and save settings.json (not in autotest).
 //   * The Log starts with the start-up line (§12.2).
 
 #include "app_services.hpp"
@@ -88,10 +89,13 @@ public:
     void select_page(Page page);
 
     // --- Settings (01 §13) --------------------------------------------------------------------
-    /// The settings as closing would save them: the inputs, Maximized and the
-    /// normal-state outer size in device pixels.
+    /// The settings as closing saves them (after it committed pending numeric edits): the
+    /// inputs, Maximized (WindowState == Maximized; a minimised window is not) and the
+    /// outer size of normal_outer_device_size().
     [[nodiscard]] ui::AppSettings current_settings() const;
-    /// The normal-state outer size in device pixels (`RestoreBounds`).
+    /// The normal-state outer size in device pixels, `(WindowState == Normal) ? Bounds :
+    /// RestoreBounds`: the current size in the normal state (an Aero-snapped window
+    /// included), the size before maximising or minimising otherwise.
     [[nodiscard]] QSize normal_outer_device_size() const;
 
 Q_SIGNALS:
