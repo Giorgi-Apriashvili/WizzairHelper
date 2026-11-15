@@ -7,6 +7,8 @@ include(GoogleTest)
 wizz_collect_sources(WIZZ_TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+# Widget tests live in their own Qt-linked executable (tests/gui).
+list(FILTER WIZZ_TEST_SOURCES EXCLUDE REGEX "/tests/gui/")
 
 add_executable(wizzairhelper_tests ${WIZZ_TEST_SOURCES})
 
@@ -32,3 +34,7 @@ add_custom_command(TARGET wizzairhelper_tests POST_BUILD
 gtest_discover_tests(wizzairhelper_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "WIZZ_TEST_FIXTURES=${PROJECT_SOURCE_DIR}/fixtures")
+
+if(WIZZ_BUILD_GUI)
+    add_subdirectory(gui)
+endif()

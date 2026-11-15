@@ -1,4 +1,6 @@
-// Placeholder entry point; the desktop experience (01) is implemented in a later milestone.
+// Placeholder entry point; the desktop experience (01) is wired in the GUI milestone.
+#include "app_info.hpp"
+
 #include <QApplication>
 #include <QMainWindow>
 
@@ -6,7 +8,7 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
     QMainWindow window;
-    window.setWindowTitle(QStringLiteral("WizzairHelper — cheapest Wizz Air flights from nearby airports"));
+    window.setWindowTitle(wizz::app::main_window_title());
     window.show();
     return QApplication::exec();
 }
