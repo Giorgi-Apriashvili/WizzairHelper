@@ -20,9 +20,25 @@ namespace wizz::app {
 /// "offscreen" platforms of the tests).
 [[nodiscard]] std::optional<QMargins> native_frame_margins(const QWidget& window, double device_pixel_ratio);
 
-/// The normal-state window size of `window` in device pixels — GetWindowPlacement's
-/// rcNormalPosition, i.e. WinForms' RestoreBounds, also while maximised or minimised.
-/// nullopt without a native Win32 window.
-[[nodiscard]] std::optional<QSize> native_normal_outer_size(const QWidget& window);
+/// WinForms' Form.WindowState.
+enum class WindowShowState { normal, minimized, maximized };
+
+/// Form.UpdateWindowState: the state for GetWindowPlacement's `showCmd`.
+[[nodiscard]] WindowShowState window_show_state(unsigned show_cmd) noexcept;
+
+/// The size closing saves (01 §13): `(WindowState == Normal) ? Bounds : RestoreBounds`.
+/// An Aero-snapped window is Normal, so its snapped size is saved, not the size before
+/// the snap that RestoreBounds still holds.
+[[nodiscard]] QSize bounds_to_save(WindowShowState state, QSize bounds, QSize restore_bounds) noexcept;
+
+/// The native window as WinForms sees it, sizes in device pixels.
+struct NativeBounds {
+    WindowShowState state = WindowShowState::normal;  ///< WindowState (GetWindowPlacement's showCmd)
+    QSize bounds;           ///< Bounds (GetWindowRect)
+    QSize restore_bounds;   ///< RestoreBounds (rcNormalPosition)
+};
+
+/// The state and sizes of `window`'s native window; nullopt without a native Win32 window.
+[[nodiscard]] std::optional<NativeBounds> native_bounds(const QWidget& window);
 
 } // namespace wizz::app

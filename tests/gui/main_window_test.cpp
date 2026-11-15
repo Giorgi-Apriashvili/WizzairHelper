@@ -11,6 +11,7 @@
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
+#include "window_placement.hpp"
 
 #include "wizz/services/app_paths.hpp"
 #include "wizz/ui/strings.hpp"
@@ -20,6 +21,7 @@
 #include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScreen>
@@ -72,6 +74,37 @@ namespace gui = wizz::test::gui;
         return QSize{qRound((rect.right - rect.left) / ratio), qRound((rect.bottom - rect.top) / ratio)};
     }
     return window.frameGeometry().size();
+}
+
+/// The whole window rectangle in logical pixels (WinForms Bounds, position included).
+[[nodiscard]] QRect outer_rect(const MainWindow& window)
+{
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        RECT rect{};
+        GetWindowRect(reinterpret_cast<HWND>(window.winId()), &rect);
+        const qreal ratio = window.devicePixelRatioF();
+        return QRect{QPoint{qRound(rect.left / ratio), qRound(rect.top / ratio)}, outer_size(window)};
+    }
+    return window.frameGeometry();
+}
+
+/// Types `text` key by key into `target` — no Enter, no focus change, so nothing is
+/// committed yet (NumericUpDown.UserEdit).
+void type_uncommitted(QWidget* target, const QString& text)
+{
+    for (const QChar c : text) {
+        QKeyEvent press{QEvent::KeyPress, static_cast<int>(c.unicode()), Qt::NoModifier, QString{c}};
+        QApplication::sendEvent(target, &press);
+        QKeyEvent release{QEvent::KeyRelease, static_cast<int>(c.unicode()), Qt::NoModifier, QString{c}};
+        QApplication::sendEvent(target, &release);
+    }
+}
+
+[[nodiscard]] wizz::ui::AppSettings saved_settings(const WindowRig& rig)
+{
+    const std::filesystem::path path = wizz::app_paths::settings_file(rig.data_root());
+    EXPECT_TRUE(std::filesystem::exists(path));
+    return wizz::ui::AppSettings::load(path);
 }
 
 TEST(MainWindow, Title_tabs_and_docked_layout)
@@ -196,6 +229,25 @@ TEST(MainWindow, A_saved_size_is_restored_and_clamped_to_the_work_area)
     EXPECT_EQ(outer_size(small_window.window()), MainWindow::kMinimumSize);
 }
 
+TEST(MainWindow, A_window_larger_than_the_work_area_starts_at_its_top_left_corner)
+{
+    // CenterScreen: Location = (max(work.X, work.X + (work.W − W) / 2), max(work.Y, work.Y + (work.H − H) / 2)).
+    // The minimum size wins over a smaller work area (UX-15), so the caption must not
+    // start above or left of it (the "minimal" test screen is smaller than L(980) × L(600)).
+    WindowRigOptions options;
+    options.settings.window_width = 20000;
+    options.settings.window_height = 9000;
+    WindowRig rig{std::move(options)};
+    rig.window().show_main_window();
+    gui::settle();
+    const QRect work = rig.window().screen()->availableGeometry();
+    const QRect outer = outer_rect(rig.window());
+    EXPECT_GE(outer.left(), work.left());
+    EXPECT_GE(outer.top(), work.top());
+    EXPECT_NEAR(outer.left(), std::max(work.left(), work.left() + (work.width() - outer.width()) / 2), 1);
+    EXPECT_NEAR(outer.top(), std::max(work.top(), work.top() + (work.height() - outer.height()) / 2), 1);
+}
+
 TEST(MainWindow, Maximized_from_settings_except_in_autotest)
 {
     WindowRigOptions options;
@@ -248,6 +300,81 @@ TEST(MainWindow, Closing_saves_the_settings_with_the_window_size)
     EXPECT_EQ(QSize(qRound(saved.window_width / ratio), qRound(saved.window_height / ratio)),
               outer_size(rig.window()))
         << "WindowWidth/Height are the whole window in device pixels";
+}
+
+TEST(MainWindow, Closing_saves_a_number_typed_but_not_yet_committed)
+{
+    // 01 §13 saves the current values; NumericUpDown.Value commits pending user text,
+    // and the title-bar X / Alt+F4 close without moving focus first.
+    WindowRig rig;
+    rig.start();
+    wizz::app::FractionalSpinBox* radius = rig.input().from_radius_box();
+    radius->findChild<QLineEdit*>()->selectAll();
+    type_uncommitted(radius, QStringLiteral("300"));
+    ASSERT_TRUE(radius->user_edit());
+    ASSERT_EQ(radius->int_value(), 250) << "typing alone commits nothing";
+    rig.window().close();
+    EXPECT_EQ(saved_settings(rig).from_radius_km, 300);
+
+    // The commit runs the nights coupling like ValueChanged does (01 §6.2).
+    WindowRig nights;
+    nights.start();
+    wizz::app::FractionalSpinBox* min_nights = nights.input().min_nights_box();
+    min_nights->findChild<QLineEdit*>()->selectAll();
+    type_uncommitted(min_nights, QStringLiteral("15"));
+    nights.window().close();
+    const wizz::ui::AppSettings saved = saved_settings(nights);
+    EXPECT_EQ(saved.min_nights, 15);
+    EXPECT_EQ(saved.max_nights, 15);
+}
+
+TEST(MainWindow, A_window_minimised_from_maximised_is_saved_as_not_maximised)
+{
+    // Maximized = (WindowState == Maximized) (01 §13); a minimised window is Minimized,
+    // although Qt remembers "maximised" for the restore.
+    WindowRigOptions options;
+    options.settings.maximized = true;
+    WindowRig rig{std::move(options)};
+    rig.start();
+    ASSERT_TRUE(rig.window().isMaximized());
+    EXPECT_TRUE(rig.window().current_settings().maximized);
+    rig.window().showMinimized();
+    gui::settle();
+    ASSERT_TRUE(rig.window().isMinimized());
+    EXPECT_FALSE(rig.window().current_settings().maximized);
+    rig.window().close();
+    EXPECT_FALSE(saved_settings(rig).maximized);
+}
+
+TEST(WindowPlacement, The_window_state_follows_the_show_command_like_Form_UpdateWindowState)
+{
+    using wizz::app::WindowShowState;
+    using wizz::app::window_show_state;
+    EXPECT_EQ(window_show_state(SW_SHOWNORMAL), WindowShowState::normal);
+    EXPECT_EQ(window_show_state(SW_RESTORE), WindowShowState::normal);
+    EXPECT_EQ(window_show_state(SW_SHOW), WindowShowState::normal);
+    EXPECT_EQ(window_show_state(SW_SHOWNA), WindowShowState::normal);
+    EXPECT_EQ(window_show_state(SW_SHOWNOACTIVATE), WindowShowState::normal);
+    EXPECT_EQ(window_show_state(SW_SHOWMAXIMIZED), WindowShowState::maximized);
+    EXPECT_EQ(window_show_state(SW_SHOWMINIMIZED), WindowShowState::minimized);
+    EXPECT_EQ(window_show_state(SW_MINIMIZE), WindowShowState::minimized);
+    EXPECT_EQ(window_show_state(SW_SHOWMINNOACTIVE), WindowShowState::minimized);
+}
+
+TEST(WindowPlacement, Closing_saves_Bounds_when_normal_and_RestoreBounds_otherwise)
+{
+    // bounds = (WindowState == Normal) ? Bounds : RestoreBounds (01 §13). An Aero-snapped
+    // window is Normal: GetWindowRect is the snapped size, while rcNormalPosition still
+    // holds the size from before the snap. (Snapping itself needs real Win+Left input,
+    // so the decision is tested here and the native call only feeds it the two rects.)
+    using wizz::app::bounds_to_save;
+    using wizz::app::WindowShowState;
+    const QSize restore{1320, 820};
+    const QSize snapped{960, 1040};
+    EXPECT_EQ(bounds_to_save(WindowShowState::normal, snapped, restore), snapped);
+    EXPECT_EQ(bounds_to_save(WindowShowState::normal, restore, restore), restore);
+    EXPECT_EQ(bounds_to_save(WindowShowState::maximized, QSize{1936, 1056}, restore), restore);
+    EXPECT_EQ(bounds_to_save(WindowShowState::minimized, QSize{160, 28}, restore), restore);
 }
 
 TEST(MainWindow, Closing_during_a_search_stops_the_work_first_and_shuts_down_cleanly)

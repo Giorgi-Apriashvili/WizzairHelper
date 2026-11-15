@@ -47,8 +47,10 @@ without a window.
   only the visible frame (the title bar). `MainWindow::apply_start_geometry` therefore computes the
   full frame with `AdjustWindowRectExForDpi` (`window_placement.hpp`): `GetWindowRect` is exactly
   L(1320) × L(820) (or the saved size, clamped to [L(980) × L(600), work area of the cursor's
-  screen]), centred in that work area; the minimum is the whole window too. Closing saves
-  `GetWindowPlacement().rcNormalPosition` (RestoreBounds), so the size round-trips.
+  screen]), centred in that work area but never above or left of it (`CenterToScreen`); the
+  minimum is the whole window too. Closing saves `(WindowState == Normal) ? Bounds :
+  RestoreBounds` — `GetWindowRect` in the normal state (an Aero-snapped window included),
+  `GetWindowPlacement().rcNormalPosition` when maximised or minimised — so the size round-trips.
 
 ## Widgets (one class per file in `src/app`)
 

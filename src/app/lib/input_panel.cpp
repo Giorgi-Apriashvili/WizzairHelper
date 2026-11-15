@@ -322,6 +322,13 @@ void InputPanel::store_to(ui::AppSettings& settings) const
     settings.max_nights = max_nights_->int_value();
 }
 
+void InputPanel::commit_numeric_edits()
+{
+    for (FractionalSpinBox* box : {from_radius_, to_radius_, adults_, min_nights_, max_nights_}) {
+        box->commit();
+    }
+}
+
 // --- Inputs ---------------------------------------------------------------------------------
 
 std::string InputPanel::from_text() const

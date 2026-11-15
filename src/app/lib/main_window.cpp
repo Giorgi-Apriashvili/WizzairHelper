@@ -30,6 +30,7 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -74,6 +75,19 @@ template <class T>
         }
     }
     return false;
+}
+
+/// Form.WindowState: the native show command when there is a Win32 window, else Qt's
+/// state, where minimised wins (Qt keeps WindowMaximized while minimised).
+[[nodiscard]] WindowShowState window_state_of(const QWidget& window)
+{
+    if (const std::optional<NativeBounds> native = native_bounds(window)) {
+        return native->state;
+    }
+    if (window.isMinimized()) {
+        return WindowShowState::minimized;
+    }
+    return window.isMaximized() ? WindowShowState::maximized : WindowShowState::normal;
 }
 
 } // namespace
@@ -207,10 +221,11 @@ void MainWindow::apply_start_geometry()
     const QSize outer{logical(outer_device.width), logical(outer_device.height)};
     setMinimumSize(kMinimumSize - frame_extra);
     resize(outer - frame_extra);
-    // CenterScreen: the window rectangle centred in the work area of the cursor's screen.
-    QRect placed{QPoint{}, outer};
-    placed.moveCenter(work.center());
-    move(placed.topLeft() + QPoint{frame.left() - qt_frame.left(), frame.top() - qt_frame.top()});
+    // CenterScreen (Form.CenterToScreen): the window rectangle centred in the work area of
+    // the cursor's screen, but never above or left of it when it is the larger one.
+    const QPoint placed{std::max(work.x(), work.x() + (work.width() - outer.width()) / 2),
+                        std::max(work.y(), work.y() + (work.height() - outer.height()) / 2)};
+    move(placed + QPoint{frame.left() - qt_frame.left(), frame.top() - qt_frame.top()});
 
     if (ui::start_maximized(settings_, is_autotest())) {
         setWindowState(windowState() | Qt::WindowMaximized);
@@ -225,8 +240,8 @@ void MainWindow::show_main_window()
 
 QSize MainWindow::normal_outer_device_size() const
 {
-    if (const std::optional<QSize> native = native_normal_outer_size(*this)) {
-        return *native;
+    if (const std::optional<NativeBounds> native = native_bounds(*this)) {
+        return bounds_to_save(native->state, native->bounds, native->restore_bounds);
     }
     const QRect client = (isMaximized() || isMinimized() || isFullScreen()) ? normalGeometry() : geometry();
     const QMargins frame = windowHandle() != nullptr ? windowHandle()->frameMargins() : QMargins{};
@@ -267,7 +282,7 @@ ui::AppSettings MainWindow::current_settings() const
 {
     ui::AppSettings settings = settings_;
     input_->store_to(settings);
-    settings.maximized = isMaximized();
+    settings.maximized = window_state_of(*this) == WindowShowState::maximized;
     const QSize bounds = normal_outer_device_size();
     settings.window_width = bounds.width();
     settings.window_height = bounds.height();
@@ -303,6 +318,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     controller_->cancel_work();  // stop any running work first
     if (!is_autotest()) {
+        input_->commit_numeric_edits();  // the X / Alt+F4 move no focus: read the typed number too
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored
     }
     QMainWindow::closeEvent(event);

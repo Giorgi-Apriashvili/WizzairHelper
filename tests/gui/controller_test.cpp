@@ -21,11 +21,16 @@
 #include "wizz/ui/leg_text.hpp"
 #include "wizz/ui/strings.hpp"
 
+#include <QAbstractButton>
+#include <QApplication>
 #include <QCheckBox>
 #include <QElapsedTimer>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QTabWidget>
+#include <QTextDocument>
 #include <QTimer>
 
 #include <gtest/gtest.h>
@@ -324,6 +329,84 @@ TEST(ControllerFlows, An_empty_From_shows_the_box_and_focuses_From)
     EXPECT_EQ(rig.window().focusWidget(), rig.input().from_box()) << "the editable combo takes the focus of its line edit";
     EXPECT_EQ(rig.busy().status_text(), before) << "no busy phase starts";
     EXPECT_EQ(rig.wizz_requests(), 2);
+}
+
+/// What the next real QMessageBox showed: inspected inside its modal loop, then
+/// answered with `answer` (rejected after a while if it never appears, so nothing hangs).
+class NextMessageBox {
+public:
+    struct Shown {
+        bool seen = false;
+        QString title;
+        QString text;
+        Qt::TextFormat format = Qt::AutoText;
+        Qt::TextFormat label_format = Qt::AutoText;
+    };
+
+    explicit NextMessageBox(QMessageBox::StandardButton answer)
+    {
+        QTimer::singleShot(0, &context_, [this, answer] {
+            QMessageBox* box = visible_box();
+            if (box == nullptr) {
+                return;
+            }
+            shown.seen = true;
+            shown.title = box->windowTitle();
+            shown.text = box->text();
+            shown.format = box->textFormat();
+            if (const auto* label = box->findChild<QLabel*>(QStringLiteral("qt_msgbox_label"))) {
+                shown.label_format = label->textFormat();
+            }
+            box->button(answer)->click();
+        });
+        QTimer::singleShot(5000, &context_, [] {
+            if (QMessageBox* box = visible_box()) {
+                box->reject();
+            }
+        });
+    }
+
+    Shown shown;
+
+private:
+    [[nodiscard]] static QMessageBox* visible_box()
+    {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* box = qobject_cast<QMessageBox*>(widget); box != nullptr && box->isVisible()) {
+                return box;
+            }
+        }
+        return nullptr;
+    }
+
+    QObject context_;
+};
+
+TEST(ControllerDialogs, Message_boxes_show_their_text_literally)
+{
+    // The MessageBox shows the message verbatim (01 §18.1): a Fail text that carries what
+    // the user typed (E6, 01 §11.5) or an exception message is never read as HTML.
+    QWidget owner;
+    const wizz::app::ControllerDialogs dialogs = wizz::app::ControllerDialogs::system(&owner);
+
+    const QString error = wizz::app::to_qstring(strings::place_not_found("<b>Graz</b>"));
+    ASSERT_TRUE(Qt::mightBeRichText(error));
+    NextMessageBox error_box{QMessageBox::Ok};
+    dialogs.show_error(error);
+    ASSERT_TRUE(error_box.shown.seen);
+    EXPECT_EQ(error_box.shown.title, wizz::app::to_qstring(strings::kAppCaption));
+    EXPECT_EQ(error_box.shown.text, error);
+    EXPECT_EQ(error_box.shown.format, Qt::PlainText);
+    EXPECT_EQ(error_box.shown.label_format, Qt::PlainText);
+
+    const QString question = QStringLiteral("This search needs <i>600</i> requests.\n\nContinue?");
+    NextMessageBox question_box{QMessageBox::Yes};
+    EXPECT_TRUE(dialogs.confirm_big_search(question));
+    ASSERT_TRUE(question_box.shown.seen);
+    EXPECT_EQ(question_box.shown.title, wizz::app::to_qstring(strings::kBigSearchCaption));
+    EXPECT_EQ(question_box.shown.text, question);
+    EXPECT_EQ(question_box.shown.format, Qt::PlainText);
+    EXPECT_EQ(question_box.shown.label_format, Qt::PlainText);
 }
 
 TEST(ControllerFlows, A_silent_typo_correction_is_logged)
