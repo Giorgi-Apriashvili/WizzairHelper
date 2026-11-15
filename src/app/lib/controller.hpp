@@ -28,6 +28,7 @@
 
 #include "wizz/core/catalog.hpp"
 #include "wizz/core/domain.hpp"
+#include "wizz/core/progress.hpp"
 #include "wizz/core/time.hpp"
 
 #include <QObject>
@@ -38,12 +39,15 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <variant>
+#include <vector>
 
 class QTabWidget;
 class QWidget;
 
 namespace wizz::ui {
 class LegStream;
+class NoticeLog;
 }
 
 namespace wizz::app {
@@ -70,6 +74,7 @@ class Controller final : public QObject {
 
 public:
     enum class Leg { outbound, inbound };
+    Q_ENUM(Leg)
 
     /// `autotest` switches the 01 §17.1 differences (no chooser, no "Big search"
     /// question, no Fail / cap / leg-error boxes).
@@ -121,6 +126,11 @@ public:
     [[nodiscard]] TaskScope& flows() noexcept { return *flows_; }
     [[nodiscard]] const MainViews& views() const noexcept { return views_; }
 
+Q_SIGNALS:
+    /// RunLegAsync began the fetch phase of `leg` (busy panel begun, grid cleared); its
+    /// worker starts right after this signal. Used by the --autotest diagnostics (D-30).
+    void leg_started(wizz::app::Controller::Leg leg);
+
 public Q_SLOTS:
     /// The Search outbound button / Enter mapping.
     void request_search_outbound();
@@ -147,6 +157,11 @@ private:
     void fail(std::string_view message);
     /// A leg exception (WizzApiException / HttpRequestException / IOException).
     void leg_failed(const LegSearchRequest& request, ui::LegStream& stream, std::string_view message);
+    /// A worker event of a leg run: a progress report or a partial row batch.
+    using LegEvent = std::variant<SearchProgress, std::vector<FlightResultPtr>>;
+    /// A JobMailbox delivery of a leg run: reports to the busy panel (one refresh) and the
+    /// notice log, batches to the stream, in the worker's order.
+    void deliver_leg_events(JobId job, std::vector<LegEvent> items, ui::LegStream& stream, ui::NoticeLog& notices);
     /// The 150 ms flush of a leg run.
     void flush(ui::LegStream& stream, FlightGrid& grid);
     void reprice(LegSearchResultPtr& result, FlightGrid& grid, const std::string& currency);

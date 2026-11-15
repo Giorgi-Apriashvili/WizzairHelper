@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "comment": "05 §5 cancellation while retrying; shares the named_destination bodies",
+      "urlPrefix": "https://www.wizzair.com",
+      "file": "../named_destination/home.html"
+    },
+    {
+      "comment": "route map (copy of fixtures/map_subset.json, 11 airports)",
+      "urlContains": "/asset/map",
+      "file": "../named_destination/map_subset.json"
+    },
+    {
+      "comment": "the first timetable request gets 503: the client backs off 5 s (04 §11) and is cancelled meanwhile",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "status": 503,
+      "body": "",
+      "contentType": null,
+      "times": 1
+    },
+    {
+      "comment": "the retry would succeed (never reached when the cancel lands in the back-off)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "file": "../named_destination/timetable_v2_bud_ltn.json"
+    },
+    {
+      "comment": "exchange rates (copy of fixtures/fx_frankfurter_v2.json)",
+      "urlContains": "frankfurter",
+      "file": "../named_destination/fx_frankfurter_v2.json"
+    }
+  ]
+}

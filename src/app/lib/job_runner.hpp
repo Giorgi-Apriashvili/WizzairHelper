@@ -11,6 +11,8 @@
 //   * Every event carries the job ID. A job is live from its start until its
 //     completion has been delivered (or its awaiting flow was destroyed); events of
 //     a job that is no longer live are dropped (stale / finished jobs).
+//   * JobMailbox coalesces a worker's frequent events (progress, row batches) into
+//     one delivery per burst, in order and still ahead of the completion.
 //   * Completion resumes the awaiting coroutine on the UI thread: the UI never
 //     blocks on a future or joins a running worker.
 //   * Cancellation: the caller's std::stop_token is linked to the job's own stop
@@ -31,6 +33,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <thread>
@@ -62,6 +65,57 @@ private:
     JobRunner* runner_;
     JobId id_;
     std::stop_token stop_;
+};
+
+/// Coalesces a worker's frequent events into one UI-thread delivery per burst.
+///
+/// push() appends an item and posts a delivery through the job's channel only when
+/// none is pending; the delivery takes every item pushed until it runs, in push order.
+/// A worker that produces faster than the UI drains (a fully cached replay posts a
+/// progress report and a row batch per request within milliseconds) then costs one
+/// queued call per drain instead of one per item, so the event queue empties between
+/// drains and the 40 ms progress timer is not starved (05 §5, R-03 / R-04). The
+/// delivery travels in the job's FIFO queue like any post(): items pushed before the
+/// job returned are delivered before its completion, and nothing is delivered once
+/// the job is no longer live. Copies share one mailbox.
+template <class T>
+class JobMailbox {
+public:
+    using Deliver = std::function<void(std::vector<T> items)>;
+
+    /// `deliver` runs on the UI thread with the items in push order.
+    explicit JobMailbox(Deliver deliver) : state_(std::make_shared<State>()) { state_->deliver = std::move(deliver); }
+
+    /// Worker side: queues `item`; posts a delivery unless one is pending.
+    void push(const JobChannel& channel, T item) const
+    {
+        bool schedule = false;
+        {
+            const std::scoped_lock lock{state_->mutex};
+            state_->items.push_back(std::move(item));
+            schedule = !std::exchange(state_->scheduled, true);
+        }
+        if (schedule) {
+            channel.post([state = state_] {
+                std::vector<T> items;
+                {
+                    const std::scoped_lock lock{state->mutex};
+                    items.swap(state->items);
+                    state->scheduled = false;
+                }
+                state->deliver(std::move(items));
+            });
+        }
+    }
+
+private:
+    struct State {
+        std::mutex mutex;
+        std::vector<T> items;   ///< guarded by mutex
+        bool scheduled = false; ///< guarded by mutex: a delivery is queued
+        Deliver deliver;        ///< UI thread
+    };
+    std::shared_ptr<State> state_;
 };
 
 template <class R>

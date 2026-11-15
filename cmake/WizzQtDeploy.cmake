@@ -1,7 +1,7 @@
 # Development deployment of Qt plugins next to an executable, so Debug and
 # Release builds start straight from the build tree. (vcpkg's app-local step
 # already copies the Qt DLLs; plugins are not copied by it.) The release
-# package uses windeployqt instead (see src/app/CMakeLists.txt).
+# package uses windeployqt instead (cmake/WizzPackaging.cmake).
 
 function(wizz_copy_qt_plugins target)
     if(NOT DEFINED VCPKG_INSTALLED_DIR OR NOT DEFINED VCPKG_TARGET_TRIPLET)

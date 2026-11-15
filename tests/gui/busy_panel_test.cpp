@@ -26,7 +26,9 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -270,6 +272,45 @@ TEST_F(BusyPanelTest, Updates_received_count_from_the_last_begin)
 
     panel_->begin("Two");
     EXPECT_EQ(panel_->updates_received(), 0);
+}
+
+TEST_F(BusyPanelTest, A_burst_of_reports_counts_each_and_shows_the_last)
+{
+    panel_->begin("One");
+    const std::vector<SearchProgress> burst{progress("Fetching fares", "BUD → NAP", 0, 3),
+                                            progress("Fetching fares", "BUD → LTN", 1, 3),
+                                            progress("Fetching fares", "BUD → BCN", 2, 3)};
+    panel_->report(burst);
+    EXPECT_EQ(panel_->updates_received(), 3) << "UpdatesReceived counts every report (summary.json)";
+    EXPECT_EQ(status(), "Fetching fares:  BUD → BCN    (3 of 3)");
+    panel_->report(std::span<const SearchProgress>{});
+    EXPECT_EQ(panel_->updates_received(), 3);
+
+    panel_->end("ok");
+    panel_->report(burst);  // after End: ignored like single reports
+    EXPECT_EQ(status(), "ok");
+}
+
+TEST_F(BusyPanelTest, Animation_start_and_stop_are_signalled_once_per_busy_period)
+{
+    int started = 0;
+    int stopped = 0;
+    QObject::connect(panel_.get(), &BusyPanel::animation_started, [&started] { ++started; });
+    QObject::connect(panel_.get(), &BusyPanel::animation_stopped, [&stopped] { ++stopped; });
+    EXPECT_EQ(panel_->animation_timer(), animation_timer());
+
+    panel_->begin("One");
+    panel_->report(progress("Fetching fares", "", 0, 2));
+    panel_->begin("One again");  // still busy: the timer keeps running
+    EXPECT_EQ(started, 1);
+    EXPECT_EQ(stopped, 0);
+    panel_->end("ok");
+    panel_->end("ok again");
+    EXPECT_EQ(stopped, 1);
+    panel_->begin("Two");
+    EXPECT_EQ(started, 2);
+    panel_->end("done");
+    EXPECT_EQ(stopped, 2);
 }
 
 TEST_F(BusyPanelTest, Successful_end_is_green_full_and_idle)

@@ -6,6 +6,9 @@
 // every Log line of §12.2 these paths write.
 
 #include "app_test_support.hpp"
+#include "autotest_diagnostics.hpp"
+#include "heavy_replay.hpp"
+#include "timer_gap_probe.hpp"
 
 #include "date_picker.hpp"
 #include "place_combo.hpp"
@@ -37,6 +40,7 @@ namespace {
 using namespace std::chrono_literals;
 using wizz::Date;
 using wizz::app::BusyPanel;
+using wizz::app::Controller;
 using wizz::app::MainWindow;
 using wizz::test::app::json_rule;
 using wizz::test::app::scenario_rules;
@@ -547,6 +551,66 @@ TEST(ControllerFlows, The_progress_timer_keeps_ticking_while_a_search_streams)
     EXPECT_LT(longest, 250) << "Debug build";
 #endif
     RecordProperty("longest_timer_gap_ms", static_cast<int>(longest));
+}
+
+TEST(ControllerFlows, Leg_started_is_signalled_for_each_fetch_phase_only)
+{
+    WindowRig rig;
+    rig.start();
+    section11_inputs(rig);
+    std::vector<Controller::Leg> legs;
+    QObject::connect(&rig.controller(), &Controller::leg_started, [&](Controller::Leg leg) {
+        EXPECT_TRUE(rig.controller().is_working()) << "the busy phase has begun";
+        EXPECT_TRUE(rig.busy().is_busy());
+        legs.push_back(leg);
+    });
+    rig.run(rig.controller().search_outbound());
+    rig.run(rig.controller().search_return());
+    EXPECT_EQ(legs, (std::vector<Controller::Leg>{Controller::Leg::outbound, Controller::Leg::inbound}));
+    rig.input().set_to_text("BUD");  // the same area: the 0-request path has no fetch phase
+    rig.run(rig.controller().search_outbound());
+    EXPECT_EQ(legs.size(), 2u);
+}
+
+TEST(ControllerFlows, R_03_A_heavy_cached_replay_keeps_the_40_ms_timer_going_and_the_table_clean)
+{
+    WindowRigOptions options;
+    options.rules = wizz::test::app::heavy_cached_rules();
+    WindowRig rig{std::move(options)};
+    rig.dialogs.answer_big_search = true;  // 186 requests: "Big search" → Yes
+    rig.start();
+    rig.input().set_from_radius_km(0);
+    rig.input().set_to_text("");
+    rig.input().apply_autotest_dates(
+        wizz::ui::DateWindow{.start = wizz::test::app::kHeavyStart, .end = wizz::test::app::kHeavyEnd}, std::nullopt);
+    rig.run(rig.controller().search_outbound(), 60s);  // the warm-up fills the client's cache
+    ASSERT_TRUE(rig.controller().outbound_result());
+    const std::size_t flights = rig.controller().outbound_result()->flights.size();
+    ASSERT_GE(flights, 5000u);
+    const std::int64_t requests = rig.wizz_requests();
+
+    const wizz::FlightResultPtr old_row = rig.outbound().all_results().front();
+    wizz::app::TimerGapProbe probe{rig.busy()};
+    rig.run(rig.controller().search_outbound(), 60s);  // replayed from the cache
+    EXPECT_EQ(rig.wizz_requests(), requests) << "a cached replay makes no request";
+    const wizz::LegSearchResultPtr& result = rig.controller().outbound_result();
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result->flights.size(), flights);
+    EXPECT_EQ(result->requests_completed, static_cast<int>(result->plan.requests.size()));
+    // 05 §5: the final table holds exactly the new result, no late or earlier rows.
+    const wizz::app::GridDiagnostics grid =
+        wizz::app::describe_grid("outbound", rig.outbound().all_results(), result.get());
+    EXPECT_EQ(grid.rows, flights);
+    EXPECT_EQ(grid.rows_not_in_result, 0u);
+    EXPECT_EQ(grid.duplicate_rows, 0u);
+    EXPECT_FALSE(std::ranges::contains(rig.outbound().all_results(), old_row));
+    EXPECT_GE(probe.stats().runs, 2) << "Finding places and the fetch phase";
+#ifdef NDEBUG
+    EXPECT_LT(probe.stats().longest_gap_ms, 100.0) << "05 §5 under a heavy cached replay";
+#else
+    EXPECT_LT(probe.stats().longest_gap_ms, 250.0) << "Debug build";
+#endif
+    RecordProperty("longest_timer_gap_ms", static_cast<int>(probe.stats().longest_gap_ms));
 }
 
 } // namespace

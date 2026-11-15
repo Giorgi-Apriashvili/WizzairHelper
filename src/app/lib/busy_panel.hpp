@@ -37,6 +37,7 @@
 #include <QWidget>
 
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -92,6 +93,9 @@ public:
     void begin(std::string_view text, bool cancellable = true);
     /// Report(p): ignored unless busy; status "Stage:  Detail    (k of N)", immediate refresh.
     void report(const SearchProgress& progress);
+    /// Report(p) for each of `reports` in order (each counts in updates_received()), then
+    /// one refresh: a burst delivered together (JobMailbox) is drawn once, as its last report.
+    void report(std::span<const SearchProgress> reports);
     /// End(summary, success): green / red summary, bar at 100 % (success) or left in
     /// place, elapsed without ETA, timer stopped, taskbar None / Error (then None after 4 s).
     void end(std::string_view summary, bool success = true);
@@ -120,6 +124,8 @@ public:
     [[nodiscard]] ElidedLabel* status_label() const noexcept { return status_; }
     [[nodiscard]] QLabel* wait_label() const noexcept { return wait_; }
     [[nodiscard]] QPushButton* cancel_button() const noexcept { return cancel_; }
+    /// The 40 ms animation timer (runs exactly while busy).
+    [[nodiscard]] QTimer* animation_timer() const noexcept { return timer_; }
     [[nodiscard]] TaskbarProgress& taskbar() noexcept { return taskbar_; }
     /// The status colour for the current tone: ControlText, DarkGreen or Firebrick.
     [[nodiscard]] QColor status_colour() const;
@@ -134,6 +140,11 @@ public Q_SLOTS:
 Q_SIGNALS:
     /// Emitted once per cancellable busy period (MainWindow: request_stop on the job).
     void cancel_requested();
+    /// The 40 ms animation timer (objectName "animationTimer") was started: a new run of
+    /// ticks begins (the --autotest timer-gap diagnostics, R-04, 05 §5).
+    void animation_started();
+    /// The animation timer was stopped (End): the run of ticks is over.
+    void animation_stopped();
 
 protected:
     void changeEvent(QEvent* event) override;

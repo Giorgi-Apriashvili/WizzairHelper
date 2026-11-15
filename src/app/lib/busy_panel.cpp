@@ -153,6 +153,17 @@ void BusyPanel::report(const SearchProgress& progress)
     render();
 }
 
+void BusyPanel::report(std::span<const SearchProgress> reports)
+{
+    if (reports.empty()) {
+        return;
+    }
+    for (const SearchProgress& progress : reports) {
+        model_.report(progress);
+    }
+    render();
+}
+
 void BusyPanel::end(std::string_view summary, bool success)
 {
     model_.end(summary, success);
@@ -316,9 +327,11 @@ void BusyPanel::render()
     if (model_.timer_running()) {
         if (!timer_->isActive()) {
             timer_->start();
+            Q_EMIT animation_started();
         }
-    } else {
+    } else if (timer_->isActive()) {
         timer_->stop();
+        Q_EMIT animation_stopped();
     }
 }
 

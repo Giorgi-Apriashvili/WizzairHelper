@@ -128,6 +128,8 @@ TEST(AutoTestRunner, Runs_the_script_takes_the_screenshots_in_order_and_writes_s
     EXPECT_LT(json.find("\"afterCurrencySwitch\""), json.find("\"progressScreenshots\""));
     EXPECT_FALSE(rig.window().isVisible()) << "closed at the end without --keep-open";
     EXPECT_FALSE(std::filesystem::exists(wizz::app_paths::settings_file(rig.data_root())));
+    EXPECT_FALSE(rig.window().autotest_runner()->diagnostics().has_value()) << "only with --diagnostics";
+    EXPECT_FALSE(std::filesystem::exists(rig.window().autotest_runner()->diagnostics_path()));
 
     // The inputs the script applied (01 §17.2).
     EXPECT_EQ(rig.input().from_radius_km(), 200.0);
@@ -237,6 +239,115 @@ TEST(AutoTestRunner, An_exception_is_recorded_in_the_summary)
     EXPECT_EQ(summary->final_status, strings::kUnexpectedErrorText);
     EXPECT_TRUE(shots.without_progress().empty());
     EXPECT_TRUE(rig.flow_errors.empty()) << "the script's catch handled it, not the crash handler";
+}
+
+// --- D-30 acceptance companions (05 §5) ---------------------------------------------------
+
+TEST(AutoTestRunner, D_30_Warm_cache_makes_the_scripts_search_a_cached_replay)
+{
+    QTemporaryDir out;
+    WindowRigOptions options;
+    options.autotest = section11_options(out);
+    options.autotest->inbound.reset();
+    options.autotest->then_currency.reset();
+    options.autotest->warm_cache = true;
+    options.autotest->diagnostics = true;
+    WindowRig rig{std::move(options)};
+    ShotLog shots;
+    rig.window().autotest_runner()->set_screenshotter(shots.make());
+    rig.start(20s);
+
+    const auto& summary = rig.window().autotest_runner()->summary();
+    ASSERT_TRUE(summary.has_value());
+    EXPECT_EQ(leg(summary->outbound).flights, 12u);
+    EXPECT_EQ(leg(summary->outbound).requests_completed, 3);
+    EXPECT_EQ(summary->requests_to_wizz, 2 + 3) << "homepage, map and the warm-up; the replay made none";
+    EXPECT_EQ(std::ranges::count(summary->log, std::string{"[10:00:00] Outbound: 12 fares, 3/3 requests, 1 route(s) "
+                                                           "not served, 1 s, FX Frankfurter 2026-11-02"}),
+              2);
+
+    const auto& diagnostics = rig.window().autotest_runner()->diagnostics();
+    ASSERT_TRUE(diagnostics.has_value());
+    ASSERT_EQ(diagnostics->searches.size(), 2u);
+    EXPECT_EQ(diagnostics->searches[0].name, "warm-up outbound");
+    EXPECT_EQ(diagnostics->searches[0].wizz_requests, 3);
+    EXPECT_EQ(diagnostics->searches[1].name, "outbound");
+    EXPECT_EQ(diagnostics->searches[1].wizz_requests, 0);
+    EXPECT_EQ(diagnostics->searches[1].final_status, "Outbound Done: 12 fares from 3 of 3 requests in 1 s.");
+    ASSERT_EQ(diagnostics->grids.size(), 2u);
+    EXPECT_EQ(diagnostics->grids[0].rows, 12u);
+    EXPECT_EQ(diagnostics->grids[0].result_flights, 12u);
+    EXPECT_EQ(diagnostics->grids[0].rows_not_in_result, 0u) << "no row of the warm-up search is left";
+    EXPECT_EQ(diagnostics->grids[0].duplicate_rows, 0u);
+    EXPECT_FALSE(diagnostics->cancel.has_value());
+    EXPECT_GE(diagnostics->timer.runs, 4) << "two searches: Finding places and Fetching fares each";
+    ASSERT_TRUE(diagnostics->events.has_value()) << "the GUI tests run on wizz::app::Application";
+    EXPECT_GT(diagnostics->events->dispatches, 0);
+    EXPECT_EQ(diagnostics->layout.checks, 2) << "one per screenshot: 1-outbound, 4-log";
+    EXPECT_EQ(diagnostics->environment.locale, "en-US");
+
+    const std::string json = read_text(rig.window().autotest_runner()->diagnostics_path());
+    EXPECT_TRUE(json.contains("\"name\": \"warm-up outbound\"")) << json.substr(0, 400);
+    EXPECT_TRUE(json.contains("\"uiEvents\": {"));
+}
+
+TEST(AutoTestRunner, D_30_Cancel_after_ms_presses_Esc_and_Cancel_with_one_transition)
+{
+    QTemporaryDir out;
+    WindowRigOptions options;
+    options.keep_delays = true;  // the first timetable answer takes 700 ms: cancelled while waiting
+    options.autotest = section11_options(out);
+    options.autotest->inbound.reset();
+    options.autotest->then_currency.reset();
+    options.autotest->cancel_after = 300ms;
+    options.autotest->diagnostics = true;
+    WindowRig rig{std::move(options)};
+    ShotLog shots;
+    rig.window().autotest_runner()->set_screenshotter(shots.make());
+    int cancel_requests = 0;
+    QObject::connect(&rig.busy(), &wizz::app::BusyPanel::cancel_requested, [&] { ++cancel_requests; });
+    rig.start(20s);
+
+    EXPECT_EQ(cancel_requests, 1) << "Esc, Cancel, Esc and the handler: one transition (D-11)";
+    const auto& summary = rig.window().autotest_runner()->summary();
+    ASSERT_TRUE(summary.has_value());
+    EXPECT_TRUE(leg(summary->outbound).cancelled);
+    EXPECT_EQ(leg(summary->outbound).requests_completed, 0);
+    EXPECT_EQ(summary->final_status, "Outbound Cancelled: 0 fares from 0 of 3 requests in 1 s.");
+    EXPECT_EQ(summary->requests_to_wizz, 2 + 1);
+
+    const auto& diagnostics = rig.window().autotest_runner()->diagnostics();
+    ASSERT_TRUE(diagnostics.has_value());
+    ASSERT_TRUE(diagnostics->cancel.has_value());
+    const wizz::app::CancelDiagnostics& cancel = *diagnostics->cancel;
+    EXPECT_EQ(cancel.after, 300ms);
+    EXPECT_GE(cancel.pressed_at_ms, 290.0);
+    EXPECT_TRUE(cancel.busy_at_press);
+    EXPECT_TRUE(cancel.status_before.starts_with("Fetching fares:  BUD")) << cancel.status_before;
+    EXPECT_EQ(cancel.presses, (std::vector<std::string>{"Esc", "Cancel button", "Esc", "Cancel handler"}));
+    EXPECT_EQ(cancel.cancel_requests, 1);
+    EXPECT_EQ(cancel.status_after_press, strings::kCancelling);
+    EXPECT_FALSE(cancel.cancel_enabled_after_press);
+    EXPECT_LT(diagnostics->searches.at(0).duration_ms, 690.0) << "the 700 ms wait was interrupted";
+}
+
+TEST(AutoTestRunner, D_30_A_cancel_timer_that_fires_after_the_search_presses_nothing)
+{
+    QTemporaryDir out;
+    WindowRigOptions options;
+    options.autotest = section11_options(out);
+    options.autotest->cancel_after = std::chrono::milliseconds{60'000};  // the search ends long before
+    options.autotest->then_currency.reset();
+    options.autotest->diagnostics = true;
+    WindowRig rig{std::move(options)};
+    ShotLog shots;
+    rig.window().autotest_runner()->set_screenshotter(shots.make());
+    rig.start(20s);
+    const auto& diagnostics = rig.window().autotest_runner()->diagnostics();
+    ASSERT_TRUE(diagnostics.has_value());
+    EXPECT_FALSE(diagnostics->cancel.has_value()) << "stopped with the outbound search, never carried into the return";
+    EXPECT_EQ(rig.window().autotest_runner()->summary()->final_status,
+              "Return Done: 4 fares from 4 of 4 requests in 1 s.");
 }
 
 } // namespace

@@ -386,24 +386,22 @@ Task<> Controller::run_leg(LegSearchRequest request, Leg leg)
     QTimer flush_timer;
     flush_timer.setInterval(ui::LegStream::kFlushInterval);
     connect(&flush_timer, &QTimer::timeout, this, [this, &stream, &grid] { flush(stream, grid); });
+    // Progress reports and row batches in the order the worker produced them, one queued
+    // delivery per burst (a cached replay produces hundreds within milliseconds).
+    const JobMailbox<LegEvent> events{[this, job, &stream, &notices](std::vector<LegEvent> items) {
+        deliver_leg_events(job, std::move(items), stream, notices);
+    }};
     const PhaseGuard guard{*this, &stream};
+    Q_EMIT leg_started(leg);
     try {
         flush_timer.start();
         LegSearchResultPtr result = co_await jobs_->run(
-            job, stop,
-            [this, search = services_->search, request, &stream, &notices](const JobChannel& channel) {
-                const ProgressSink progress = [this, &channel, &notices](const SearchProgress& report) {
-                    channel.post([this, &notices, report] {
-                        views_.busy->report(report);
-                        if (const std::optional<std::string> line = notices.line_for(report)) {
-                            log(*line);
-                        }
-                    });
+            job, stop, [search = services_->search, request, events](const JobChannel& channel) {
+                const ProgressSink progress = [&channel, &events](const SearchProgress& report) {
+                    events.push(channel, report);
                 };
-                const PartialResultsSink partial = [&channel, &stream](std::vector<FlightResultPtr> batch) {
-                    channel.post([&stream, id = channel.id(), batch = std::move(batch)] {
-                        stream.on_partial(id, batch);
-                    });
+                const PartialResultsSink partial = [&channel, &events](std::vector<FlightResultPtr> batch) {
+                    events.push(channel, std::move(batch));
                 };
                 return search->search(request, progress, partial, channel.stop_token());
             });
@@ -442,6 +440,23 @@ void Controller::leg_failed(const LegSearchRequest& request, ui::LegStream& stre
     if (!autotest_) {
         show_error(message);
     }
+}
+
+void Controller::deliver_leg_events(JobId job, std::vector<LegEvent> items, ui::LegStream& stream,
+                                    ui::NoticeLog& notices)
+{
+    std::vector<SearchProgress> reports;
+    for (LegEvent& item : items) {
+        if (SearchProgress* report = std::get_if<SearchProgress>(&item); report != nullptr) {
+            if (const std::optional<std::string> line = notices.line_for(*report)) {
+                log(*line);
+            }
+            reports.push_back(std::move(*report));
+        } else {
+            stream.on_partial(job, std::get<std::vector<FlightResultPtr>>(item));
+        }
+    }
+    views_.busy->report(reports);  // Report(p) for each, one refresh
 }
 
 void Controller::flush(ui::LegStream& stream, FlightGrid& grid)

@@ -23,6 +23,12 @@ ServiceConfig ServiceConfig::for_run(const std::optional<ui::AutoTestOptions>& a
     if (autotest->fixed_now) {
         config.clock = std::make_shared<FixedClock>(*autotest->fixed_now);  // local zone UTC (D-30)
     }
+    if (autotest->no_pacing) {
+        config.customize_client = [](WizzClientOptions& client) {
+            client.request_spacing = Duration::zero();  // retry back-offs (retry_delays) stay
+            client.request_jitter = Duration::zero();
+        };
+    }
     return config;
 }
 

@@ -11,9 +11,11 @@ without a window.
   command line so `--to ""` and non-ASCII places survive) *before* `QApplication` — a bad date or
   `--fixed-now` goes to the crash box before any window; point the reporter at `--data-root`;
   `PassThrough` rounding (per-monitor DPI v2 is Qt 6's default); `Application`;
-  `style::apply_application_look()` (windowsvista + Segoe UI 9 pt); `AppServices::create`
+  `style::apply_application_look()` (windowsvista + Segoe UI 9 pt); `FontWarmup` (a worker resolves
+  the busy panel's "⏳" font fallback, 0.2–0.4 s the first time, D-33); `AppServices::create`
   (`ServiceConfig::for_run`: CurlTransport / ReplayTransport, SystemClock / FixedClock, user
-  locale, data-root-aware `FileCache`s); `AppSettings::load`; `MainWindow::show_main_window()`; `exec()`.
+  locale, data-root-aware `FileCache`s, `--no-pacing`); `AppSettings::load`; the window is built;
+  `FontWarmup::wait()`; `MainWindow::show_main_window()`; `exec()`.
 - `AppServices` (`app_services.hpp`): one transport shared by `WizzApiClient`, `CurrencyService`
   and `PlaceResolver`, plus `FlightSearchService`, the clock, the locale and the data root.
 - `CrashReporter` (`crash_reporter.hpp/.cpp`): `show_crash(message, details)` appends
@@ -82,10 +84,14 @@ without a window.
   caller's `std::stop_token` is linked to the job's own stop source; destroying the runner stops and
   joins its workers. The UI never waits for a worker; finished threads are joined when the next job
   starts.
-- RunLegAsync: progress → `BusyPanel::report` + `ui::NoticeLog`; partial batches →
-  `ui::LegStream::on_partial(job_id, …)`; a 150 ms `QTimer` takes the pending rows
-  (`LegStream::take_pending`) into `FlightGrid::append` + "{N} fares so far…"; `finish()` before the
-  final `SetResults` drops late batches (U-10).
+- RunLegAsync: progress reports and partial batches go through one `JobMailbox<LegEvent>`
+  (`job_runner.hpp`, D-32): a worker push posts a delivery only when none is pending, so a burst
+  (a cached replay produces two events per request within milliseconds) is one queued call. The
+  delivery hands the reports to `BusyPanel::report(span)` (Report(p) for each, one refresh) and
+  `ui::NoticeLog`, the batches to `ui::LegStream::on_partial(job_id, …)`, in the worker's order; a
+  150 ms `QTimer` takes the pending rows (`LegStream::take_pending`) into `FlightGrid::append` +
+  "{N} fares so far…"; `finish()` before the final `SetResults` drops late batches (U-10).
+  `Controller::leg_started(Leg)` marks the start of the fetch phase (autotest diagnostics).
 - Modal input (chooser, MessageBoxes) runs nested event loops; the busy panel keeps animating; the
   controller reports `Waiting for your choice` with `waiting_for_user = true` directly (not posted)
   before the chooser opens.
@@ -98,7 +104,21 @@ without a window.
 (`PrintWindow(hwnd, PW_RENDERFULLCONTENT)` into a DIB → `QImage` → PNG, cropped to the DWM extended
 frame bounds), progress screenshots every 2200 ms (max 4), writes `summary.json` via ui_logic, and
 closes unless `--keep-open`. Hidden companions `--data-root`, `--replay` and `--fixed-now`
-(ui_logic) make it runnable offline on an isolated profile.
+(ui_logic) make it runnable offline on an isolated profile; `--no-pacing`, `--warm-cache`,
+`--cancel-after-ms` and `--diagnostics` serve the 05 §5 acceptance checks (D-30):
+
+- `--warm-cache`: the outbound search runs once before the script, so the script's search is a
+  fully cached replay (zero requests).
+- `--cancel-after-ms n`: n ms after `Controller::leg_started(outbound)` the runner sends Esc to the
+  focused control (through the KeyPreview filter), clicks Cancel, sends Esc again and calls
+  `BusyPanel::request_cancel` — one `cancel_requested` must follow.
+- `--diagnostics`: `diagnostics.json` next to summary.json (`autotest_diagnostics.hpp`):
+  `TimerGapProbe` (gaps of the 40 ms timer: start→tick, tick→tick, last tick→stop; the runner's
+  screenshots excluded), `EventWatchdog` (exclusive time of every UI-thread dispatch via
+  `Application::notify`), the cancel record, per-search requests and durations, the final grids
+  against the stored results (rows not in the result, duplicate keys), display/DPI data and
+  `layout_problems()` (`layout_check.hpp`: clipped, cut-off, overlapping widgets, cut texts, tabs
+  that do not fit, Cancel fully visible) at every screenshot.
 
 Capture details: before each screenshot the runner applies the pending layout requests (WinForms
 lays out synchronously; a growing `_resolved` label needs several passes) and repaints the window
@@ -108,14 +128,28 @@ reads the DWM surface and would otherwise mix the previous frame with the new on
 Replay scenarios live in `tests/replay/<scenario>/` (`replay.json` + body files; fixture copies and
 synthetic timetables; `over_500` reads the frozen live map in place):
 `named_destination` (03 §11 legs, return, `--then-currency HUF`), `anywhere_return_from_top`,
-`not_served` (InvalidMarket), `same_area`, `over_500`. CTest runs the real exe on each (label
-`autotest`, `tests/gui/check_autotest.py`, Python `-I`, serial) and checks summary.json and the
-PNGs; the in-process tests (`ControllerFlows.*`, `AutoTestRunner.*`) use the same rules without
-their delays. summary.json carries no URLs (C-07), so booking links are asserted in-process.
+`not_served` (InvalidMarket), `same_area`, `over_500`, `cancel_waiting` (a 30 s server, cancelled
+after 1.5 s), `cancel_retrying` (503, cancelled in the 5 s back-off). `heavy_cached` and
+`cancel_cached` are generated by the checker from the live map: every route from Budapest, one fare
+per day over 105 days (≈ 6500 fares, 186 requests), `--warm-cache --no-pacing` (cancelled at 0 ms
+for `cancel_cached`). CTest runs the real exe on each (label `autotest`,
+`tests/gui/check_autotest.py`, Python `-I`, serial, always `--diagnostics`), plus
+`named_destination`, `cancel_retrying` and `heavy_cached` at 150 % and 200 % (`QT_SCALE_FACTOR`),
+and checks summary.json, diagnostics.json (timer gap below 100 ms, 250 ms in Debug) and the PNGs;
+the in-process tests (`ControllerFlows.*`, `AutoTestRunner.*`) use the same rules without their
+delays. summary.json carries no URLs (C-07), so booking links are asserted in-process. Results:
+`docs/RELEASE_CHECKS.md`.
 
 ## Build and deployment
 
-- `windeployqt` runs post-build (Debug and Release) so the exe starts from the build tree; the
-  release package (`cmake --build --preset package --target package` or an install step) contains
-  the exe, Qt DLLs, `platforms/qwindows.dll`, styles plugin, libcurl/zlib/brotli DLLs, the MSVC
-  runtime and `THIRD-PARTY-NOTICES.txt`.
+- Development: vcpkg's app-local step copies the DLLs and `wizz_copy_qt_plugins`
+  (`cmake/WizzQtDeploy.cmake`) the platform, style and image-format plugins post-build, so Debug and
+  Release start from the build tree.
+- Release package (06 §4, D-31): `cmake --preset msvc-x64-release` then
+  `cmake --build --preset package` (build target `PACKAGE`, CPack ZIP, `cmake/WizzPackaging.cmake`)
+  → `build/msvc-x64-release/package/WizzairHelper-<version>-win64.zip`: the exe; Qt Core/Gui/Widgets,
+  `platforms/qwindows.dll`, `styles/qmodernwindowsstyle.dll`, `imageformats/` (vcpkg's
+  `windeployqt`); libcurl, `z.dll`, brotli, pcre2-16, double-conversion, libpng, md4c
+  (`file(GET_RUNTIME_DEPENDENCIES)`); the app-local MSVC runtime; `THIRD-PARTY-NOTICES.txt`,
+  `README.txt` and `licenses/` (`packaging/`). `cmake --install build/msvc-x64-release --config
+  Release --prefix <dir>` produces the same folder. BUILDING.md has the commands.

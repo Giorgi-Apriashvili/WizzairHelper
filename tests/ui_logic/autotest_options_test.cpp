@@ -1,5 +1,6 @@
 // The --autotest command line (01 §17.1) and the D-30 companions
-// (--data-root, --replay, --fixed-now).
+// (--data-root, --replay, --fixed-now, --no-pacing, --warm-cache,
+// --cancel-after-ms, --diagnostics).
 
 #include "wizz/ui/autotest_options.hpp"
 
@@ -59,6 +60,10 @@ TEST(AutoTestOptions, Defaults)
     EXPECT_FALSE(options->data_root);
     EXPECT_FALSE(options->replay_dir);
     EXPECT_FALSE(options->fixed_now);
+    EXPECT_FALSE(options->no_pacing);
+    EXPECT_FALSE(options->warm_cache);
+    EXPECT_FALSE(options->cancel_after);
+    EXPECT_FALSE(options->diagnostics);
     EXPECT_FALSE(options->runs_return());
 }
 
@@ -207,6 +212,35 @@ TEST(AutoTestOptions, D_30_Fixed_now_formats)
         EXPECT_THROW((void)parse_fixed_now(bad), FormatError) << bad;
     }
     EXPECT_THROW((void)parse({"--autotest", "o", "--fixed-now", "soon"}), FormatError);
+}
+
+TEST(AutoTestOptions, D_30_Acceptance_companions)
+{
+    using std::chrono::milliseconds;
+    const std::optional<AutoTestOptions> options =
+        parse({"--autotest", "o", "--no-pacing", "--warm-cache", "--cancel-after-ms", "1500", "--diagnostics"});
+    ASSERT_TRUE(options);
+    EXPECT_TRUE(options->no_pacing);
+    EXPECT_TRUE(options->warm_cache);
+    EXPECT_EQ(options->cancel_after, milliseconds{1500});
+    EXPECT_TRUE(options->diagnostics);
+    EXPECT_EQ(parse({"--autotest", "o", "--cancel-after-ms", "0"})->cancel_after, milliseconds{0});
+    EXPECT_FALSE(parse({"--autotest", "o", "--cancel-after-ms"})->cancel_after) << "no value: not given";
+    EXPECT_FALSE(parse({"--autotest", "o", "--Diagnostics", "--no-Pacing"})->diagnostics) << "exact, case-sensitive";
+    // Only together with --autotest.
+    EXPECT_FALSE(parse({"--warm-cache", "--diagnostics", "--cancel-after-ms", "5"}));
+}
+
+TEST(AutoTestOptions, D_30_Cancel_after_ms_values)
+{
+    using std::chrono::milliseconds;
+    EXPECT_EQ(parse_cancel_after("0"), milliseconds{0});
+    EXPECT_EQ(parse_cancel_after("007"), milliseconds{7});
+    EXPECT_EQ(parse_cancel_after("999999999"), milliseconds{999'999'999});
+    for (const char* bad : {"", "-1", "+5", " 5", "5 ", "1.5", "1e3", "1000000000", "Ù¡"}) {
+        EXPECT_THROW((void)parse_cancel_after(bad), FormatError) << bad;
+    }
+    EXPECT_THROW((void)parse({"--autotest", "o", "--cancel-after-ms", "soon"}), FormatError);
 }
 
 } // namespace

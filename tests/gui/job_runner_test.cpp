@@ -212,4 +212,97 @@ TEST(JobRunner, Destroying_the_runner_stops_and_joins_its_workers)
     EXPECT_FALSE(task->done()) << "the flow is never resumed after shutdown";
 }
 
+// --- JobMailbox: one queued delivery per burst (05 §5, R-03) -------------------------------
+
+TEST(JobMailbox, A_burst_is_delivered_in_order_in_few_deliveries_before_the_completion)
+{
+    JobRunner runner;
+    std::vector<int> received;
+    int deliveries = 0;
+    std::vector<std::string> order;
+    constexpr int kItems = 500;
+    auto flow = [&]() -> Task<> {
+        const wizz::app::JobMailbox<int> mailbox{[&](std::vector<int> items) {
+            ++deliveries;
+            received.insert(received.end(), items.begin(), items.end());
+            order.emplace_back("delivery");
+        }};
+        co_await runner.run(runner.new_job_id(), {}, [mailbox](const JobChannel& channel) {
+            for (int i = 0; i < kItems; ++i) {
+                mailbox.push(channel, i);  // far faster than the UI drains
+            }
+        });
+        order.emplace_back("completed");
+    };
+    Task<> task = flow();
+    task.start();
+    ASSERT_TRUE(pump_until([&] { return task.done(); }));
+    ASSERT_EQ(received.size(), static_cast<std::size_t>(kItems));
+    for (int i = 0; i < kItems; ++i) {
+        EXPECT_EQ(received[static_cast<std::size_t>(i)], i);
+    }
+    EXPECT_GE(deliveries, 1);
+    EXPECT_LT(deliveries, kItems / 10) << "a burst is coalesced into few queued calls";
+    ASSERT_FALSE(order.empty());
+    EXPECT_EQ(order.back(), "completed") << "every item arrives before the completion";
+}
+
+TEST(JobMailbox, Items_pushed_after_a_delivery_start_a_new_one)
+{
+    JobRunner runner;
+    std::vector<std::vector<int>> deliveries;
+    std::atomic<int> delivered{0};
+    auto flow = [&]() -> Task<> {
+        const wizz::app::JobMailbox<int> mailbox{[&](std::vector<int> items) {
+            deliveries.push_back(std::move(items));
+            delivered.fetch_add(1);
+        }};
+        co_await runner.run(runner.new_job_id(), {}, [mailbox, &delivered](const JobChannel& channel) {
+            mailbox.push(channel, 1);
+            mailbox.push(channel, 2);
+            while (delivered.load() < 1) {
+                std::this_thread::sleep_for(1ms);  // the UI drained the first burst
+            }
+            mailbox.push(channel, 3);
+        });
+    };
+    Task<> task = flow();
+    task.start();
+    ASSERT_TRUE(pump_until([&] { return task.done(); }));
+    ASSERT_GE(deliveries.size(), 2u) << "3 came after a delivery had run";
+    std::vector<int> all;
+    for (const std::vector<int>& delivery : deliveries) {
+        EXPECT_FALSE(delivery.empty());
+        all.insert(all.end(), delivery.begin(), delivery.end());
+    }
+    EXPECT_EQ(all, (std::vector<int>{1, 2, 3}));
+    EXPECT_EQ(deliveries.back().back(), 3);
+}
+
+TEST(JobMailbox, Nothing_is_delivered_for_an_abandoned_job)
+{
+    JobRunner runner;
+    std::atomic<bool> release{false};
+    std::atomic<bool> finished{false};
+    int delivered = 0;
+    {
+        auto flow = [&]() -> Task<> {
+            const wizz::app::JobMailbox<int> mailbox{[&delivered](std::vector<int>) { ++delivered; }};
+            co_await runner.run(runner.new_job_id(), {}, [&, mailbox](const JobChannel& channel) {
+                while (!release.load()) {
+                    std::this_thread::sleep_for(1ms);
+                }
+                mailbox.push(channel, 7);
+                finished.store(true);
+            });
+        };
+        Task<> task = flow();
+        task.start();
+    }  // the flow's frame goes away while the job runs
+    release.store(true);
+    ASSERT_TRUE(pump_until([&] { return finished.load(); }, 5s));
+    wizz::test::pump_for(50ms);
+    EXPECT_EQ(delivered, 0);
+}
+
 } // namespace

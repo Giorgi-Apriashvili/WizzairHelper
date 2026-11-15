@@ -3,10 +3,12 @@
 // Start-up order: crash reporting first (01 §3.2), then the optional --autotest
 // command line (01 §17.1, D-30) before the QApplication — a bad --out / --ret /
 // --fixed-now value crashes before the window opens — then per-monitor DPI and
-// the event loop, the services, settings.json, and the main window.
+// the event loop, the font warm-up (font_warmup.hpp), the services, settings.json,
+// and the main window.
 #include "app_services.hpp"
 #include "application.hpp"
 #include "crash_reporter.hpp"
+#include "font_warmup.hpp"
 #include "main_window.hpp"
 #include "ui_style.hpp"
 
@@ -83,11 +85,16 @@ int main(int argc, char* argv[])
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     app::Application application(argc, argv);
     app::style::apply_application_look();
+    // The wait note's "⏳" needs Windows' font fallback (0.2-0.4 s the first time): resolve
+    // it on a worker while the services and the window are built, and before any busy
+    // period can show it (R-03, font_warmup.hpp).
+    app::FontWarmup font_warmup;
     try {
         const std::shared_ptr<const app::AppServices> services =
             app::AppServices::create(app::ServiceConfig::for_run(autotest));
         ui::AppSettings settings = ui::AppSettings::load(services->settings_path());  // before the window (01 §3)
         app::MainWindow window(services, std::move(settings), autotest);
+        font_warmup.wait();
         window.show_main_window();
         return QApplication::exec();
     } catch (...) {

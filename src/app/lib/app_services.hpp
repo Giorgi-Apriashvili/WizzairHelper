@@ -44,7 +44,8 @@ struct ServiceConfig {
 
     /// The configuration of a normal run, or of an --autotest run with its D-30
     /// companions: ReplayTransport for --replay (throws ui::ReplayConfigError for a bad
-    /// directory), FixedClock (local zone UTC) for --fixed-now, the --data-root.
+    /// directory), FixedClock (local zone UTC) for --fixed-now, the --data-root, no
+    /// request spacing or jitter for --no-pacing.
     [[nodiscard]] static ServiceConfig for_run(const std::optional<ui::AutoTestOptions>& autotest);
 };
 

@@ -203,6 +203,19 @@ UtcInstant parse_fixed_now(std::string_view value)
     return make_utc(*date, hour, minute, second) + Ticks{fraction_ticks};
 }
 
+std::chrono::milliseconds parse_cancel_after(std::string_view value)
+{
+    constexpr std::size_t kMaxDigits = 9;  // under 12 days; int64 milliseconds never overflow
+    if (value.empty() || value.size() > kMaxDigits || !std::ranges::all_of(value, is_ascii_digit)) {
+        throw FormatError(std::format("String '{}' was not recognized as a number of milliseconds.", value));
+    }
+    std::int64_t milliseconds = 0;
+    for (const char c : value) {
+        milliseconds = milliseconds * 10 + (c - '0');
+    }
+    return std::chrono::milliseconds{milliseconds};
+}
+
 std::optional<AutoTestOptions> AutoTestOptions::parse(std::span<const std::string> args,
                                                       const std::filesystem::path& current_dir,
                                                       const NumberSymbols& number_symbols)
@@ -240,6 +253,12 @@ std::optional<AutoTestOptions> AutoTestOptions::parse(std::span<const std::strin
     if (const std::optional<std::string> now = value_of(args, "--fixed-now")) {
         options.fixed_now = parse_fixed_now(*now);
     }
+    options.no_pacing = has_flag(args, "--no-pacing");
+    options.warm_cache = has_flag(args, "--warm-cache");
+    if (const std::optional<std::string> after = value_of(args, "--cancel-after-ms")) {
+        options.cancel_after = parse_cancel_after(*after);
+    }
+    options.diagnostics = has_flag(args, "--diagnostics");
     return options;
 }
 
