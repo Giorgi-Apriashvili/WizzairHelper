@@ -22,12 +22,20 @@ void LegStream::on_partial(std::uint64_t job_id, std::span<const FlightResultPtr
     on_partial(batch);
 }
 
+std::vector<FlightResultPtr> LegStream::take_pending()
+{
+    if (finished_) {
+        return {};
+    }
+    return std::exchange(pending_, {});
+}
+
 bool LegStream::flush(FlightGridModel& grid)
 {
     if (finished_ || pending_.empty()) {
         return false;
     }
-    const std::vector<FlightResultPtr> batch = std::exchange(pending_, {});
+    const std::vector<FlightResultPtr> batch = take_pending();
     grid.append(batch);
     grid.set_summary(strings::fares_so_far(grid.all_results().size()));
     return true;

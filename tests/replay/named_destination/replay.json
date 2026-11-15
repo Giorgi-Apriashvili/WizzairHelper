@@ -1,0 +1,75 @@
+{
+  "rules": [
+    {
+      "comment": "wizzair.com homepage advertising API 29.23.1 (05 §1.6 HOME_HTML)",
+      "urlPrefix": "https://www.wizzair.com",
+      "file": "home.html"
+    },
+    {
+      "comment": "route map (copy of fixtures/map_subset.json, 11 airports)",
+      "urlContains": "/asset/map",
+      "file": "map_subset.json"
+    },
+    {
+      "comment": "outbound BUD -> LGW [LON] (copy of fixtures/timetable_v2_bud_ltn.json: 10 x LTN + 1 x LGW, HUF)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"BUD\"",
+      "file": "timetable_v2_bud_ltn.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "outbound BTS -> LTN (05 §2.7 B1)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"BTS\",\"arrivalStation\":\"LTN\"",
+      "file": "timetable_bts_ltn.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "return LTN -> BUD (synthetic GBP fares of 03 §11)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"LTN\",\"arrivalStation\":\"BUD\"",
+      "file": "return_ltn_bud.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "return LTN -> BTS [VBR] (03 §11)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"LTN\",\"arrivalStation\":\"BTS\"",
+      "file": "return_ltn_bts.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "return LGW -> BUD (03 §11)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"LGW\",\"arrivalStation\":\"BUD\"",
+      "file": "return_lgw_bud.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "return LTN -> DEB: on sale, no fares in the window",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"LTN\",\"arrivalStation\":\"DEB\"",
+      "file": "timetable_empty.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "every other route: 400 InvalidMarket (not served)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "status": 400,
+      "file": "error_invalid_market.json",
+      "delayMs": 500
+    },
+    {
+      "comment": "exchange rates (copy of fixtures/fx_frankfurter_v2.json)",
+      "urlContains": "frankfurter",
+      "file": "fx_frankfurter_v2.json"
+    }
+  ]
+}

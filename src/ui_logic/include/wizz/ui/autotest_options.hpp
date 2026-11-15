@@ -5,7 +5,8 @@
 //   WizzairHelper.exe --autotest <outdir> [--from X] [--to Y] [--from-radius N] [--to-radius N]
 //                     [--out A:B] [--ret A:B] [--currency C] [--then-currency C]
 //                     [--return-from-top] [--keep-open]
-//                     [--data-root <dir>] [--replay <dir>] [--fixed-now <yyyy-MM-ddTHH:mm:ssZ>]   (D-30)
+//                     [--data-root <dir>] [--replay <dir>] [--fixed-now <yyyy-MM-ddTHH:mm:ssZ>]
+//                     [--no-pacing] [--warm-cache] [--cancel-after-ms <n>] [--diagnostics]       (D-30)
 //
 // Flag matching is exact and case-sensitive; the FIRST occurrence of a flag
 // wins and its value is the next argument whatever it looks like (.NET
@@ -19,13 +20,23 @@
 //                       fixture directory <dir> through ReplayTransport
 //                       (replay_transport.hpp documents the format);
 //   --fixed-now <utc>   runs on a FixedClock at that UTC instant, local zone UTC
-//                       ("today" = its date), e.g. 2026-11-02T10:00:00Z.
+//                       ("today" = its date), e.g. 2026-11-02T10:00:00Z;
+//   --no-pacing         no 1 s request spacing / jitter in front of Wizz requests
+//                       (a replay talks to no server; retry back-offs stay);
+//   --warm-cache        runs the outbound search once before the script, so the
+//                       script's outbound search replays cached timetables (05 §5
+//                       "cached replay");
+//   --cancel-after-ms n presses Esc and Cancel n ms after the script's outbound
+//                       search starts fetching (05 §5 cancellation checks);
+//   --diagnostics       writes diagnostics.json next to summary.json (40 ms timer
+//                       gaps, cancel transitions, final grids, display, layout).
 // Relative directories are made absolute against the current directory, like
 // the output directory.
 
 #include "wizz/core/locale.hpp"
 #include "wizz/core/time.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -56,12 +67,16 @@ struct AutoTestOptions {
     std::optional<std::filesystem::path> data_root;  ///< --data-root (D-30)
     std::optional<std::filesystem::path> replay_dir; ///< --replay (D-30)
     std::optional<UtcInstant> fixed_now;             ///< --fixed-now (D-30)
+    bool no_pacing = false;                          ///< --no-pacing (D-30)
+    bool warm_cache = false;                         ///< --warm-cache (D-30)
+    std::optional<std::chrono::milliseconds> cancel_after;  ///< --cancel-after-ms (D-30)
+    bool diagnostics = false;                        ///< --diagnostics (D-30)
 
     /// Parses `args` — the command-line arguments as UTF-8, WITHOUT the program path.
     /// Returns nullopt for a normal run (no `--autotest`, or no value after it).
     /// `number_symbols` are the current culture's (int.TryParse of the radii).
-    /// Throws wizz::FormatError for a bad `--out` / `--ret` date (yyyy-MM-dd, invariant)
-    /// or `--fixed-now` instant, and std::invalid_argument for an empty directory
+    /// Throws wizz::FormatError for a bad `--out` / `--ret` date (yyyy-MM-dd, invariant),
+    /// `--fixed-now` instant or `--cancel-after-ms` value, and std::invalid_argument for an empty directory
     /// value (Path.GetFullPath("")) — the app then crashes before its window opens.
     [[nodiscard]] static std::optional<AutoTestOptions> parse(std::span<const std::string> args,
                                                               const std::filesystem::path& current_dir,
@@ -88,5 +103,8 @@ struct AutoTestOptions {
 
 /// `--fixed-now`: `yyyy-MM-ddTHH:mm:ss[.fffffff][Z]` read as UTC. Throws wizz::FormatError.
 [[nodiscard]] UtcInstant parse_fixed_now(std::string_view value);
+
+/// `--cancel-after-ms`: 1 to 9 ASCII digits (invariant), 0 allowed. Throws wizz::FormatError.
+[[nodiscard]] std::chrono::milliseconds parse_cancel_after(std::string_view value);
 
 } // namespace wizz::ui

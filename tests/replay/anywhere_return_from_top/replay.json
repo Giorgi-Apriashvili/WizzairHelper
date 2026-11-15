@@ -1,0 +1,51 @@
+{
+  "rules": [
+    {
+      "comment": "wizzair.com homepage advertising API 29.23.1 (05 §1.6 HOME_HTML)",
+      "urlPrefix": "https://www.wizzair.com",
+      "file": "home.html"
+    },
+    {
+      "comment": "route map (copy of fixtures/map_subset.json, 11 airports)",
+      "urlContains": "/asset/map",
+      "file": "map_subset.json"
+    },
+    {
+      "comment": "outbound BUD -> NAP (copy of fixtures/timetable_v2_bud_nap.json, HUF)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"BUD\",\"arrivalStation\":\"NAP\"",
+      "file": "timetable_v2_bud_nap.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "outbound BUD -> LGW [LON] (copy of fixtures/timetable_v2_bud_ltn.json, HUF)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"BUD\",\"arrivalStation\":\"LGW\"",
+      "file": "timetable_v2_bud_ltn.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "return NAP -> BUD (synthetic EUR fares)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "bodyContains": "\"departureStation\":\"NAP\",\"arrivalStation\":\"BUD\"",
+      "file": "return_nap_bud.json",
+      "delayMs": 700
+    },
+    {
+      "comment": "every other route: 400 InvalidMarket (not served)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "status": 400,
+      "file": "error_invalid_market.json",
+      "delayMs": 500
+    },
+    {
+      "comment": "exchange rates (copy of fixtures/fx_frankfurter_v2.json)",
+      "urlContains": "frankfurter",
+      "file": "fx_frankfurter_v2.json"
+    }
+  ]
+}

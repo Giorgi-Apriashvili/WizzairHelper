@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "comment": "wizzair.com homepage advertising API 29.23.1 (05 §1.6 HOME_HTML)",
+      "urlPrefix": "https://www.wizzair.com",
+      "file": "home.html"
+    },
+    {
+      "comment": "the frozen live route map of 2026-11-02 (189 airports, D-24), read in place",
+      "urlContains": "/asset/map",
+      "file": "../../../history/live-cache-2026-11-02/map.json"
+    },
+    {
+      "comment": "every other route: 400 InvalidMarket (not served)",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "status": 400,
+      "file": "error_invalid_market.json",
+      "delayMs": 500
+    }
+  ]
+}

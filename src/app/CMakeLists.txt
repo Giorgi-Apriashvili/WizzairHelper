@@ -43,3 +43,9 @@ target_link_libraries(WizzairHelper PRIVATE wizz::app)
 set_target_properties(WizzairHelper PROPERTIES OUTPUT_NAME "WizzairHelper")
 
 wizz_copy_qt_plugins(WizzairHelper)
+
+# Release package (06 §4): install rules (windeployqt, runtime DLLs, app-local MSVC
+# runtime, notices) and the CPack ZIP behind `cmake --build --preset package`.
+include(WizzPackaging)
+wizz_add_release_package(WizzairHelper)
+include(CPack)

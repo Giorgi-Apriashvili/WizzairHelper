@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "comment": "05 §5 cancellation while waiting for a request; shares the named_destination bodies",
+      "urlPrefix": "https://www.wizzair.com",
+      "file": "../named_destination/home.html"
+    },
+    {
+      "comment": "route map (copy of fixtures/map_subset.json, 11 airports)",
+      "urlContains": "/asset/map",
+      "file": "../named_destination/map_subset.json"
+    },
+    {
+      "comment": "a server that does not answer for 30 s: the search is cancelled while it waits",
+      "method": "POST",
+      "urlContains": "/search/timetableV2",
+      "file": "../named_destination/timetable_v2_bud_ltn.json",
+      "delayMs": 30000
+    },
+    {
+      "comment": "exchange rates (copy of fixtures/fx_frankfurter_v2.json)",
+      "urlContains": "frankfurter",
+      "file": "../named_destination/fx_frankfurter_v2.json"
+    }
+  ]
+}

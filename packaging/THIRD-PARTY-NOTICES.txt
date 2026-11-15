@@ -1,0 +1,102 @@
+WizzairHelper - third-party notices
+===================================
+
+WizzairHelper.exe is distributed together with the third-party libraries listed
+below. Each is used unmodified and linked dynamically (the DLL files next to the
+program). The complete license text of every library is in the "licenses" folder
+of this package, as shipped by the vcpkg port that built it.
+
+The program also uses data from online services at run time. Their terms and
+attributions are listed in the second part.
+
+
+1. Libraries included in this package
+-------------------------------------
+
+Qt 6.11.2 (qtbase: Qt Core, Qt Gui, Qt Widgets; plugins qwindows, qmodernwindowsstyle,
+image formats)
+    Copyright (C) The Qt Company Ltd. and other contributors.
+    License: GNU Lesser General Public License version 3 (LGPL-3.0-only).
+    Files: Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, platforms\, styles\,
+    imageformats\. License text: licenses\qtbase.txt (it also holds the
+    licenses of the third-party code inside Qt).
+    Qt is linked dynamically and used unmodified. You may replace these DLLs
+    with your own build of the same Qt version (6.11.2, MSVC x64), and you may
+    obtain the complete corresponding source code from https://download.qt.io/
+    or https://code.qt.io/ (module qtbase, tag v6.11.2). On request we provide a
+    copy of that source code.
+
+curl / libcurl 8.23.0 (HTTP client; Windows Schannel TLS)
+    Copyright (c) 1996 - 2026, Daniel Stenberg, <daniel@haxx.se>, and many
+    contributors. License: curl license (MIT/X derivative).
+    File: libcurl.dll. License text: licenses\curl.txt.
+
+zlib
+    (C) 1995-2026 Jean-loup Gailly and Mark Adler. License: zlib license.
+    File: z.dll. License text: licenses\zlib.txt.
+
+Brotli 1.2.0 (decoder, used by libcurl for "br" content encoding)
+    Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors. License: MIT.
+    Files: brotlicommon.dll, brotlidec.dll. License text: licenses\brotli.txt.
+
+PCRE2 10.49 (16-bit library, used by Qt Core)
+    Copyright (c) 1997-2026 University of Cambridge and the PCRE2 contributors.
+    License: BSD-3-Clause with the PCRE2 binary-like packages exception.
+    File: pcre2-16.dll. License text: licenses\qtbase.txt (section
+    "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception") and
+    licenses\pcre2.txt.
+
+double-conversion 3.4.0 (used by Qt Core)
+    Copyright 2006-2011, the V8 project authors. License: BSD-3-Clause.
+    File: double-conversion.dll. License text: licenses\double-conversion.txt.
+
+libpng 1.6.59 (used by Qt Gui)
+    Copyright (c) 1995-2026 The PNG Reference Library Authors.
+    License: PNG Reference Library License version 2.
+    File: libpng16.dll. License text: licenses\libpng.txt.
+
+MD4C 0.6.0 (Markdown parser, used by Qt Gui)
+    Copyright (c) 2016-2026 Martin Mitas. License: MIT.
+    File: md4c.dll. License text: licenses\md4c.txt.
+
+Microsoft Visual C++ runtime (msvcp140*.dll, vcruntime140*.dll, concrt140.dll)
+    Copyright (c) Microsoft Corporation. Redistributed app-local as permitted
+    for the "Redistributable Code" of Microsoft Visual Studio. The Universal C
+    Runtime (ucrtbase.dll) is part of Windows 10 and 11 and is not included.
+
+
+2. Components used but not included
+-----------------------------------
+
+ICU (International Components for Unicode)
+    WizzairHelper uses the ICU that is part of Windows 10 version 1903 and later
+    (icu.dll in the Windows system folder) for collation, case mapping and
+    locale data. No ICU binaries are included in this package. ICU is
+    Copyright (c) Unicode, Inc. and others, under the Unicode License v3.
+
+Windows APIs (Win32, COM taskbar progress, WIC, DWM) are part of the operating
+system.
+
+
+3. Online services and data
+---------------------------
+
+WizzairHelper reads public web data at run time. It is not affiliated with,
+endorsed or sponsored by any of these providers.
+
+Wizz Air (https://wizzair.com)
+    Fares and timetables come from the public website's unofficial API. Wizz Air
+    is a trademark of its owner. Prices are indicative; book on wizzair.com.
+
+Photon (https://photon.komoot.io, by komoot) and Nominatim
+(https://nominatim.openstreetmap.org) - geocoding of the places you type.
+    Map data (c) OpenStreetMap contributors, available under the Open Database
+    License (ODbL) 1.0: https://www.openstreetmap.org/copyright
+    Nominatim is used within its usage policy (at most one request per second,
+    an identifying User-Agent, results cached locally).
+
+Frankfurter (https://frankfurter.dev) and currency-api by Fawaz Ahmed
+(https://github.com/fawazahmed0/exchange-api, via jsDelivr and Cloudflare)
+    Exchange rates for converting prices. Frankfurter publishes rates from the
+    European Central Bank and other sources; currency-api is published under
+    CC0-1.0.

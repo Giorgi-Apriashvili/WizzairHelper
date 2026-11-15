@@ -40,6 +40,11 @@ public:
     /// all fares the grid holds). Returns true when the grid changed (update tab titles).
     bool flush(FlightGridModel& grid);
 
+    /// The rows queued since the last take, in arrival order; empty once finished. A
+    /// widget grid whose model must announce its own changes appends them itself, then
+    /// sets the "{N} fares so far…" summary (the same steps as `flush`).
+    [[nodiscard]] std::vector<FlightResultPtr> take_pending();
+
     /// The final result arrived (or the run failed): from here on batches are ignored.
     void finish() noexcept;
     [[nodiscard]] bool finished() const noexcept { return finished_; }

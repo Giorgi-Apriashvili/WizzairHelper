@@ -1,0 +1,1 @@
+{"outboundFlights":[{"departureStation":"LGW","arrivalStation":"BUD","departureDate":"2026-11-16T14:00:00","price":{"amount":29.99,"currencyCode":"GBP"},"priceType":"price","departureDates":[{"date":"2026-11-16T14:00:00","isCheapestOfTheDay":true}],"hasMacFlight":false}],"returnFlights":null}

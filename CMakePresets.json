@@ -39,7 +39,13 @@
     { "name": "release", "configurePreset": "msvc-x64", "configuration": "Release" },
     { "name": "core-debug", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
     { "name": "core-release", "configurePreset": "msvc-x64-core", "configuration": "Release" },
-    { "name": "package", "configurePreset": "msvc-x64-release", "configuration": "Release" }
+    {
+      "name": "package",
+      "displayName": "Release build + ZIP package (CPack, windeployqt)",
+      "configurePreset": "msvc-x64-release",
+      "configuration": "Release",
+      "targets": [ "PACKAGE" ]
+    }
   ],
   "testPresets": [
     {
@@ -61,6 +67,14 @@
         { "type": "configure", "name": "msvc-x64-core" },
         { "type": "build", "name": "core-debug" },
         { "type": "test", "name": "core-debug" }
+      ]
+    },
+    {
+      "name": "release-package",
+      "displayName": "Configure the release preset and build the ZIP package",
+      "steps": [
+        { "type": "configure", "name": "msvc-x64-release" },
+        { "type": "build", "name": "package" }
       ]
     },
     {

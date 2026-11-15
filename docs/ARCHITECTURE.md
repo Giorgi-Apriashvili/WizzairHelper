@@ -15,10 +15,13 @@ contributor builds the same thing. Deliberate deviations from the spec are liste
 ## Build
 
 ```powershell
-cmake --workflow --preset core     # core + services + tests, no Qt
-cmake --workflow --preset full     # everything incl. WizzairHelper.exe
-cmake --preset msvc-x64-release; cmake --build --preset package
+cmake --workflow --preset core             # core + services + tests, no Qt
+cmake --workflow --preset full             # everything incl. WizzairHelper.exe
+cmake --workflow --preset release-package  # Release exe + ZIP (CPack, windeployqt)
 ```
+
+[`BUILDING.md`](../BUILDING.md) has the prerequisites, the presets, the tests, packaging and the
+`--autotest` / replay usage.
 
 Presets use the "Visual Studio 18 2026" generator, so no developer shell is needed. Build trees live
 in `build/<preset>`. In a git worktree without the vcpkg submodule, add
