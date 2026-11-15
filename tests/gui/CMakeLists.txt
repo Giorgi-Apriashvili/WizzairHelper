@@ -44,11 +44,15 @@ gtest_discover_tests(wizzairhelper_gui_tests
 # UI-loop watchdog, one cancel transition, final grids, layout) and the screenshots.
 # The window opens on the real "windows" platform (PrintWindow needs a native
 # window), one at a time. Key scenarios repeat at 150 % and 200 % (QT_SCALE_FACTOR).
+# The crash_* runs fail at start-up on purpose (a bad --fixed-now before the QApplication,
+# a bad replay.json after it): DPI-aware crash box, errors.log record in the --data-root
+# profile with the right timestamp (01 §3.2, D-30).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     set(_wizz_autotest_runs
         named_destination anywhere_return_from_top not_served same_area over_500
         cancel_waiting cancel_retrying heavy_cached cancel_cached
+        crash_bad_fixed_now crash_bad_replay
         named_destination@1.5 named_destination@2
         cancel_retrying@1.5 cancel_retrying@2
         heavy_cached@1.5 heavy_cached@2)

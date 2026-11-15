@@ -7,7 +7,9 @@
 // for the `finally` blocks. A Task is lazy: its body starts when it is awaited
 // (symmetric transfer, no extra event-loop round trip), and when it finishes
 // it transfers straight back to the awaiting coroutine. Exceptions travel
-// through `co_await` like through `await`.
+// through `co_await` like through `await`, with their throw site
+// (TracedException, crash_reporter.hpp: a crash record starts where the
+// exception was thrown, not at the last co_await that rethrew it).
 //
 // Everything runs on the thread that resumes the coroutines, which is the UI
 // thread: worker jobs post their completion back to it (job_runner.hpp). A
@@ -17,8 +19,9 @@
 // A Task owns its coroutine frame; destroying an unfinished Task destroys the
 // frame (and, through its locals, the frames of the tasks it awaits).
 
+#include "crash_reporter.hpp"
+
 #include <coroutine>
-#include <exception>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -33,7 +36,7 @@ namespace detail {
 struct TaskPromiseBase {
     /// The coroutine that awaits this task; resumed when the body finishes.
     std::coroutine_handle<> continuation = std::noop_coroutine();
-    std::exception_ptr error;
+    TracedException error;
 
     struct FinalAwaiter {
         [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -47,7 +50,7 @@ struct TaskPromiseBase {
 
     [[nodiscard]] std::suspend_always initial_suspend() const noexcept { return {}; }
     [[nodiscard]] FinalAwaiter final_suspend() const noexcept { return {}; }
-    void unhandled_exception() noexcept { error = std::current_exception(); }
+    void unhandled_exception() noexcept { error = TracedException::current(); }
 };
 
 template <class T>
@@ -66,7 +69,7 @@ struct TaskPromise final : TaskPromiseBase {
     [[nodiscard]] T take()
     {
         if (error) {
-            std::rethrow_exception(error);
+            error.rethrow();
         }
         return std::move(*value);
     }
@@ -80,7 +83,7 @@ struct TaskPromise<void> final : TaskPromiseBase {
     void take() const
     {
         if (error) {
-            std::rethrow_exception(error);
+            error.rethrow();
         }
     }
 };

@@ -3,7 +3,7 @@
 #
 #   wizzairhelper_app (wizz::app): every widget, the controller, autotest runner,
 #                                  crash reporter — sources under lib/
-#   WizzairHelper.exe            : main.cpp + version resource
+#   WizzairHelper.exe            : main.cpp + version resource + application manifest
 #
 # Owns all widgets, the active job ID, explicit fare selection, timers,
 # settings, diagnostics and the hidden --autotest mode. Never blocks the UI
@@ -35,9 +35,14 @@ target_link_libraries(wizzairhelper_app
             windowscodecs   # WIC PNG encoder for --autotest screenshots
             dwmapi)
 
+# The .manifest source is merged into the linker's manifest and embedded (per-monitor-v2
+# DPI awareness before anything is shown, 01 §3 / 06 §4). It also replaces Qt's generated
+# default manifest, which the Visual Studio generator links with /MANIFEST:NO and so
+# never embeds.
 qt_add_executable(WizzairHelper WIN32
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/WizzairHelper.rc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/WizzairHelper.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/WizzairHelper.manifest")
 
 target_link_libraries(WizzairHelper PRIVATE wizz::app)
 set_target_properties(WizzairHelper PROPERTIES OUTPUT_NAME "WizzairHelper")

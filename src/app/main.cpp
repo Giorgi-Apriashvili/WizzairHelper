@@ -1,10 +1,11 @@
 // WizzairHelper.exe (01 §3): one GUI process per invocation.
 //
-// Start-up order: crash reporting first (01 §3.2), then the optional --autotest
-// command line (01 §17.1, D-30) before the QApplication — a bad --out / --ret /
-// --fixed-now value crashes before the window opens — then per-monitor DPI and
-// the event loop, the font warm-up (font_warmup.hpp), the services, settings.json,
-// and the main window.
+// Start-up order: per-monitor-v2 DPI awareness comes with the process (application
+// manifest, resources/WizzairHelper.manifest), then crash reporting (01 §3.2), then
+// the optional --autotest command line (01 §17.1, D-30) before the QApplication — a
+// bad --out / --ret / --fixed-now value crashes before the window opens, logged in
+// the --data-root profile — then the event loop, the font warm-up (font_warmup.hpp),
+// the services, settings.json, and the main window.
 #include "app_services.hpp"
 #include "application.hpp"
 #include "crash_reporter.hpp"
@@ -72,14 +73,19 @@ int main(int argc, char* argv[])
 
     std::optional<ui::AutoTestOptions> autotest;
     try {
-        autotest = ui::AutoTestOptions::parse(command_line_arguments(), std::filesystem::current_path(),
-                                              Locale::user_default()->number_symbols());
+        const std::vector<std::string> arguments = command_line_arguments();
+        const std::filesystem::path current_dir = std::filesystem::current_path();
+        // errors.log of the isolated profile (D-30), read first so that a bad value
+        // below is logged there too.
+        crash_reporter.set_data_root(ui::AutoTestOptions::parse_data_root(arguments, current_dir));
+        autotest = ui::AutoTestOptions::parse(arguments, current_dir, Locale::user_default()->number_symbols());
     } catch (...) {
         CrashReporter::report_current_exception();  // e.g. a bad --out date: before the window opens
         return 1;
     }
-    if (autotest) {
-        crash_reporter.set_data_root(autotest->data_root);  // errors.log of the isolated profile (D-30)
+    if (autotest && autotest->fixed_now) {
+        // Records carry the run's fixed instant, local zone UTC, like the rest of the run (D-30).
+        crash_reporter.set_clock(std::make_shared<const FixedClock>(*autotest->fixed_now));
     }
 
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);

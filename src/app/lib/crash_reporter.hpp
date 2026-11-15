@@ -13,6 +13,10 @@
 // block only after the throwing frames are unwound, so while installed the
 // reporter records the stack of every C++ throw per thread (a vectored exception
 // handler: an address capture, symbols are resolved only for a crash report).
+// std::rethrow_exception is a throw of its own; exceptions that travel through
+// co_await or from a worker job to the UI thread are carried as TracedException,
+// which hands the original throw site to the next rethrow, so the record still
+// starts where the exception was first thrown (.NET keeps those frames across await).
 //
 // Hooks (01 §3.2 "C++"): Application::notify (application.hpp) routes
 // exceptions that escape UI-thread event handlers and posted tasks through
@@ -34,6 +38,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stacktrace>
@@ -66,6 +71,29 @@ struct ExceptionReport {
 /// this function and `skip_frames` of its callers.
 [[nodiscard]] ExceptionReport describe_current_exception(std::size_t skip_frames = 0);
 
+/// An exception caught to be rethrown elsewhere — a coroutine's outcome (task.hpp), a
+/// worker job's outcome on the UI thread (job_runner.hpp) — with the stack of its throw site.
+class TracedException {
+public:
+    TracedException() noexcept = default;
+
+    /// Inside a catch block: the current exception and the throw site recorded for it on
+    /// this thread (no frames when no reporter is installed).
+    [[nodiscard]] static TracedException current() noexcept;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(error_); }
+    [[nodiscard]] const std::exception_ptr& error() const noexcept { return error_; }
+    [[nodiscard]] const std::stacktrace& trace() const noexcept { return trace_; }
+
+    /// Rethrows the exception (which must be set). The carried throw site, not this call,
+    /// is recorded as its site: the next catch reports, or carries on, where it was thrown.
+    [[noreturn]] void rethrow() const;
+
+private:
+    std::exception_ptr error_;
+    std::stacktrace trace_;
+};
+
 class CrashReporter final : public QObject {
     Q_OBJECT
 
@@ -93,6 +121,9 @@ public:
 
     /// Changes the data root after --autotest parsing (thread-safe).
     void set_data_root(std::optional<std::filesystem::path> data_root);
+    /// Stamps later records with `clock`, e.g. the --fixed-now clock of D-30 (thread-safe).
+    /// Throws std::invalid_argument for a null clock.
+    void set_clock(std::shared_ptr<const Clock> clock);
     /// <root>\errors.log. Throws std::system_error when LocalAppData cannot be resolved.
     [[nodiscard]] std::filesystem::path log_path() const;
 
@@ -154,9 +185,9 @@ public:
                                                                        const std::stacktrace& trace);
 
 private:
-    const Clock& clock_;
     Dialog dialog_;
-    mutable std::mutex mutex_;  // guards data_root_ and the errors.log append
+    mutable std::mutex mutex_;  // guards clock_, data_root_ and the errors.log append
+    std::shared_ptr<const Clock> clock_;  // the constructor's clock is not owned
     std::optional<std::filesystem::path> data_root_;
 };
 
