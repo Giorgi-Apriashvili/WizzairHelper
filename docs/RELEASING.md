@@ -139,7 +139,8 @@ written.
 
 - *Nothing was published* (the release job didn't run): delete the tag locally and on GitHub
   (`git tag -d vX.Y.Z`, `git push origin :refs/tags/vX.Y.Z`), fix the problem on `main`, then tag
-  again.
+  again. The old tag's runs stay on GitHub under the same name; `tag_wait.ps1` waits only for a run of
+  the commit the tag now points at.
 - *It was published:* never move the tag. Ship the fix as X.Y.Z+1.
 
 ## Release notes
