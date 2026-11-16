@@ -1,5 +1,8 @@
-# wizzairhelper_gui_tests: widget-level tests (GoogleTest + a QApplication).
-# Runs headless with the "minimal" Qt platform plugin.
+# wizzairhelper_gui_tests: widget-level tests (GoogleTest + a QApplication) under the app's
+# own look (look_test_support.hpp). Runs headless with the "minimal" Qt platform plugin and
+# its Windows font database (enable_fonts): real font metrics, so the layout tests measure the
+# cards, buttons and headers as the app shows them (without it every glyph is a box as wide
+# as the font is tall).
 
 find_package(Qt6 6.11 REQUIRED COMPONENTS Widgets)
 include(WizzQtDeploy)
@@ -46,11 +49,11 @@ set(_wizz_timing_tests "FlightGridPerformance.*:ControllerFlows.R_03_*:Controlle
 gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
     TEST_FILTER "-${_wizz_timing_tests}"
-    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal")
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal:enable_fonts")
 gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
     TEST_FILTER "${_wizz_timing_tests}"
-    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal" LABELS timing RUN_SERIAL TRUE)
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal:enable_fonts" LABELS timing RUN_SERIAL TRUE)
 
 # The real WizzairHelper.exe --version (D-35): exactly "WizzairHelper <version>" and a line
 # feed on standard output and exit code 0, read through pipes (app.version) and captured by

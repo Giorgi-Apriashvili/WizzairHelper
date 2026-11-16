@@ -20,6 +20,7 @@
 #include "grid_table_view.hpp"
 #include "layout_check.hpp"
 #include "log_view.hpp"
+#include "look_test_support.hpp"
 #include "modern_style.hpp"
 #include "place_chooser_dialog.hpp"
 #include "round_trip_grid.hpp"
@@ -45,7 +46,6 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
-#include <QStyleHints>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolTip>
@@ -395,9 +395,7 @@ TEST(LookSnapshots, Render_every_surface_in_both_schemes)
                                       Qt::UI_FadeTooltip}) {
         QApplication::setEffectEnabled(effect, false);
     }
-    const QFont font = QApplication::font();
-    const QString style_name = QApplication::style()->name();
-    style::set_high_contrast_probe([] { return false; });
+    const wizz::test::look::LookGuard guard;  // puts the suite's look back afterwards
 
     for (const char* scheme : {"light", "dark"}) {
         qputenv("WIZZ_COLOR_SCHEME", scheme);
@@ -419,12 +417,6 @@ TEST(LookSnapshots, Render_every_surface_in_both_schemes)
     ASSERT_TRUE(style::apply_application_look());
     ASSERT_EQ(style::appearance(), style::Appearance::high_contrast);
     render_windows(QStringLiteral("contrast"), false);
-
-    style::set_high_contrast_probe({});
-    qunsetenv("WIZZ_COLOR_SCHEME");
-    QGuiApplication::styleHints()->unsetColorScheme();
-    QApplication::setStyle(style_name);
-    QApplication::setFont(font);
 }
 
 } // namespace

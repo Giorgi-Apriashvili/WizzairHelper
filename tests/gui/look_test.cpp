@@ -10,6 +10,7 @@
 #include "flight_table_model.hpp"
 #include "grid_table_view.hpp"
 #include "log_view.hpp"
+#include "look_test_support.hpp"
 #include "modern_style.hpp"
 #include "section_card.hpp"
 #include "ui_style.hpp"
@@ -35,50 +36,12 @@ namespace style = wizz::app::style;
 namespace gui = wizz::test::gui;
 using wizz::app::ModernStyle;
 using wizz::test::app::WindowRig;
+using wizz::test::look::LookGuard;
 
 constexpr wizz::Date d(int year, unsigned month, unsigned day)
 {
     return wizz::Date::from_ymd(year, month, day);
 }
-
-/// Restores the application-wide look a test changes; High Contrast is off unless a test
-/// says otherwise, and no override is set.
-class LookGuard {
-public:
-    LookGuard()
-        : style_(QApplication::style()->name()), palette_(QApplication::palette()), font_(QApplication::font()),
-          tooltip_(QToolTip::palette())
-    {
-        clear_environment();
-        previous_probe_ = style::set_high_contrast_probe([] { return false; });
-    }
-    ~LookGuard()
-    {
-        clear_environment();
-        style::set_high_contrast_probe(std::move(previous_probe_));
-        QGuiApplication::styleHints()->unsetColorScheme();
-        QApplication::setStyle(style_);
-        QApplication::setPalette(palette_);
-        QApplication::setFont(font_);
-        QToolTip::setPalette(tooltip_);
-    }
-    LookGuard(const LookGuard&) = delete;
-    LookGuard& operator=(const LookGuard&) = delete;
-
-private:
-    static void clear_environment()
-    {
-        for (const char* name : {"WIZZ_COLOR_SCHEME", "WIZZ_HIGH_CONTRAST", "WIZZ_FONTS"}) {
-            qunsetenv(name);
-        }
-    }
-
-    QString style_;
-    QPalette palette_;
-    QFont font_;
-    QPalette tooltip_;
-    style::HighContrastProbe previous_probe_;
-};
 
 [[nodiscard]] QColor text_colour(const QWidget* widget)
 {
