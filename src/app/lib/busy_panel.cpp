@@ -47,10 +47,15 @@ constexpr QMargins kButtonMargins{3, 3, 3, 3};  // WinForms default Control.Marg
     return metrics.size(Qt::TextSingleLine, text).height();
 }
 
-/// The bar's fill at rest: the outcome's colour, softened halfway towards the track.
+/// The bar's fill at rest: the outcome's colour, softened halfway towards the track (High
+/// Contrast: the system highlight, nothing mixed).
 [[nodiscard]] QColor resting_fill(const QColor& outcome)
 {
-    const QColor track = style::theme().track;
+    const style::Theme& theme = style::theme();
+    if (theme.high_contrast) {
+        return theme.accent;
+    }
+    const QColor track = theme.track;
     return QColor((outcome.red() + track.red()) / 2, (outcome.green() + track.green()) / 2,
                   (outcome.blue() + track.blue()) / 2);
 }
@@ -73,8 +78,8 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
                      const TaskbarProgress::Factory& taskbar_factory, QWidget* parent)
     : QWidget(parent), model_(clock, std::move(locale)), taskbar_(this, taskbar_factory)
 {
-    // The background is SystemColors.ControlLight, painted in paintEvent (not a palette
-    // role: styles repaint those, and the children keep the style's palette).
+    // The background is the theme's surface, painted in paintEvent (not a palette role:
+    // styles repaint those, and the children keep the style's palette).
     setAttribute(Qt::WA_OpaquePaintEvent);
 
     spinner_ = new SpinnerWidget(this);
@@ -104,9 +109,6 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
     QFont bold;  // only the weight is set: family and size follow the panel (form) font
     bold.setWeight(QFont::DemiBold);
     wait_->setFont(bold);
-    QPalette wait_palette = wait_->palette();
-    wait_palette.setColor(QPalette::WindowText, style::theme().warning);
-    wait_->setPalette(wait_palette);
     wait_->setContentsMargins(0, 0, kAutoColumnRightMargin, 0);
 
     cancel_ = new QPushButton(to_qstring(ui::strings::kCancel));
@@ -140,6 +142,10 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
     refresh_system_colours();
     apply_metrics();
     render();
+    style::on_theme_change(this, [this] {
+        refresh_system_colours();
+        render();  // the bar's fill
+    });
 }
 
 BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale, QWidget* parent)
@@ -367,29 +373,35 @@ void BusyPanel::apply_metrics()
 
 void BusyPanel::refresh_system_colours()
 {
-    if (status_ == nullptr) {
+    if (status_ == nullptr || wait_ == nullptr) {
         return;  // change events sent while the constructor builds the controls
     }
-    const QColor control_light = style::theme().surface;
-    const QColor control_text = style::theme().text;
-    if (control_light != control_light_) {
-        control_light_ = control_light;
+    const style::Theme& theme = style::theme();
+    if (theme.surface != control_light_) {
+        control_light_ = theme.surface;
         update();
     }
-    if (control_text != control_text_) {
-        control_text_ = control_text;
-        QPalette elapsed_palette = elapsed_->palette();
-        elapsed_palette.setColor(QPalette::WindowText, style::theme().text_secondary);
-        elapsed_->setPalette(elapsed_palette);
-        apply_status_colour();
-    }
+    control_text_ = theme.text;
+    const auto set_text = [](QWidget& widget, const QColor& colour) {
+        if (widget.palette().color(QPalette::WindowText) != colour) {
+            QPalette palette = widget.palette();
+            palette.setColor(QPalette::WindowText, colour);
+            widget.setPalette(palette);
+        }
+    };
+    set_text(*elapsed_, theme.text_secondary);
+    set_text(*wait_, theme.warning);
+    apply_status_colour();
 }
 
 void BusyPanel::apply_status_colour()
 {
-    QPalette status_palette = status_->palette();
-    status_palette.setColor(QPalette::WindowText, status_colour());
-    status_->setPalette(status_palette);
+    const QColor colour = status_colour();
+    if (status_->palette().color(QPalette::WindowText) != colour) {
+        QPalette status_palette = status_->palette();
+        status_palette.setColor(QPalette::WindowText, colour);
+        status_->setPalette(status_palette);
+    }
 }
 
 void BusyPanel::set_bar_value(int value)

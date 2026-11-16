@@ -15,6 +15,12 @@
 // Every programmatic assignment is clamped to the range (01 §6.1 Clamp(p, v),
 // UI-11, UX-16). dateChanged fires for user and code changes alike, only when
 // the date really changes.
+//
+// The calendar drop-down (DECISIONS D-54) has no week-number column; weekends are
+// in the theme's accent text colour (Qt's default pure red is 4.0:1 on white,
+// below AA), days of the neighbouring months in its muted text (Qt's disabled
+// colour fails AA too, and those days can be picked). High Contrast keeps the
+// system colours. The formats follow changes of the look.
 
 #include "wizz/core/locale.hpp"
 #include "wizz/core/time.hpp"
@@ -64,6 +70,9 @@ protected:
     [[nodiscard]] QDateTime dateTimeFromText(const QString& text) const override;
 
 private:
+    /// Weekend and neighbouring-month colours of the calendar drop-down.
+    void apply_calendar_look();
+
     std::shared_ptr<const Locale> locale_;
 };
 

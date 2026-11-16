@@ -1,11 +1,14 @@
 #include "date_picker.hpp"
 
 #include "qt_strings.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
+#include <QApplication>
 #include <QCalendarWidget>
 #include <QStringView>
+#include <QTextCharFormat>
 
 #include <chrono>
 #include <stdexcept>
@@ -42,7 +45,31 @@ DatePicker::DatePicker(std::shared_ptr<const Locale> names, QWidget* parent)
     if (QCalendarWidget* calendar = calendarWidget()) {
         calendar->setLocale(locale());
         calendar->setFirstDayOfWeek(locale().firstDayOfWeek());
+        calendar->setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);  // no week numbers
+        apply_calendar_look();
+        style::on_theme_change(this, [this] { apply_calendar_look(); });
     }
+}
+
+void DatePicker::apply_calendar_look()
+{
+    QCalendarWidget* calendar = calendarWidget();
+    if (calendar == nullptr) {
+        return;
+    }
+    const style::Theme& theme = style::theme();
+    QTextCharFormat weekend;
+    if (!theme.high_contrast) {
+        weekend.setForeground(theme.accent_text);
+    }
+    calendar->setWeekdayTextFormat(Qt::Saturday, weekend);
+    calendar->setWeekdayTextFormat(Qt::Sunday, weekend);
+    // QCalendarWidget draws the days of the neighbouring months in the disabled text colour.
+    QPalette palette = calendar->palette();
+    palette.setColor(QPalette::Disabled, QPalette::Text,
+                     theme.high_contrast ? QApplication::palette().color(QPalette::Disabled, QPalette::Text)
+                                         : theme.text_muted);
+    calendar->setPalette(palette);
 }
 
 void DatePicker::set_bounds(const ui::DateBounds& bounds)

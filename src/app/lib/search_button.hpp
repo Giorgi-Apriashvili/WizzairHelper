@@ -1,11 +1,12 @@
 #pragma once
-// "Search outbound" / "Search return": the primary action buttons (prototype
-// "layout" look). A rounded accent (#C5006E) button with white semibold text and
+// "Search outbound" / "Search return": the primary action buttons (DECISIONS
+// D-53). A rounded accent (#C5006E) button with white semibold text and
 // an optional icon glyph before the text; lighter under the mouse, darker while
 // pressed. While disabled the face fades towards the surface and the text keeps
 // 70 % white. Keyboard focus shows as a white ring inside the face. Its height
 // is the height of every other input (ModernStyle::control_height), so it lines
-// up with the fields next to it.
+// up with the fields next to it. High Contrast paints it in the system
+// Highlight / HighlightedText, and a disabled one as a GrayText outline.
 //
 // A focused button is clicked by Enter as well as Space (01 §6.3), so Enter on a
 // search button never presses the window's other AcceptButton.

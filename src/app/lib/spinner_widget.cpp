@@ -85,8 +85,9 @@ void SpinnerWidget::paintEvent(QPaintEvent* /*event*/)
 
     painter.setBrush(Qt::NoBrush);
     const style::Theme& theme = style::theme();
-    painter.setPen(QPen(with_alpha(theme.text, theme.dark ? 50 : 40), thickness, Qt::SolidLine, Qt::FlatCap,
-                        Qt::MiterJoin));
+    // High Contrast: opaque system colours only (the track in GrayText, the dot in text).
+    const QColor track = theme.high_contrast ? theme.track : with_alpha(theme.text, theme.dark ? 50 : 40);
+    painter.setPen(QPen(track, thickness, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
     painter.drawEllipse(circle);
 
     if (spinning_) {
@@ -96,7 +97,7 @@ void SpinnerWidget::paintEvent(QPaintEvent* /*event*/)
         painter.drawArc(circle, -angle_ * kQtDegree, -geometry->sweep_degrees * kQtDegree);
     } else {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(with_alpha(theme.text, 120));
+        painter.setBrush(theme.high_contrast ? theme.text : with_alpha(theme.text, 120));
         painter.drawEllipse(QRectF(geometry->dot_left, geometry->dot_top, geometry->dot_diameter,
                                    geometry->dot_diameter));
     }

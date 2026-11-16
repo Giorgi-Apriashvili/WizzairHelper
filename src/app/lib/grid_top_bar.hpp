@@ -1,7 +1,8 @@
 #pragma once
-// The top bar of both result grids (01 §8.1, §9.1), prototype "layout"
-// direction: one row inside the results card, padding (12, 8, 12, 8), its
-// controls vertically centred and separated by their own margins.
+// The top bar of both result grids (01 §8.1, §9.1), in the look of DECISIONS
+// D-53: one row at the top of the results card, padding (12, 4, 12, 4), its
+// controls vertically centred and separated by their own margins; the summary in
+// the theme's muted text colour.
 
 #include <QMargins>
 #include <QString>
@@ -14,7 +15,9 @@ class QWidget;
 
 namespace wizz::app::grid_bar {
 
-/// The bar's row layout: Padding (12, 8, 12, 8), no spacing (margins separate the controls).
+/// Padding of the bar.
+inline constexpr QMargins kPadding{12, 4, 12, 4};
+/// The bar's row layout: kPadding, no spacing (margins separate the controls).
 [[nodiscard]] QHBoxLayout* make_row();
 /// Adds `widget` with the outer `margin` (left, top, right, bottom), vertically centred.
 void add(QHBoxLayout* row, QWidget* widget, QMargins margin, int stretch = 0);

@@ -6,7 +6,9 @@
 // remaining width (WinForms AutoSizeMode.Fill with a minimum width), header
 // texts that wrap with an auto-sized header height (DataGridView headers:
 // WrapMode True, ColumnHeadersHeightSizeMode AutoSize) and GridRowDelegate
-// cell painting.
+// cell painting. Its surface and text colours follow the look (ui_style.hpp);
+// keyboard focus shows as the selected row's accent bar, or as an accent ring
+// round the empty table.
 //
 // It turns raw input into intent signals so the grid widgets stay free of
 // event plumbing: a press on a data cell (before Qt moves the current cell),
@@ -24,6 +26,8 @@
 
 class QContextMenuEvent;
 class QEvent;
+class QFocusEvent;
+class QPaintEvent;
 class QKeyEvent;
 class QMouseEvent;
 class QResizeEvent;
@@ -41,7 +45,7 @@ public:
     void set_fill_column(int logical_column, int minimum_width);
     /// Re-applies the fill rule (after a column was shown or hidden).
     void fit_fill_column();
-    /// Row height: font height + 12 (prototype "layout" look; WinForms used + 9).
+    /// Row height: font height + 12 (DECISIONS D-53; WinForms used + 9).
     [[nodiscard]] int row_height() const;
     /// Header height: one text line, or as many as the longest wrapped header text needs.
     void fit_header_height();
@@ -79,7 +83,10 @@ protected:
     bool event(QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -87,6 +94,7 @@ protected:
 
 private:
     void apply_row_height();
+    void apply_theme();
 
     int fill_column_ = -1;
     int fill_minimum_ = 0;

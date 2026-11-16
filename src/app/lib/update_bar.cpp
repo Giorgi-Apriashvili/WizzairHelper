@@ -74,6 +74,7 @@ UpdateBar::UpdateBar(QWidget* parent) : QWidget(parent)
     connect(action_, &QPushButton::clicked, this, &UpdateBar::action_clicked);
     connect(later_, &QPushButton::clicked, this, &UpdateBar::later_clicked);
     apply_text_colour();
+    style::on_theme_change(this, [this] { apply_text_colour(); });
     hide();  // until an update is offered
 }
 

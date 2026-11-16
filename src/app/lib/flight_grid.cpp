@@ -2,6 +2,7 @@
 
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
+#include "modern_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
@@ -77,6 +78,7 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     }
     view_->setCurrentIndex(0);
     view_->setFixedWidth(kViewComboWidth);
+    ModernStyle::use_styled_popup(*view_);
     summary_ = grid_bar::make_summary_label(this);
     QHBoxLayout* bar = grid_bar::make_row();
     grid_bar::add(bar, show, grid_bar::kLabelMargin);

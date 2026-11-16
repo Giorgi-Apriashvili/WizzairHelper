@@ -2,6 +2,7 @@
 
 #include "grid_colors.hpp"
 #include "grid_row_delegate.hpp"
+#include "ui_style.hpp"
 
 #include <QScopeGuard>
 
@@ -37,9 +38,18 @@ static_assert([] {
 } // namespace
 
 FlightTableModel::FlightTableModel(std::shared_ptr<const Locale> locale, bool offer_plan_return, QObject* parent)
-    : KeyedTableModel(parent), grid_(std::move(locale), offer_plan_return), gray_text_(grid_colors::gray_text())
+    : KeyedTableModel(parent), grid_(std::move(locale), offer_plan_return)
 {
     bold_.setWeight(QFont::DemiBold);  // only the weight is set: it resolves against the view's font
+    apply_theme();
+    style::on_theme_change(this, [this] { apply_theme(); });  // the views repaint and ask again
+}
+
+void FlightTableModel::apply_theme()
+{
+    gray_text_ = QBrush{grid_colors::gray_text()};
+    cheapest_ = QBrush{grid_colors::cheapest_back()};
+    cheapest_selection_ = QBrush{grid_colors::cheapest_selection_back()};
 }
 
 std::size_t FlightTableModel::idx_at(int row) const
@@ -100,10 +110,9 @@ QVariant FlightTableModel::data(const QModelIndex& index, int role) const
     case Qt::ForegroundRole:
         return grid_.tone(row) == ui::RowTone::unavailable ? QVariant::fromValue(gray_text_) : QVariant{};
     case Qt::BackgroundRole:
-        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::cheapest_back()}) : QVariant{};
+        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(cheapest_) : QVariant{};
     case GridRowDelegate::SelectionBackgroundRole:
-        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::cheapest_selection_back()})
-                                                         : QVariant{};
+        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(cheapest_selection_) : QVariant{};
     case RowToneRole:
         return static_cast<int>(grid_.tone(row));
     default:

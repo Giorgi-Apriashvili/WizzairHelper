@@ -1,6 +1,7 @@
 #include "grid_row_delegate.hpp"
 
 #include "grid_colors.hpp"
+#include "modern_style.hpp"
 #include "ui_style.hpp"
 
 #include <QAbstractItemView>
@@ -15,9 +16,13 @@ namespace wizz::app {
 
 namespace {
 
-constexpr int kFocusBarWidth = 3;
-
 } // namespace
+
+GridRowDelegate::GridRowDelegate(QObject* parent)
+    : QStyledItemDelegate(parent), selection_(grid_colors::highlight())
+{
+    style::on_theme_change(this, [this] { selection_ = QBrush{grid_colors::highlight()}; });
+}
 
 void GridRowDelegate::initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const
 {
@@ -30,7 +35,7 @@ void GridRowDelegate::initStyleOption(QStyleOptionViewItem* option, const QModel
     const QVariant custom = index.data(SelectionBackgroundRole);
     const QColor text = grid_colors::highlight_text();
     option->state.setFlag(QStyle::State_Selected, false);
-    option->backgroundBrush = custom.isValid() ? custom.value<QBrush>() : QBrush{grid_colors::highlight()};
+    option->backgroundBrush = custom.isValid() ? custom.value<QBrush>() : selection_;
     option->palette.setColor(QPalette::Text, text);
     option->palette.setColor(QPalette::HighlightedText, text);
 }
@@ -39,12 +44,15 @@ void GridRowDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 {
     QStyledItemDelegate::paint(painter, option, index);
     const QRect r = option.rect;
-    painter->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), style::theme().row_separator);
+    const style::Theme& theme = style::theme();
+    painter->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), theme.row_separator);
     const auto* view = qobject_cast<const QAbstractItemView*>(option.widget);
     if (view != nullptr && option.state.testFlag(QStyle::State_Selected) && view->hasFocus() &&
         r.left() <= 0 && r.right() >= 0) {
         // The keyboard focus is on this grid: an accent bar at the row's visible left edge.
-        painter->fillRect(QRect(0, r.top(), kFocusBarWidth, r.height()), style::theme().accent_line);
+        // High Contrast: the row is the system highlight, so the bar takes its text colour.
+        painter->fillRect(QRect(0, r.top(), ModernStyle::kSelectionBarWidth, r.height()),
+                          theme.high_contrast ? theme.selection_text : theme.accent_line);
     }
 }
 

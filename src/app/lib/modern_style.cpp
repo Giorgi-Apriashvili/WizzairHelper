@@ -4,16 +4,22 @@
 
 #include <QAbstractItemView>
 #include <QAbstractSpinBox>
+#include <QApplication>
+#include <QCalendarWidget>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontMetrics>
 #include <QHeaderView>
+#include <QIconEngine>
 #include <QLineEdit>
+#include <QListView>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QStyleOption>
+#include <QStyledItemDelegate>
 #include <QTabBar>
 
 #include <algorithm>
@@ -28,7 +34,7 @@ constexpr int kSpinButtonsWidth = 20;
 constexpr int kFieldTextPadding = 9;
 constexpr int kButtonPadding = 16;
 constexpr int kHeaderHPadding = 9;
-constexpr int kHeaderVPadding = 6;
+constexpr int kHeaderVPadding = 5;
 constexpr int kHeaderArrowSpace = 14;
 constexpr int kIndicatorSize = 18;
 constexpr int kScrollBarExtent = 12;
@@ -184,13 +190,136 @@ void draw_focus_ring(QPainter* painter, const QRect& rect, const QColor& colour,
     return false;
 }
 
+/// A list (combo drop-down, completer popup, the place chooser), not one of the grids.
+[[nodiscard]] bool is_list(const QWidget* widget)
+{
+    return qobject_cast<const QListView*>(widget) != nullptr;
+}
+
+[[nodiscard]] bool in_calendar(const QWidget* widget)
+{
+    for (const QWidget* w = widget; w != nullptr; w = w->parentWidget()) {
+        if (qobject_cast<const QCalendarWidget*>(w) != nullptr) {
+            return true;
+        }
+        if (w->isWindow()) {
+            break;
+        }
+    }
+    return false;
+}
+
+/// A popup's own frame: a combo box's drop-down container or a popup list (completer).
+[[nodiscard]] bool is_popup_frame(const QWidget* widget)
+{
+    return widget != nullptr && (widget->inherits("QComboBoxPrivateContainer") ||
+                                 (widget->isWindow() && widget->windowType() == Qt::Popup));
+}
+
+/// Text inset of a menu item: the selection box (4 px in) plus the pill and a gap.
+constexpr int kMenuTextIndent = 16;
+constexpr int kMenuItemVPadding = 6;
+
+/// Fills `box` with the selection tint and draws the accent pill at its left.
+void draw_selected_item(QPainter* painter, const QRectF& box)
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(t().selection);
+    painter->drawRoundedRect(box, ModernStyle::kRadius - 1, ModernStyle::kRadius - 1);
+    const qreal pill = std::max<qreal>(8.0, std::min<qreal>(16.0, box.height() - 10.0));
+    painter->setBrush(t().accent_line);
+    painter->drawRoundedRect(
+        QRectF(box.left(), box.center().y() - pill / 2.0, ModernStyle::kSelectionBarWidth, pill), 1.5, 1.5);
+    painter->restore();
+}
+
+void draw_hovered_item(QPainter* painter, const QRectF& box)
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(t().hover);
+    painter->drawRoundedRect(box, ModernStyle::kRadius - 1, ModernStyle::kRadius - 1);
+    painter->restore();
+}
+
+/// The surface colour, read when it paints (follows a change of the look).
+class SurfaceCorner final : public QWidget {
+public:
+    explicit SurfaceCorner(QWidget* parent) : QWidget(parent) { setAttribute(Qt::WA_OpaquePaintEvent); }
+
+protected:
+    void paintEvent(QPaintEvent* /*event*/) override
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), t().surface);
+    }
+};
+
+/// A chevron icon (calendar month arrows) in the theme's secondary text colour, read
+/// when it paints, so it follows a change of the look.
+class ChevronIconEngine final : public QIconEngine {
+public:
+    explicit ChevronIconEngine(Qt::ArrowType direction) : direction_(direction) {}
+
+    void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State /*state*/) override
+    {
+        const QColor colour = mode == QIcon::Disabled ? t().text_disabled : t().text_secondary;
+        const qreal half = std::clamp(std::min(rect.width(), rect.height()) / 3.5, 2.5, 6.0);
+        draw_chevron(painter, QRectF(rect).center(), half, direction_, colour, 1.6);
+    }
+
+    [[nodiscard]] QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
+    {
+        return scaledPixmap(size, mode, state, 1.0);
+    }
+
+    [[nodiscard]] QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State state, qreal scale) override
+    {
+        QPixmap pixmap((QSizeF(size) * scale).toSize());
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        paint(&painter, QRect(QPoint(0, 0), size), mode, state);
+        return pixmap;
+    }
+
+    [[nodiscard]] QSize actualSize(const QSize& size, QIcon::Mode /*mode*/, QIcon::State /*state*/) override
+    {
+        return size;
+    }
+
+    [[nodiscard]] QIconEngine* clone() const override { return new ChevronIconEngine(direction_); }
+    [[nodiscard]] QString key() const override { return QStringLiteral("wizz.chevron"); }
+
+private:
+    Qt::ArrowType direction_;
+};
+
 } // namespace
 
 ModernStyle::ModernStyle(QStyle* base) : QProxyStyle(base) {}
 
+bool ModernStyle::is_active()
+{
+    return dynamic_cast<const ModernStyle*>(QApplication::style()) != nullptr;
+}
+
 int ModernStyle::control_height(const QFontMetrics& metrics)
 {
     return std::max(26, metrics.height() + 10);
+}
+
+void ModernStyle::use_styled_popup(QComboBox& combo)
+{
+    combo.setItemDelegate(new QStyledItemDelegate(&combo));
+}
+
+QWidget* ModernStyle::make_surface_corner(QWidget* parent)
+{
+    return new SurfaceCorner(parent);
 }
 
 void ModernStyle::polish(QWidget* widget)
@@ -202,15 +331,13 @@ void ModernStyle::polish(QWidget* widget)
         qobject_cast<QHeaderView*>(widget) != nullptr) {
         widget->setAttribute(Qt::WA_Hover);
     }
+    if (auto* list = qobject_cast<QListView*>(widget); list != nullptr) {
+        list->viewport()->setAttribute(Qt::WA_Hover);  // a hovered item gets the hover fill
+    }
     if (auto* area = qobject_cast<QAbstractScrollArea*>(widget);
         area != nullptr && area->cornerWidget() == nullptr && qobject_cast<QAbstractItemView*>(widget) != nullptr) {
         // Where the two scroll bars meet: the surface, not a grey square.
-        auto* corner = new QWidget(area);
-        corner->setAutoFillBackground(true);
-        QPalette colours = corner->palette();
-        colours.setColor(QPalette::Window, t().surface);
-        corner->setPalette(colours);
-        area->setCornerWidget(corner);
+        area->setCornerWidget(make_surface_corner(area));
     }
 }
 
@@ -254,15 +381,23 @@ int ModernStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, con
     case PM_SpinBoxFrameWidth:
         return 2;
     case PM_FocusFrameHMargin:
+        if (is_list(widget)) {
+            return 10;  // list item text clear of the selection pill
+        }
         if (in_item_view(widget)) {
             return 7;  // grid cell text 8 px from the cell edges
         }
         break;
     case PM_ToolTipLabelFrameWidth:
         return 6;
+    case PM_MenuPanelWidth:
+        return 1;
     case PM_MenuHMargin:
+        return 0;
     case PM_MenuVMargin:
         return 4;
+    case PM_SubMenuOverlap:
+        return 0;
     default:
         break;
     }
@@ -341,6 +476,37 @@ QSize ModernStyle::sizeFromContents(ContentsType type, const QStyleOption* optio
     case CT_CheckBox: {
         const QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
         return QSize(result.width(), std::max(result.height(), kIndicatorSize + 4));
+    }
+    case CT_ItemViewItem: {
+        QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
+        if (is_list(widget)) {
+            result.setHeight(std::max(result.height(), option->fontMetrics.height() + 12));  // roomy list items
+        }
+        return result;
+    }
+    case CT_MenuItem: {
+        const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
+        if (item == nullptr) {
+            break;
+        }
+        if (item->menuItemType == QStyleOptionMenuItem::Separator) {
+            return QSize(size.width(), 9);
+        }
+        const QFontMetrics metrics(item->font);
+        QString text = item->text;
+        QString shortcut;
+        if (const qsizetype tab = text.indexOf(u'\t'); tab >= 0) {
+            shortcut = text.mid(tab + 1);
+            text.truncate(tab);
+        }
+        int width = metrics.size(Qt::TextShowMnemonic, text).width() + 2 * kMenuTextIndent;
+        if (!shortcut.isEmpty()) {
+            width += metrics.horizontalAdvance(shortcut) + 24;
+        }
+        if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
+            width += 16;
+        }
+        return QSize(std::max(width, 140), metrics.height() + 2 * kMenuItemVPadding);
     }
     default:
         break;
@@ -469,7 +635,7 @@ QRect ModernStyle::subElementRect(SubElement element, const QStyleOption* option
     case SE_TabWidgetTabContents: {
         // Inside the pane's 1 px frame; the bottom keeps clear of the rounded corners.
         const QRect pane = proxy()->subElementRect(SE_TabWidgetTabPane, option, widget);
-        return pane.adjusted(1, 1, -1, -6);
+        return pane.adjusted(1, 1, -1, -4);
     }
     default:
         break;
@@ -477,10 +643,73 @@ QRect ModernStyle::subElementRect(SubElement element, const QStyleOption* option
     return QProxyStyle::subElementRect(element, option, widget);
 }
 
+QIcon ModernStyle::standardIcon(StandardPixmap standard_icon, const QStyleOption* option, const QWidget* widget) const
+{
+    switch (standard_icon) {
+    case SP_ArrowLeft:
+    case SP_ArrowBack:
+        return QIcon(new ChevronIconEngine(Qt::LeftArrow));  // the calendar's month arrows
+    case SP_ArrowRight:
+    case SP_ArrowForward:
+        return QIcon(new ChevronIconEngine(Qt::RightArrow));
+    default:
+        break;
+    }
+    return QProxyStyle::standardIcon(standard_icon, option, widget);
+}
+
 void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
                                 const QWidget* widget) const
 {
     switch (element) {
+    case PE_PanelItemViewItem:
+        if (const auto* item = qstyleoption_cast<const QStyleOptionViewItem*>(option);
+            item != nullptr && is_list(widget)) {
+            if (item->backgroundBrush.style() != Qt::NoBrush) {
+                painter->fillRect(item->rect, item->backgroundBrush);
+            }
+            const bool enabled = item->state.testFlag(State_Enabled);
+            const QRectF box = QRectF(item->rect).adjusted(4, 1, -4, -1);
+            if (item->state.testFlag(State_Selected) && enabled) {
+                draw_selected_item(painter, box);
+            } else if (item->state.testFlag(State_MouseOver) && enabled) {
+                draw_hovered_item(painter, box);
+            }
+            return;
+        }
+        break;
+    case PE_PanelMenu:
+    case PE_FrameMenu: {
+        painter->save();
+        if (element == PE_PanelMenu) {
+            painter->fillRect(option->rect, t().surface);
+        }
+        painter->setPen(t().input_border);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(QRectF(option->rect).adjusted(0.5, 0.5, -0.5, -0.5));
+        painter->restore();
+        return;
+    }
+    case PE_Frame:
+        if (is_popup_frame(widget)) {
+            painter->save();
+            painter->setPen(t().input_border);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(QRectF(option->rect).adjusted(0.5, 0.5, -0.5, -0.5));
+            painter->restore();
+            return;
+        }
+        if (qobject_cast<const QAbstractScrollArea*>(widget) != nullptr) {
+            // A framed list or text box (the place chooser's list): the input frame.
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(QPen(t().input_border, 1.0));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(QRectF(option->rect).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+            painter->restore();
+            return;
+        }
+        break;
     case PE_PanelLineEdit: {
         if (parent_is_spin_box(widget)) {
             return;  // the spin box paints the field
@@ -711,13 +940,55 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
         return;
     case CE_MenuItem:
         if (const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option)) {
-            QStyleOptionMenuItem quiet = *item;
-            quiet.palette.setColor(QPalette::Highlight, t().selection);
-            quiet.palette.setColor(QPalette::HighlightedText, t().selection_text);
-            QProxyStyle::drawControl(element, &quiet, painter, widget);
+            const QRect r = item->rect;
+            painter->save();
+            painter->fillRect(r, t().surface);
+            if (item->menuItemType == QStyleOptionMenuItem::Separator) {
+                painter->fillRect(QRect(r.left() + 8, r.center().y(), r.width() - 16, 1), t().border);
+                painter->restore();
+                return;
+            }
+            const bool enabled = item->state.testFlag(State_Enabled);
+            const bool selected = enabled && item->state.testFlag(State_Selected);
+            if (selected) {
+                draw_selected_item(painter, QRectF(r).adjusted(4, 1, -4, -1));
+            }
+            QString text = item->text;
+            QString shortcut;
+            if (const qsizetype tab = text.indexOf(u'\t'); tab >= 0) {
+                shortcut = text.mid(tab + 1);
+                text.truncate(tab);
+            }
+            const QRect text_rect = r.adjusted(kMenuTextIndent, 0, -kMenuTextIndent, 0);
+            int flags = Qt::AlignVCenter | Qt::TextShowMnemonic | Qt::TextDontClip | Qt::TextSingleLine;
+            if (proxy()->styleHint(SH_UnderlineShortcut, item, widget) == 0) {
+                flags |= Qt::TextHideMnemonic;
+            }
+            painter->setFont(item->font);
+            painter->setPen(!enabled ? t().text_disabled : selected ? t().selection_text : t().text);
+            painter->drawText(text_rect, flags | Qt::AlignLeft, text);
+            if (!shortcut.isEmpty()) {
+                painter->setPen(enabled ? t().text_muted : t().text_disabled);
+                painter->drawText(text_rect, flags | Qt::AlignRight, shortcut);
+            }
+            if (item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked) {
+                painter->setRenderHint(QPainter::Antialiasing);
+                painter->setPen(QPen(enabled ? t().accent_line : t().text_disabled, 1.6, Qt::SolidLine, Qt::RoundCap,
+                                     Qt::RoundJoin));
+                const QPointF o(r.left() + 7, r.center().y());
+                painter->drawPolyline(QPolygonF() << o + QPointF(0, 0) << o + QPointF(2.5, 2.5) << o + QPointF(6, -3));
+            }
+            if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
+                draw_chevron(painter, QPointF(r.right() - 12, r.center().y()), 4, Qt::RightArrow,
+                             enabled ? t().text_secondary : t().text_disabled);
+            }
+            painter->restore();
             return;
         }
         break;
+    case CE_MenuEmptyArea:
+        painter->fillRect(option->rect, t().surface);
+        return;
     default:
         break;
     }

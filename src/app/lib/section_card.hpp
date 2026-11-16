@@ -1,5 +1,5 @@
 #pragma once
-// A titled card of the grouped input area (prototype "layout" direction):
+// A titled card of the grouped input area (DECISIONS D-53):
 //
 //   ┌──────────────────────────────────────────────────┐
 //   │ (icon) CAPTION   optional hint in muted text     │
@@ -8,9 +8,10 @@
 //
 // A rounded surface with a 1 px border on the window background; the caption is
 // small, semibold, upper case and tracked, the icon an accent-coloured glyph of
-// the icon font (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10).
+// the icon font (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10). Colours
+// are read from the theme when the card paints, and the caption and hint take
+// theirs again when the look changes.
 
-#include <QColor>
 #include <QMargins>
 #include <QWidget>
 
@@ -20,12 +21,15 @@ class QVBoxLayout;
 
 namespace wizz::app {
 
-/// One icon-font glyph, by default in the accent colour, optionally mirrored (the return plane).
+/// One icon-font glyph in the accent colour (or the muted text colour), optionally
+/// mirrored (the return plane).
 class GlyphLabel final : public QWidget {
     Q_OBJECT
 
 public:
-    GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent = nullptr, QColor colour = {},
+    enum class Tone { accent, muted };
+
+    GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent = nullptr, Tone tone = Tone::accent,
                qreal point_size = 11.0);
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }
@@ -36,7 +40,7 @@ protected:
 private:
     char16_t glyph_;
     bool mirrored_;
-    QColor colour_;
+    Tone tone_;
     qreal point_size_;
 };
 
@@ -45,7 +49,10 @@ class SectionCard final : public QWidget {
 
 public:
     /// Contents margins of the card.
-    static constexpr QMargins kPadding{14, 8, 14, 10};
+    static constexpr QMargins kPadding{14, 6, 14, 8};
+    /// Between the caption row and the first body row, and between body rows.
+    static constexpr int kHeaderGap = 5;
+    static constexpr int kRowGap = 6;
 
     SectionCard(const QString& title, char16_t glyph, bool mirror_glyph = false, QWidget* parent = nullptr);
 

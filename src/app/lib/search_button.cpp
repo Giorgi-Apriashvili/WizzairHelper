@@ -64,6 +64,9 @@ QSize SearchButton::minimumSizeHint() const
 QColor SearchButton::background_color() const
 {
     const style::Theme& theme = style::theme();
+    if (theme.high_contrast) {
+        return isEnabled() ? theme.accent : theme.window;  // system Highlight / Window only
+    }
     if (!isEnabled()) {
         QColor faded = theme.accent;
         faded.setAlphaF(0.45F);
@@ -80,7 +83,11 @@ QColor SearchButton::background_color() const
 
 QColor SearchButton::text_color() const
 {
-    return isEnabled() ? QColor(Qt::white) : style::search_button_disabled_text();
+    const style::Theme& theme = style::theme();
+    if (theme.high_contrast) {
+        return isEnabled() ? theme.on_accent : theme.text_disabled;  // HighlightedText / GrayText
+    }
+    return isEnabled() ? theme.on_accent : style::search_button_disabled_text();
 }
 
 void SearchButton::paintEvent(QPaintEvent* /*event*/)
@@ -88,7 +95,9 @@ void SearchButton::paintEvent(QPaintEvent* /*event*/)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF face = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    painter.setPen(Qt::NoPen);
+    const style::Theme& theme = style::theme();
+    // High Contrast: a disabled button keeps a GrayText outline, so its shape stays visible.
+    painter.setPen(theme.high_contrast && !isEnabled() ? QPen(theme.text_disabled, 1.0) : QPen(Qt::NoPen));
     painter.setBrush(background_color());
     painter.drawRoundedRect(face, ModernStyle::kRadius, ModernStyle::kRadius);
 
@@ -109,7 +118,9 @@ void SearchButton::paintEvent(QPaintEvent* /*event*/)
 
     if (hasFocus()) {
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5));
+        QColor ring = theme.on_accent;
+        ring.setAlpha(theme.high_contrast ? 255 : 230);
+        painter.setPen(QPen(ring, 1.5));
         painter.drawRoundedRect(QRectF(rect()).adjusted(2.75, 2.75, -2.75, -2.75), ModernStyle::kRadius - 2,
                                 ModernStyle::kRadius - 2);
     }

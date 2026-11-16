@@ -2,6 +2,7 @@
 
 #include "date_picker.hpp"
 #include "fractional_spin_box.hpp"
+#include "modern_style.hpp"
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
@@ -33,9 +34,10 @@ namespace {
 namespace strings = ui::strings;
 
 // Geometry of the grouped layout (logical pixels).
-constexpr QMargins kPanelPadding{16, 8, 16, 2};
-constexpr int kCardGap = 10;
+constexpr QMargins kPanelPadding{16, 6, 16, 0};
+constexpr int kCardGap = 8;
 constexpr int kFieldGap = 8;
+constexpr int kResolvedGap = 4;  // between the cards and the resolved line
 constexpr int kPlaceMinimumWidth = 180;
 constexpr int kPlaceMinimumChars = 14;
 constexpr int kRadiusWidth = 76;
@@ -52,17 +54,8 @@ constexpr int kMaxAdults = 9;
 {
     auto* label = new QLabel(to_qstring(text), parent);
     label->setTextFormat(Qt::PlainText);
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, style::theme().text_secondary);
-    label->setPalette(palette);
+    style::set_text_tone(*label, style::TextTone::secondary);
     return label;
-}
-
-void make_gray(QWidget& widget)
-{
-    QPalette palette = widget.palette();
-    palette.setColor(QPalette::WindowText, style::gray_text());
-    widget.setPalette(palette);
 }
 
 [[nodiscard]] FractionalSpinBox* make_numeric(QWidget* parent, const NumberSymbols& symbols, double minimum,
@@ -104,7 +97,7 @@ void InputPanel::build()
     const NumberSymbols& symbols = locale_->number_symbols();
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(kPanelPadding);
-    outer->setSpacing(6);
+    outer->setSpacing(kResolvedGap);
 
     auto* where = new SectionCard(to_qstring(strings::kSectionWhere), style::glyph::kMapPin, false, this);
     where->set_hint(to_qstring(strings::kHintAnywhere));
@@ -147,7 +140,7 @@ void InputPanel::build()
     auto* places = new QGridLayout;
     places->setContentsMargins(0, 0, 0, 0);
     places->setHorizontalSpacing(kFieldGap);
-    places->setVerticalSpacing(kFieldGap);
+    places->setVerticalSpacing(SectionCard::kRowGap);
     const auto add_place_row = [&](int row, std::string_view label, PlaceCombo* place, FractionalSpinBox* radius) {
         places->addWidget(make_label(label, where), row, 0, Qt::AlignLeft | Qt::AlignVCenter);
         places->addWidget(place, row, 1);
@@ -167,15 +160,17 @@ void InputPanel::build()
         fare_->addItem(to_qstring(item));
     }
     fare_->setFixedWidth(kFareWidth);
+    ModernStyle::use_styled_popup(*fare_);
     currency_ = new QComboBox(travellers);
     for (const std::string_view code : strings::kCurrencies) {
         currency_->addItem(to_qstring(code));
     }
     currency_->setFixedWidth(kCurrencyWidth);
+    ModernStyle::use_styled_popup(*currency_);
     auto* who = new QGridLayout;
     who->setContentsMargins(0, 0, 0, 0);
     who->setHorizontalSpacing(kFieldGap);
-    who->setVerticalSpacing(kFieldGap);
+    who->setVerticalSpacing(SectionCard::kRowGap);
     who->addWidget(make_label(strings::kLabelAdults, travellers), 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
     who->addWidget(adults_, 0, 1, Qt::AlignLeft);
     who->addWidget(fare_, 0, 2, Qt::AlignLeft);
@@ -232,11 +227,11 @@ void InputPanel::build()
     resolved_->setWordWrap(true);
     resolved_->setContentsMargins(kResolvedMargins);
     resolved_->setFont(style::hint_font());
-    make_gray(*resolved_);
+    style::set_text_tone(*resolved_, style::TextTone::muted);
     auto* resolved_row = new QHBoxLayout;
     resolved_row->setContentsMargins(2, 0, 0, 0);
     resolved_row->setSpacing(4);
-    resolved_row->addWidget(new GlyphLabel(style::glyph::kInfo, false, this, style::theme().text_muted, 9.0), 0,
+    resolved_row->addWidget(new GlyphLabel(style::glyph::kInfo, false, this, GlyphLabel::Tone::muted, 9.0), 0,
                             Qt::AlignTop);
     resolved_row->addWidget(resolved_, 1);
     outer->addLayout(resolved_row);

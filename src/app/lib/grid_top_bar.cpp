@@ -1,6 +1,5 @@
 #include "grid_top_bar.hpp"
 
-#include "grid_colors.hpp"
 #include "ui_style.hpp"
 
 #include <QHBoxLayout>
@@ -14,7 +13,7 @@ namespace wizz::app::grid_bar {
 QHBoxLayout* make_row()
 {
     auto* row = new QHBoxLayout;
-    row->setContentsMargins(12, 6, 12, 6);
+    row->setContentsMargins(kPadding);
     row->setSpacing(0);
     return row;
 }
@@ -37,9 +36,7 @@ QLabel* make_summary_label(QWidget* parent)
     label->setWordWrap(false);
     label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, grid_colors::gray_text());
-    label->setPalette(palette);
+    style::set_text_tone(*label, style::TextTone::muted);
     return label;
 }
 

@@ -2,57 +2,170 @@
 
 #include "modern_style.hpp"
 
+#include <QAccessibilityHints>
 #include <QApplication>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRawFont>
 #include <QStyleFactory>
 #include <QStyleHints>
+#include <QToolTip>
+#include <QWidget>
+
+#include <cmath>
+#include <map>
+#include <tuple>
+#include <utility>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace wizz::app::style {
 
 namespace {
 
-[[nodiscard]] Theme& current()
+constexpr qreal kFormPointSize = 10.0;
+
+/// The look in use and how it came about.
+struct State {
+    Theme theme = light_theme();
+    std::optional<Appearance> appearance;  ///< none until apply_application_look()
+    bool forced_scheme = false;            ///< setColorScheme() was called for WIZZ_COLOR_SCHEME
+    bool following = false;                ///< connected to Windows' change signals
+    bool refresh_pending = false;
+    HighContrastProbe probe;
+};
+
+[[nodiscard]] State& state()
 {
-    static Theme theme = light_theme();
-    return theme;
+    static State instance;
+    return instance;
 }
 
-[[nodiscard]] QFont with_families(std::initializer_list<QString> families, qreal point_size)
+[[nodiscard]] QFont with_families(const QStringList& list, qreal point_size)
 {
     QFont font;
-    font.setFamilies(QStringList(families));
+    font.setFamilies(list);
     font.setPointSizeF(point_size);
     return font;
 }
 
-/// The scheme WIZZ_COLOR_SCHEME forces, if any.
-[[nodiscard]] std::optional<Qt::ColorScheme> forced_scheme()
+/// `windows11` first unless WIZZ_FONTS=windows10, then the fallbacks.
+[[nodiscard]] QStringList families(std::initializer_list<const char*> windows11, std::initializer_list<const char*> rest)
 {
-    const QByteArray value = qgetenv("WIZZ_COLOR_SCHEME").trimmed().toLower();
-    if (value == "dark") {
-        return Qt::ColorScheme::Dark;
+    QStringList list;
+    if (!windows10_fonts()) {
+        for (const char* family : windows11) {
+            list.push_back(QString::fromLatin1(family));
+        }
     }
-    if (value == "light") {
-        return Qt::ColorScheme::Light;
+    for (const char* family : rest) {
+        list.push_back(QString::fromLatin1(family));
     }
-    return std::nullopt;
+    return list;
 }
 
-void use_scheme(Qt::ColorScheme scheme)
+[[nodiscard]] bool system_high_contrast()
 {
-    current() = scheme == Qt::ColorScheme::Dark ? dark_theme() : light_theme();
-    QApplication::setPalette(make_palette(current()));
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = static_cast<UINT>(sizeof(contrast));
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize, &contrast, 0) != FALSE &&
+           (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+}
+
+[[nodiscard]] bool default_high_contrast()
+{
+    if (const std::optional<bool> forced = parse_switch(qgetenv("WIZZ_HIGH_CONTRAST"))) {
+        return *forced;
+    }
+    return system_high_contrast();
+}
+
+[[nodiscard]] double channel(double value)
+{
+    return value <= 0.03928 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+}
+
+[[nodiscard]] double luminance(const QColor& colour)
+{
+    return 0.2126 * channel(colour.redF()) + 0.7152 * channel(colour.greenF()) + 0.0722 * channel(colour.blueF());
+}
+
+/// Installs `look`: style, palette and tooltip palette.
+void install(Appearance look)
+{
+    State& s = state();
+    if (look == Appearance::high_contrast) {
+        // The user's contrast theme wins: the plain native style draws the controls with the
+        // system colours, and the palette is the system's (an empty palette resolves to the
+        // platform theme's and keeps following it).
+        QStyle* plain = QStyleFactory::create(QStringLiteral("windowsvista"));
+        if (plain == nullptr) {
+            plain = QStyleFactory::create(QStringLiteral("Windows"));
+        }
+        if (plain != nullptr) {
+            QApplication::setStyle(plain);
+        }
+        QApplication::setPalette(QPalette());
+        s.theme = high_contrast_theme(QApplication::palette());
+        QToolTip::setPalette(QApplication::palette());
+        return;
+    }
+    s.theme = look == Appearance::dark ? dark_theme() : light_theme();
+    if (!ModernStyle::is_active()) {
+        if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
+            QApplication::setStyle(new ModernStyle(fusion));  // the application takes ownership
+        }
+    }
+    const QPalette palette = make_palette(s.theme);
+    QApplication::setPalette(palette);
+    // Tooltips have a palette of their own, which Qt takes from Windows' (light) tooltip
+    // colours; the panel is painted from the theme, so the text must follow it too.
+    QToolTip::setPalette(palette);
+}
+
+/// The scheme Windows reports, without a WIZZ_COLOR_SCHEME request of ours in it.
+[[nodiscard]] Qt::ColorScheme system_scheme(QStyleHints& hints, std::optional<Qt::ColorScheme> forced)
+{
+    State& s = state();
+    if (forced) {
+        if (!s.forced_scheme || hints.colorScheme() != *forced) {
+            hints.setColorScheme(*forced);  // the title bar follows
+            s.forced_scheme = true;
+        }
+        return *forced;
+    }
+    if (s.forced_scheme) {
+        hints.unsetColorScheme();  // the override went away (tests): follow Windows again
+        s.forced_scheme = false;
+    }
+    return hints.colorScheme();
+}
+
+void follow_windows()
+{
+    State& s = state();
+    if (s.following) {
+        return;
+    }
+    s.following = true;
+    QStyleHints* hints = QGuiApplication::styleHints();
+    QObject::connect(hints, &QStyleHints::colorSchemeChanged, theme_notifier(),
+                     [] { schedule_appearance_refresh(); });
+    QObject::connect(hints->accessibility(), &QAccessibilityHints::contrastPreferenceChanged, theme_notifier(),
+                     [] { schedule_appearance_refresh(); });
 }
 
 } // namespace
 
 const Theme& theme()
 {
-    return current();
+    return state().theme;
 }
 
 Theme light_theme()
@@ -76,9 +189,11 @@ Theme light_theme()
     t.accent_hover = QColor(0xB1, 0x00, 0x63);
     t.accent_pressed = QColor(0x96, 0x00, 0x54);
     t.accent_line = QColor(0xC5, 0x00, 0x6E);
+    t.accent_text = QColor(0xC5, 0x00, 0x6E);
     t.on_accent = QColor(0xFF, 0xFF, 0xFF);
     t.selection = QColor(0xFB, 0xE2, 0xEF);
     t.selection_text = t.text;
+    t.hover = QColor(0xF3, 0xF1, 0xF6);
     t.cheapest = QColor(0xE7, 0xF5, 0xEB);
     t.cheapest_selection = QColor(0xC6, 0xE9, 0xD0);
     t.success = QColor(0x1A, 0x7F, 0x37);
@@ -116,9 +231,11 @@ Theme dark_theme()
     t.accent_hover = QColor(0xD4, 0x1A, 0x80);
     t.accent_pressed = QColor(0xA8, 0x00, 0x5E);
     t.accent_line = QColor(0xF0, 0x5A, 0xA8);
+    t.accent_text = QColor(0xF7, 0x72, 0xB8);
     t.on_accent = QColor(0xFF, 0xFF, 0xFF);
     t.selection = QColor(0x4B, 0x18, 0x34);
     t.selection_text = t.text;
+    t.hover = QColor(0x33, 0x31, 0x3B);
     t.cheapest = QColor(0x17, 0x30, 0x22);
     t.cheapest_selection = QColor(0x22, 0x52, 0x36);
     t.success = QColor(0x5C, 0xCB, 0x85);
@@ -132,6 +249,57 @@ Theme dark_theme()
     t.button_hover = QColor(0x34, 0x33, 0x3C);
     t.button_pressed = QColor(0x24, 0x23, 0x2A);
     t.update_tint = QColor(0x36, 0x16, 0x29);
+    return t;
+}
+
+Theme high_contrast_theme(const QPalette& system)
+{
+    const QColor window = system.color(QPalette::Active, QPalette::Window);
+    const QColor window_text = system.color(QPalette::Active, QPalette::WindowText);
+    const QColor base = system.color(QPalette::Active, QPalette::Base);
+    const QColor highlight = system.color(QPalette::Active, QPalette::Highlight);
+    const QColor highlighted_text = system.color(QPalette::Active, QPalette::HighlightedText);
+    const QColor gray_text = system.color(QPalette::Disabled, QPalette::WindowText);
+    const QColor button = system.color(QPalette::Active, QPalette::Button);
+
+    Theme t;
+    t.dark = window.lightness() < 128;
+    t.high_contrast = true;
+    t.window = window;
+    t.surface = window;
+    t.surface_alt = window;
+    t.input = base;
+    t.input_disabled = window;
+    t.border = window_text;
+    t.input_border = window_text;
+    t.input_border_hover = highlight;
+    t.input_underline = window_text;
+    t.text = window_text;
+    t.text_secondary = window_text;
+    t.text_muted = window_text;
+    t.text_disabled = gray_text;
+    t.accent = highlight;
+    t.accent_hover = highlight;
+    t.accent_pressed = highlight;
+    t.accent_line = highlight;
+    t.accent_text = window_text;
+    t.on_accent = highlighted_text;
+    t.selection = highlight;
+    t.selection_text = highlighted_text;
+    t.hover = window;
+    t.cheapest = window;
+    t.cheapest_selection = highlight;
+    t.success = window_text;
+    t.failure = window_text;
+    t.warning = window_text;
+    t.row_separator = gray_text;
+    t.track = gray_text;
+    t.scroll_thumb = window_text;
+    t.scroll_thumb_hover = highlight;
+    t.button = button;
+    t.button_hover = button;
+    t.button_pressed = button;
+    t.update_tint = window;
     return t;
 }
 
@@ -155,42 +323,195 @@ QPalette make_palette(const Theme& t)
     set_all(QPalette::Mid, t.border);
     set_all(QPalette::Dark, t.input_border);
     set_all(QPalette::Shadow, t.dark ? QColor(0, 0, 0) : QColor(0x8A, 0x86, 0x92));
-    set_all(QPalette::Highlight, t.accent);
-    set_all(QPalette::HighlightedText, t.on_accent);
-    set_all(QPalette::Link, t.accent_line);
-    set_all(QPalette::LinkVisited, t.accent_line);
+    // Every selection is the soft tint with the normal text colour, like the grids': list
+    // items, combo and completer popups, menus, the calendar, selected text.
+    set_all(QPalette::Highlight, t.selection);
+    set_all(QPalette::HighlightedText, t.selection_text);
+    set_all(QPalette::Link, t.accent_text);
+    set_all(QPalette::LinkVisited, t.accent_text);
     set_all(QPalette::Accent, t.accent);
     for (const QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText}) {
         p.setColor(QPalette::Disabled, role, t.text_disabled);
     }
     p.setColor(QPalette::Disabled, QPalette::Base, t.input_disabled);
     p.setColor(QPalette::Disabled, QPalette::Button, t.input_disabled);
-    p.setColor(QPalette::Disabled, QPalette::Highlight, t.text_disabled);
+    p.setColor(QPalette::Disabled, QPalette::Highlight, t.input_disabled);
+    p.setColor(QPalette::Disabled, QPalette::HighlightedText, t.text_disabled);
     return p;
+}
+
+double contrast_ratio(const QColor& a, const QColor& b)
+{
+    const double la = luminance(a);
+    const double lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+// --- Choosing the look ---------------------------------------------------------------------
+
+std::optional<Qt::ColorScheme> parse_color_scheme(QByteArrayView value)
+{
+    const QByteArray text = value.toByteArray().trimmed().toLower();
+    if (text == "dark") {
+        return Qt::ColorScheme::Dark;
+    }
+    if (text == "light") {
+        return Qt::ColorScheme::Light;
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> parse_switch(QByteArrayView value)
+{
+    const QByteArray text = value.toByteArray().trimmed().toLower();
+    if (text == "1" || text == "on" || text == "true" || text == "yes") {
+        return true;
+    }
+    if (text == "0" || text == "off" || text == "false" || text == "no") {
+        return false;
+    }
+    return std::nullopt;
+}
+
+Appearance choose_appearance(bool high_contrast, std::optional<Qt::ColorScheme> forced, Qt::ColorScheme system) noexcept
+{
+    if (high_contrast) {
+        return Appearance::high_contrast;
+    }
+    return forced.value_or(system) == Qt::ColorScheme::Dark ? Appearance::dark : Appearance::light;
+}
+
+HighContrastProbe set_high_contrast_probe(HighContrastProbe probe)
+{
+    return std::exchange(state().probe, std::move(probe));
+}
+
+bool high_contrast_active()
+{
+    const HighContrastProbe& probe = state().probe;
+    return probe ? probe() : default_high_contrast();
+}
+
+Appearance appearance()
+{
+    return state().appearance.value_or(Appearance::light);
+}
+
+ThemeNotifier* theme_notifier()
+{
+    static QPointer<ThemeNotifier> notifier;
+    if (notifier.isNull()) {
+        notifier = new ThemeNotifier(QCoreApplication::instance());
+    }
+    return notifier.data();
+}
+
+QColor tone_colour(TextTone tone)
+{
+    switch (tone) {
+    case TextTone::secondary:
+        return theme().text_secondary;
+    case TextTone::muted:
+        return theme().text_muted;
+    case TextTone::normal:
+        break;
+    }
+    return theme().text;
+}
+
+void set_text_tone(QWidget& widget, TextTone tone)
+{
+    const auto apply = [&widget, tone] {
+        QPalette palette = widget.palette();
+        palette.setColor(QPalette::WindowText, tone_colour(tone));
+        widget.setPalette(palette);
+    };
+    apply();
+    on_theme_change(&widget, apply);
+}
+
+bool apply_application_look()
+{
+    QApplication::setFont(form_font());
+    const bool fusion = QStyleFactory::keys().contains(QStringLiteral("Fusion"), Qt::CaseInsensitive);
+    state().appearance.reset();  // install whatever is chosen now
+    refresh_appearance();
+    follow_windows();
+    return fusion;
+}
+
+bool refresh_appearance()
+{
+    State& s = state();
+    s.refresh_pending = false;
+    QStyleHints* hints = QGuiApplication::styleHints();
+    const std::optional<Qt::ColorScheme> forced = parse_color_scheme(qgetenv("WIZZ_COLOR_SCHEME"));
+    const bool contrast = high_contrast_active();
+    const Qt::ColorScheme system = system_scheme(*hints, forced);
+    const Appearance look = choose_appearance(contrast, forced, system);
+    if (s.appearance == look) {
+        bool same = true;
+        if (look == Appearance::high_contrast) {
+            // Windows may have switched to another contrast theme, whose colours the system
+            // palette has now.
+            const Theme now = high_contrast_theme(QApplication::palette());
+            same = now.text == s.theme.text && now.window == s.theme.window && now.accent == s.theme.accent &&
+                   now.input == s.theme.input;
+        }
+        if (same) {
+            // Qt sets the tooltip palette back to Windows' on any theme change.
+            QToolTip::setPalette(look == Appearance::high_contrast ? QApplication::palette() : make_palette(s.theme));
+            return false;
+        }
+    }
+    s.appearance = look;
+    install(look);
+    Q_EMIT theme_notifier()->changed();
+    for (QWidget* widget : QApplication::allWidgets()) {
+        widget->update();  // custom-painted widgets read the tokens when they paint
+    }
+    return true;
+}
+
+void schedule_appearance_refresh()
+{
+    State& s = state();
+    if (s.refresh_pending) {
+        return;
+    }
+    s.refresh_pending = true;
+    // Queued: Qt finishes its own handling of the theme change (palettes, tooltip
+    // palette) first, and the many ThemeChange events of one switch cost one refresh.
+    QMetaObject::invokeMethod(theme_notifier(), [] { refresh_appearance(); }, Qt::QueuedConnection);
+}
+
+// --- Fonts and icons -----------------------------------------------------------------------
+
+bool windows10_fonts()
+{
+    return qgetenv("WIZZ_FONTS").trimmed().toLower() == "windows10";
 }
 
 QFont form_font()
 {
-    return with_families({QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI")}, 10.0);
+    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), kFormPointSize);
 }
 
 QFont semibold_font(qreal point_size)
 {
     // The semibold faces are families of their own in Windows' font list; asking for
     // weight 600 of "Segoe UI Variable Text" would give its Bold.
-    return with_families({QStringLiteral("Segoe UI Variable Text Semibold"), QStringLiteral("Segoe UI Semibold")},
-                         point_size);
+    return with_families(families({"Segoe UI Variable Text Semibold"}, {"Segoe UI Semibold"}), point_size);
 }
 
 QFont bold_form_font()
 {
-    return semibold_font(10.0);
+    return semibold_font(kFormPointSize);
 }
 
 QFont caption_font()
 {
-    QFont font = with_families(
-        {QStringLiteral("Segoe UI Variable Small Semibold"), QStringLiteral("Segoe UI Semibold")}, 8.0);
+    QFont font = with_families(families({"Segoe UI Variable Small Semibold"}, {"Segoe UI Semibold"}), 8.0);
     font.setCapitalization(QFont::AllUppercase);
     font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     return font;
@@ -198,13 +519,13 @@ QFont caption_font()
 
 QFont hint_font()
 {
-    return with_families({QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI")}, 9.0);
+    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
 }
 
 QFont mono_font(qreal point_size, bool semibold)
 {
-    QFont font = with_families(
-        {QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"), QStringLiteral("Courier New")}, point_size);
+    // Windows 10 has Cascadia Mono only with Windows Terminal: Consolas then.
+    QFont font = with_families(families({"Cascadia Mono"}, {"Consolas", "Courier New"}), point_size);
     font.setStyleHint(QFont::TypeWriter);
     font.setFixedPitch(true);
     if (semibold) {
@@ -217,25 +538,31 @@ QFont icon_font(qreal point_size)
 {
     // Segoe Fluent Icons ships with Windows 11; Windows 10 has the same code points in
     // Segoe MDL2 Assets.
-    static const QString family = QFontDatabase::hasFamily(QStringLiteral("Segoe Fluent Icons"))
-                                      ? QStringLiteral("Segoe Fluent Icons")
-                                      : QStringLiteral("Segoe MDL2 Assets");
-    QFont font(family);
+    static const bool has_fluent = QFontDatabase::hasFamily(QStringLiteral("Segoe Fluent Icons"));
+    QFont font(!windows10_fonts() && has_fluent ? QStringLiteral("Segoe Fluent Icons") : QStringLiteral("Segoe MDL2 Assets"));
     font.setPointSizeF(point_size);
     return font;
 }
 
 namespace {
 
-/// The outline of `glyph` at the icon font's size, with its origin on the baseline.
-[[nodiscard]] QPainterPath icon_path(char16_t glyph, qreal point_size)
+/// The outline of `glyph` at the icon font's size, with its origin on the baseline;
+/// computed once per glyph, size and family (QRawFont lookups are not cheap).
+[[nodiscard]] const QPainterPath& icon_path(char16_t glyph, qreal point_size)
 {
-    const QRawFont raw = QRawFont::fromFont(icon_font(point_size));
-    const QList<quint32> indexes = raw.glyphIndexesForString(QString(QChar(glyph)));
-    if (!raw.isValid() || indexes.isEmpty() || indexes.front() == 0) {
-        return {};
+    static std::map<std::tuple<QString, char16_t, qint64>, QPainterPath> cache;
+    const QFont font = icon_font(point_size);
+    const auto key = std::make_tuple(font.family(), glyph, qRound64(point_size * 100));
+    if (const auto found = cache.find(key); found != cache.end()) {
+        return found->second;
     }
-    return raw.pathForGlyph(indexes.front());
+    QPainterPath path;
+    const QRawFont raw = QRawFont::fromFont(font);
+    const QList<quint32> indexes = raw.glyphIndexesForString(QString(QChar(glyph)));
+    if (raw.isValid() && !indexes.isEmpty() && indexes.front() != 0) {
+        path = raw.pathForGlyph(indexes.front());
+    }
+    return cache.emplace(key, std::move(path)).first->second;
 }
 
 } // namespace
@@ -274,51 +601,9 @@ QColor gray_text()
     return theme().text_muted;
 }
 
-bool apply_application_look()
-{
-    QStyleHints* hints = QGuiApplication::styleHints();
-    const std::optional<Qt::ColorScheme> forced = forced_scheme();
-    if (forced) {
-        hints->setColorScheme(*forced);  // the title bar follows
-    }
-    const Qt::ColorScheme scheme = forced.value_or(hints->colorScheme());
-    current() = scheme == Qt::ColorScheme::Dark ? dark_theme() : light_theme();
-
-    QApplication::setFont(form_font());
-    QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"));
-    if (fusion == nullptr) {
-        return false;
-    }
-    QApplication::setStyle(new ModernStyle(fusion));  // the application takes ownership
-    QApplication::setPalette(make_palette(current()));
-    if (!forced) {
-        QObject::connect(hints, &QStyleHints::colorSchemeChanged, qApp, [](Qt::ColorScheme changed) {
-            use_scheme(changed);
-        });
-    }
-    return true;
-}
-
 QColor search_button_disabled_text()
 {
     return QColor(255, 255, 255, 178);
-}
-
-std::optional<QSize> prototype_window_size()
-{
-    const QByteArray value = qgetenv("WIZZ_PROTO_WINDOW").trimmed().toLower();
-    const qsizetype x = value.indexOf('x');
-    if (x <= 0) {
-        return std::nullopt;
-    }
-    bool width_ok = false;
-    bool height_ok = false;
-    const int width = value.left(x).toInt(&width_ok);
-    const int height = value.mid(x + 1).toInt(&height_ok);
-    if (!width_ok || !height_ok || width <= 0 || height <= 0) {
-        return std::nullopt;
-    }
-    return QSize(width, height);
 }
 
 } // namespace wizz::app::style

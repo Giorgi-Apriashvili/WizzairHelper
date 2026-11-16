@@ -1,8 +1,12 @@
 #include "place_combo.hpp"
 
+#include "modern_style.hpp"
+
+#include <QAbstractItemView>
 #include <QCompleter>
 #include <QLineEdit>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
 
 namespace wizz::app {
 
@@ -19,6 +23,9 @@ PlaceCombo::PlaceCombo(QWidget* parent) : QComboBox(parent)
     completer->setCompletionMode(QCompleter::PopupCompletion);
     completer->setMaxVisibleItems(kMaxDropDownItems);
     setCompleter(completer);
+    // Both lists draw their items through the style (hover, selection tint and pill).
+    ModernStyle::use_styled_popup(*this);
+    completer->popup()->setItemDelegate(new QStyledItemDelegate(completer->popup()));
 
     connect(lineEdit(), &QLineEdit::textEdited, this, &PlaceCombo::on_text_edited);
 }

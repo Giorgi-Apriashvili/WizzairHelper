@@ -16,20 +16,13 @@ namespace wizz::app {
 
 namespace {
 
-constexpr int kHeaderGap = 8;
-constexpr int kBodyGap = 6;
-
-void set_text_colour(QWidget& widget, const QColor& colour)
-{
-    QPalette palette = widget.palette();
-    palette.setColor(QPalette::WindowText, colour);
-    widget.setPalette(palette);
-}
+constexpr int kIconGap = 8;
+constexpr int kHintGap = 6;
 
 } // namespace
 
-GlyphLabel::GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent, QColor colour, qreal point_size)
-    : QWidget(parent), glyph_(glyph), mirrored_(mirrored), colour_(colour), point_size_(point_size)
+GlyphLabel::GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent, Tone tone, qreal point_size)
+    : QWidget(parent), glyph_(glyph), mirrored_(mirrored), tone_(tone), point_size_(point_size)
 {
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setFocusPolicy(Qt::NoFocus);
@@ -38,31 +31,32 @@ GlyphLabel::GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent, QColor co
 QSize GlyphLabel::sizeHint() const
 {
     const QSizeF ink = style::icon_size(glyph_, point_size_);
-    const int side = std::max(16, static_cast<int>(std::ceil(std::max(ink.width(), ink.height()))) + 2);
+    const int side = std::max(14, static_cast<int>(std::ceil(std::max(ink.width(), ink.height()))) + 2);
     return {side, side};
 }
 
 void GlyphLabel::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter(this);
+    const style::Theme& theme = style::theme();
     style::draw_icon(painter, QRectF(rect()), glyph_, point_size_,
-                     colour_.isValid() ? colour_ : style::theme().accent_line, mirrored_);
+                     tone_ == Tone::muted ? theme.text_muted : theme.accent_line, mirrored_);
 }
 
 SectionCard::SectionCard(const QString& title, char16_t glyph, bool mirror_glyph, QWidget* parent) : QWidget(parent)
 {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(kPadding);
-    outer->setSpacing(kBodyGap);
+    outer->setSpacing(kHeaderGap);
 
     header_ = new QHBoxLayout;
     header_->setContentsMargins(0, 0, 0, 0);
-    header_->setSpacing(kHeaderGap);
-    auto* icon = new GlyphLabel(glyph, mirror_glyph, this);
+    header_->setSpacing(kIconGap);
+    auto* icon = new GlyphLabel(glyph, mirror_glyph, this, GlyphLabel::Tone::accent, 10.0);
     title_ = new QLabel(title, this);
     title_->setTextFormat(Qt::PlainText);
     title_->setFont(style::caption_font());
-    set_text_colour(*title_, style::theme().text_secondary);
+    style::set_text_tone(*title_, style::TextTone::secondary);
     header_->addWidget(icon, 0, Qt::AlignVCenter);
     header_->addWidget(title_, 0, Qt::AlignVCenter);
     header_->addStretch(1);
@@ -70,7 +64,7 @@ SectionCard::SectionCard(const QString& title, char16_t glyph, bool mirror_glyph
 
     body_ = new QVBoxLayout;
     body_->setContentsMargins(0, 0, 0, 0);
-    body_->setSpacing(8);
+    body_->setSpacing(kRowGap);
     outer->addLayout(body_);
     outer->addStretch(1);
 }
@@ -81,9 +75,9 @@ QLabel* SectionCard::set_hint(const QString& text)
         hint_ = new QLabel(this);
         hint_->setTextFormat(Qt::PlainText);
         hint_->setFont(style::hint_font());
-        set_text_colour(*hint_, style::theme().text_muted);
+        style::set_text_tone(*hint_, style::TextTone::muted);
         header_->insertWidget(2, hint_, 0, Qt::AlignVCenter);
-        header_->insertSpacing(2, 6);
+        header_->insertSpacing(2, kHintGap);
     }
     hint_->setText(text);
     return hint_;

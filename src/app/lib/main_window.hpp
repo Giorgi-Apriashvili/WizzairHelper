@@ -33,6 +33,7 @@
 #include "wizz/ui/settings.hpp"
 
 #include <QMainWindow>
+#include <QMargins>
 #include <QSize>
 
 #include <memory>
@@ -63,6 +64,8 @@ public:
     static constexpr QSize kDefaultSize{1320, 820};
     /// Tab-header padding (horizontal, vertical) (01 §5).
     static constexpr QSize kTabPadding{12, 4};
+    /// Around the results card: the input cards' side margins (D-53).
+    static constexpr QMargins kResultsMargins{16, 4, 16, 8};
 
     /// `settings` were loaded before the window is built (01 §3); `autotest` turns on the
     /// self-test mode and its runner (01 §17).
@@ -120,6 +123,8 @@ Q_SIGNALS:
     void startup_finished();
 
 protected:
+    /// QEvent::ThemeChange (Windows changed its colours or contrast): re-evaluate the look.
+    bool event(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;

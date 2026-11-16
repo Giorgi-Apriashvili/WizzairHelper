@@ -1,7 +1,7 @@
 #pragma once
 // The busy panel's progress bar (01 §10.1).
 //
-// Prototype "layout" look: the bar paints itself, not through the style — a
+// In the look of DECISIONS D-53 the bar paints itself, not through the style — a
 // 6 px rounded track and a rounded fill in set_fill()'s colour (the accent
 // while busy, the softened outcome colour at rest). Nothing in it animates on
 // its own, so an idle bar is completely still (D-34); only a live marquee
