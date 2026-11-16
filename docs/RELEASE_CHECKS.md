@@ -21,7 +21,8 @@ bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe 
 `WizzairHelper 1.0.0`, and `releases/latest` is v1.0.0. The measurements below were taken on
 2026-11-16 before the CI hardening (DECISIONS D-50 to D-52). That work changed the tests and also
 made the grids cheaper (a final rebuild reuses the rows already shown; grouped views no longer
-sort every fare per batch), so 1.0.0's timer gaps are at most the ones below.
+sort every fare per batch). The figures below are from before those changes; 1.0.0 passes the
+same limits in the runs above, but its gaps were not tabulated again.
 
 ## Environment
 
