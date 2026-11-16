@@ -38,4 +38,8 @@ inline constexpr std::chrono::milliseconds kClipboardRetryDelay{100};
 /// "Could not open the browser:\n{error}\n\n{url}" and returns the error.
 std::expected<void, QString> open_url_or_warn(const GridActions& actions, std::string_view url);
 
+/// Win32Exception.Message: the system's text for the Win32 error `code` without its
+/// trailing line break ("Unknown error (0x…)" when Windows has none).
+[[nodiscard]] QString system_message(unsigned long code);
+
 } // namespace wizz::app

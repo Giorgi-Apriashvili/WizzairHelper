@@ -1,0 +1,542 @@
+// The self-updater in the main window (D-45..D-49): it checks on a worker after the
+// window is shown when the core says a check is due, re-evaluates every hour, never
+// runs in self-test runs, stays silent apart from Log lines, downloads the installer
+// of an installed copy before offering "Restart and update", links a portable copy
+// to the release page, and starts the silent installer when the window closes —
+// through a recording launcher, never a real process.
+
+#include "update_test_support.hpp"
+
+#include "autotest_runner.hpp"
+#include "input_panel.hpp"
+#include "log_view.hpp"
+#include "place_combo.hpp"
+#include "search_button.hpp"
+
+#include "support/fake_transport.hpp"
+#include "wizz/services/app_paths.hpp"
+#include "wizz/ui/settings.hpp"
+
+#include <QLabel>
+#include <QPushButton>
+#include <QTimer>
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+using namespace std::chrono_literals;
+using wizz::test::app::FakeUpdateBackend;
+using wizz::test::app::kRunningVersion;
+using wizz::test::app::release_info;
+using wizz::test::app::update_error;
+using wizz::test::app::UpdateRig;
+using wizz::test::app::UpdateRigOptions;
+using wizz::test::app::WindowRig;
+using wizz::test::app::WindowRigOptions;
+namespace gui = wizz::test::gui;
+namespace update = wizz::update;
+using update::InstallKind;
+using update::UpdateErrorKind;
+using update::Version;
+
+const Version kNewVersion{1, 2, 0};
+constexpr std::string_view kReadyText =
+    "WizzairHelper 1.2.0 is ready to install. It will be installed when you close WizzairHelper.";
+constexpr std::string_view kReleasePage = "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.2.0";
+
+[[nodiscard]] QString q(std::string_view text)
+{
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+/// The Log lines that mention updates.
+[[nodiscard]] std::vector<std::string> update_lines(const WindowRig& rig)
+{
+    std::vector<std::string> lines;
+    std::ranges::copy_if(rig.log_lines(), std::back_inserter(lines),
+                         [](const std::string& line) { return line.starts_with("Update"); });
+    return lines;
+}
+
+/// An installed copy whose check finds 1.2.0, downloaded and verified: the bar is up.
+void reach_ready(UpdateRig& rig)
+{
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s)) << "the ready bar did not appear";
+}
+
+[[nodiscard]] std::wstring expected_command_line(const UpdateRig& rig, bool relaunch)
+{
+    std::wstring line = L"\"" + rig.backend->installer_path(kNewVersion).wstring() +
+                        L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
+    if (relaunch) {
+        line += L" /RELAUNCH";
+    }
+    return line;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+TEST(UpdateController, Checks_on_a_worker_after_the_window_is_shown_when_a_check_is_due)
+{
+    UpdateRig rig;
+    ASSERT_TRUE(rig.enable());
+    ASSERT_NE(rig.controller(), nullptr);
+    EXPECT_FALSE(rig.controller()->is_started());
+    gui::settle();
+    EXPECT_EQ(rig.backend->evaluations(), 0) << "nothing happens before the window is shown";
+
+    rig.window_rig.start();
+    rig.wait_for_evaluations(1);
+    EXPECT_TRUE(rig.controller()->is_started());
+    EXPECT_EQ(rig.backend->checks(), 1) << "a fresh profile is due";
+    EXPECT_EQ(rig.backend->cleanups(), 1) << "old downloads are removed once";
+    const std::vector<std::thread::id> threads = rig.backend->worker_threads();
+    ASSERT_EQ(threads.size(), 1u);
+    EXPECT_NE(threads.front(), std::this_thread::get_id()) << "the check never runs on the UI thread";
+
+    // No release published: silent, nothing shown.
+    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_TRUE(update_lines(rig.window_rig).empty());
+    EXPECT_TRUE(rig.window_rig.dialogs.errors.empty());
+    EXPECT_TRUE(rig.window_rig.actions.messages.empty());
+    EXPECT_FALSE(rig.backend->schedule().is_check_due()) << "a 404 counts as a successful check (D-40)";
+
+    // The hourly re-evaluation.
+    const QTimer* timer = rig.controller()->recheck_timer();
+    ASSERT_NE(timer, nullptr);
+    EXPECT_TRUE(timer->isActive());
+    EXPECT_EQ(std::chrono::milliseconds{timer->interval()}, std::chrono::milliseconds{std::chrono::hours{1}});
+}
+
+TEST(UpdateController, Does_not_check_when_no_check_is_due)
+{
+    UpdateRig rig;
+    rig.backend->schedule().record_success(std::nullopt);  // checked just now
+    rig.clock->advance(std::chrono::hours{23});
+    rig.start();
+    EXPECT_EQ(rig.backend->evaluations(), 1);
+    EXPECT_EQ(rig.backend->checks(), 0) << "no request when the core says no check is due";
+
+    rig.controller()->evaluate();
+    rig.wait_for_evaluations(2);
+    EXPECT_EQ(rig.backend->checks(), 0);
+    EXPECT_FALSE(rig.bar().isVisible());
+}
+
+TEST(UpdateController, Re_evaluates_every_hour_so_a_window_left_open_checks_once_a_day)
+{
+    UpdateRigOptions options;
+    options.interval = 20ms;  // the hour, compressed
+    UpdateRig rig{std::move(options)};
+    rig.start();
+    EXPECT_EQ(rig.backend->checks(), 1);
+
+    // Hours pass: the timer keeps asking, the core keeps saying "not due".
+    rig.wait_for_evaluations(4);
+    EXPECT_EQ(rig.backend->checks(), 1);
+
+    rig.clock->advance(std::chrono::hours{24});  // a day later
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->checks() == 2; }, 5s));
+    const int evaluations = rig.backend->evaluations();
+    rig.wait_for_evaluations(evaluations + 3);
+    EXPECT_EQ(rig.backend->checks(), 2) << "once per day";
+}
+
+TEST(UpdateController, A_failed_check_is_retried_by_the_core_schedule_an_hour_later)
+{
+    UpdateRigOptions options;
+    options.interval = 20ms;
+    UpdateRig rig{std::move(options)};
+    rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::http_status,
+                                                             "Update check failed: GitHub answered HTTP 503.")),
+                                std::unexpected(update_error(UpdateErrorKind::no_release, "No release."))});
+    rig.start();
+    EXPECT_EQ(rig.backend->checks(), 1);
+    rig.wait_for_evaluations(4);
+    EXPECT_EQ(rig.backend->checks(), 1) << "not before an hour has passed";
+    rig.clock->advance(std::chrono::minutes{61});
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->checks() == 2; }, 5s));
+}
+
+TEST(UpdateController, Is_never_active_in_self_test_runs)
+{
+    QTemporaryDir out;
+    WindowRigOptions window;
+    window.autotest = wizz::ui::AutoTestOptions{};
+    window.autotest->output_dir = std::filesystem::path{out.path().toStdWString()};
+    window.autotest->replay_dir = wizz::test::app::replay_root() / "named_destination";
+    window.autotest->keep_open = true;
+    UpdateRigOptions options;
+    options.window = std::move(window);
+    UpdateRig rig{std::move(options)};
+    EXPECT_FALSE(rig.enable()) << "--autotest (and with it --replay) never checks";
+    EXPECT_EQ(rig.controller(), nullptr);
+    rig.window_rig.window().autotest_runner()->set_screenshotter(
+        [](const QWidget&, const std::filesystem::path&) -> std::expected<void, std::string> { return {}; });
+    rig.window_rig.start(30s);
+    gui::settle();
+    EXPECT_EQ(rig.backend->evaluations(), 0);
+    EXPECT_FALSE(rig.bar().isVisible());
+    rig.window().close();
+    EXPECT_TRUE(rig.launches.commands.empty());
+}
+
+TEST(UpdateController, Is_enabled_once)
+{
+    UpdateRig rig;
+    EXPECT_TRUE(rig.enable());
+    EXPECT_FALSE(rig.enable());
+}
+
+// ---------------------------------------------------------------------------
+// Offers
+// ---------------------------------------------------------------------------
+
+TEST(UpdateController, An_installed_copy_downloads_and_verifies_then_offers_restart)
+{
+    UpdateRig rig;
+    rig.start();  // up to date at start-up
+    ASSERT_FALSE(rig.bar().isVisible());
+    QWidget* const focus = rig.window_rig.input().to_box();
+    focus->setFocus();
+    ASSERT_EQ(rig.window().focusWidget(), focus);
+
+    // A day later the hourly re-evaluation finds 1.2.0.
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.clock->advance(std::chrono::hours{24});
+    rig.controller()->evaluate();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s));
+    gui::settle();
+
+    EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
+    for (const std::thread::id thread : rig.backend->worker_threads()) {
+        EXPECT_NE(thread, std::this_thread::get_id());
+    }
+    EXPECT_EQ(update_lines(rig.window_rig),
+              (std::vector<std::string>{"Update available: WizzairHelper 1.2.0 (running 1.0.0).",
+                                        "Update 1.2.0 downloaded and verified."}));
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
+    EXPECT_EQ(rig.bar().action_button()->text(), "Restart and update");
+    EXPECT_TRUE(rig.bar().action_button()->isVisible());
+    EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+    EXPECT_EQ(rig.bar().later_button()->text(), "Later");
+    EXPECT_TRUE(rig.bar().later_button()->isVisible());
+    EXPECT_EQ(rig.window().focusWidget(), focus) << "the bar never takes the focus";
+    EXPECT_TRUE(rig.window_rig.dialogs.errors.empty());
+    EXPECT_TRUE(rig.window_rig.actions.messages.empty());
+    EXPECT_TRUE(rig.launches.commands.empty()) << "nothing starts before the window closes";
+
+    // The bar sits between the input panel and the result tabs.
+    const QRect input = rig.window().input_panel()->geometry();
+    const QRect bar = rig.bar().geometry();
+    const QRect tabs = rig.window().tabs()->geometry();
+    EXPECT_LE(input.bottom(), bar.top());
+    EXPECT_LE(bar.bottom(), tabs.top());
+    EXPECT_EQ(bar.width(), rig.window().centralWidget()->width());
+}
+
+TEST(UpdateController, A_portable_copy_links_to_the_release_page)
+{
+    UpdateRigOptions options;
+    options.kind = InstallKind::portable;
+    UpdateRig rig{std::move(options)};
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.start();
+    ASSERT_TRUE(rig.bar().isVisible());
+
+    EXPECT_TRUE(rig.backend->downloaded().empty()) << "a portable folder is never replaced";
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Download");
+    EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+    EXPECT_EQ(update_lines(rig.window_rig),
+              std::vector<std::string>{"Update available: WizzairHelper 1.2.0 (running 1.0.0)."});
+
+    rig.bar().action_button()->click();
+    EXPECT_EQ(rig.launches.opened_pages, std::vector<std::string>{std::string{kReleasePage}});
+    EXPECT_TRUE(rig.bar().isVisible());
+    EXPECT_TRUE(rig.window().isVisible()) << "Download only opens the page";
+
+    rig.window().close();
+    EXPECT_TRUE(rig.launches.commands.empty());
+    EXPECT_EQ(rig.launches.mutex_releases, 0);
+}
+
+TEST(UpdateController, A_failed_check_is_one_Log_line_and_nothing_else)
+{
+    UpdateRig rig;
+    rig.backend->script_checks(
+        {std::unexpected(update_error(UpdateErrorKind::http_status, "Update check failed: GitHub answered HTTP 500."))});
+    rig.start();
+    EXPECT_EQ(update_lines(rig.window_rig), std::vector<std::string>{"Update check failed: GitHub answered HTTP 500."});
+    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_TRUE(rig.window_rig.dialogs.errors.empty());
+    EXPECT_TRUE(rig.window_rig.actions.messages.empty());
+
+    // The schedule's retry an hour later fails the same way: one more line, focus untouched.
+    QWidget* const focus = rig.window_rig.input().to_box();
+    focus->setFocus();
+    rig.clock->advance(std::chrono::minutes{61});
+    rig.controller()->evaluate();
+    rig.wait_for_evaluations(2);
+    EXPECT_EQ(rig.backend->checks(), 2);
+    EXPECT_EQ(update_lines(rig.window_rig), (std::vector<std::string>{"Update check failed: GitHub answered HTTP 500.",
+                                                                      "Update check failed: GitHub answered HTTP 500."}));
+    EXPECT_EQ(rig.window().focusWidget(), focus) << "no focus change";
+    EXPECT_TRUE(rig.window_rig.dialogs.errors.empty());
+}
+
+TEST(UpdateController, A_failed_download_is_logged_and_tried_again_at_the_next_evaluation)
+{
+    UpdateRig rig;
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.backend->script_downloads(
+        {std::unexpected(update_error(UpdateErrorKind::http_status,
+                                      "Could not download WizzairHelper-1.2.0-win64-setup.exe after 5 tries: HTTP 503.")),
+         wizz::app::UpdateDownloadResult{update::DownloadedFile{
+             .path = rig.backend->installer_path(kNewVersion), .sha256 = std::string(64, 'b'), .reused = false, .tries = {}}}});
+    rig.start();
+    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_EQ(update_lines(rig.window_rig),
+              (std::vector<std::string>{
+                  "Update available: WizzairHelper 1.2.0 (running 1.0.0).",
+                  "Update download failed: Could not download WizzairHelper-1.2.0-win64-setup.exe after 5 tries: HTTP 503."}));
+
+    rig.controller()->evaluate();  // the next hourly tick
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 5s));
+    EXPECT_EQ(rig.backend->downloaded(), (std::vector<Version>{kNewVersion, kNewVersion}));
+    EXPECT_EQ(rig.backend->checks(), 1) << "the download is retried without another check";
+    EXPECT_EQ(update_lines(rig.window_rig).back(), "Update 1.2.0 downloaded and verified.");
+}
+
+// ---------------------------------------------------------------------------
+// The bar's buttons
+// ---------------------------------------------------------------------------
+
+TEST(UpdateController, Restart_and_update_is_disabled_while_a_search_works)
+{
+    UpdateRigOptions options;
+    options.window.keep_delays = true;  // the named_destination server takes its time
+    UpdateRig rig{std::move(options)};
+    reach_ready(rig);
+    gui::settle();
+    ASSERT_FALSE(rig.window_rig.controller().is_working());
+    EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+
+    rig.window_rig.controller().request_search_outbound();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window_rig.controller().is_working(); }, 5s));
+    EXPECT_FALSE(rig.bar().action_button()->isEnabled());
+    EXPECT_TRUE(rig.bar().later_button()->isEnabled());
+    rig.controller()->trigger_action();  // e.g. a click that raced the disabling
+    gui::settle();
+    EXPECT_TRUE(rig.window().isVisible()) << "nothing restarts while a search works";
+    EXPECT_TRUE(rig.launches.commands.empty());
+
+    rig.window_rig.controller().cancel_work();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window_rig.controller().is_working(); }, 10s));
+    EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+}
+
+TEST(UpdateController, Later_hides_the_bar_for_the_session_and_the_update_still_installs_on_exit)
+{
+    UpdateRig rig;
+    reach_ready(rig);
+    rig.bar().later_button()->click();
+    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_TRUE(rig.window().isVisible());
+
+    rig.controller()->evaluate();
+    rig.wait_for_evaluations(2);
+    EXPECT_FALSE(rig.bar().isVisible()) << "hidden for the rest of the session";
+
+    rig.window().close();
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, false));
+}
+
+// ---------------------------------------------------------------------------
+// Exit
+// ---------------------------------------------------------------------------
+
+TEST(UpdateController, Closing_with_a_verified_installer_starts_the_silent_install)
+{
+    UpdateRig rig;
+    reach_ready(rig);
+    rig.window().close();
+
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    const update::InstallerCommand& command = rig.launches.commands.front();
+    EXPECT_EQ(command.program, rig.backend->installer_path(kNewVersion));
+    EXPECT_EQ(command.arguments,
+              (std::vector<std::string>{"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"}));
+    EXPECT_EQ(command.command_line(), expected_command_line(rig, false));
+    EXPECT_EQ(rig.launches.mutex_releases, 1);
+    EXPECT_EQ(rig.launches.released_before_launch, std::vector<bool>{true})
+        << "the installer must not find the app mutex (D-47)";
+    EXPECT_EQ(update_lines(rig.window_rig).back(), "Update 1.2.0: installer started.");
+    const std::vector<std::string> log = rig.backend->log_lines();
+    ASSERT_FALSE(log.empty());
+    EXPECT_EQ(log.back(), std::format("Started {} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
+                                      "\"" + rig.backend->installer_path(kNewVersion).string() + "\""));
+    EXPECT_TRUE(std::filesystem::exists(wizz::app_paths::settings_file(rig.window_rig.data_root())))
+        << "the settings were saved as usual";
+    EXPECT_TRUE(rig.controller()->is_closing());
+    EXPECT_FALSE(rig.controller()->recheck_timer()->isActive());
+}
+
+TEST(UpdateController, Restart_and_update_saves_the_settings_starts_the_installer_with_RELAUNCH_and_closes)
+{
+    UpdateRig rig;
+    reach_ready(rig);
+    rig.window_rig.input().set_from_text("Graz");
+    rig.bar().action_button()->click();
+
+    EXPECT_FALSE(rig.window().isVisible()) << "the window closed";
+    ASSERT_EQ(rig.launches.commands.size(), 1u) << "started once";
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, true));
+    EXPECT_EQ(rig.launches.released_before_launch, std::vector<bool>{true});
+    const std::filesystem::path settings = wizz::app_paths::settings_file(rig.window_rig.data_root());
+    ASSERT_TRUE(std::filesystem::exists(settings));
+    EXPECT_EQ(wizz::ui::AppSettings::load(settings).from, "Graz");
+}
+
+TEST(UpdateController, A_failed_installer_start_is_logged_and_the_window_still_closes)
+{
+    UpdateRig rig;
+    rig.launches.launch_error = "Access is denied.";
+    reach_ready(rig);
+    rig.window().close();
+    EXPECT_FALSE(rig.window().isVisible());
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(update_lines(rig.window_rig).back(),
+              "Update 1.2.0: the installer could not be started: Access is denied.");
+    const std::vector<std::string> log = rig.backend->log_lines();
+    ASSERT_FALSE(log.empty());
+    EXPECT_TRUE(log.back().starts_with("Could not start \"")) << log.back();
+    EXPECT_TRUE(log.back().ends_with(": Access is denied.")) << log.back();
+}
+
+TEST(UpdateController, Nothing_starts_without_a_verified_installer)
+{
+    {
+        UpdateRig up_to_date;
+        up_to_date.start();
+        up_to_date.window().close();
+        EXPECT_TRUE(up_to_date.launches.commands.empty());
+        EXPECT_EQ(up_to_date.launches.mutex_releases, 0);
+    }
+    {
+        UpdateRig failed;
+        failed.backend->script_checks({release_info(kNewVersion)});
+        failed.backend->script_downloads({std::unexpected(update_error(
+            UpdateErrorKind::checksum_mismatch, "WizzairHelper-1.2.0-win64-setup.exe does not match SHA256SUMS.txt."))});
+        failed.start();
+        failed.window().close();
+        EXPECT_TRUE(failed.launches.commands.empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The real core behind the controller
+// ---------------------------------------------------------------------------
+
+TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_transport)
+{
+    const std::string installer = "MZ fake installer of 1.2.0";
+    const std::string sums = std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n", update::sha256_hex(installer));
+    const auto asset = [](std::string_view name, int id) {
+        return std::format(R"({{"url":"https://api.github.com/repos/Giorgi-Apriashvili/WizzairHelper/releases/assets/{}",)"
+                           R"("id":{},"name":"{}","state":"uploaded","size":10,)"
+                           R"("browser_download_url":"https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/download/v1.2.0/{}"}})",
+                           id, id, name, name);
+    };
+    const std::string release = std::format(
+        R"({{"html_url":"{}","tag_name":"v1.2.0","draft":false,"prerelease":false,"assets":[{},{},{}]}})", kReleasePage,
+        asset("WizzairHelper-1.2.0-win64-setup.exe", 1), asset("WizzairHelper-1.2.0-win64.zip", 2),
+        asset("SHA256SUMS.txt", 3));
+    const auto transport = std::make_shared<wizz::test::FakeTransport>([&](const wizz::test::RecordedRequest& request) {
+        const auto bytes = [](std::string body) {
+            return wizz::test::ScriptedResponse{.response = wizz::http::Response{.status = 200,
+                                                                                 .headers = {},
+                                                                                 .content_type = "application/octet-stream",
+                                                                                 .body = std::move(body)},
+                                                .body_error = std::nullopt};
+        };
+        if (request.url.ends_with("/releases/latest")) {
+            return wizz::test::json_response(release);
+        }
+        if (request.url.contains("SHA256SUMS.txt")) {
+            return bytes(sums);
+        }
+        if (request.url.contains("-win64-setup.exe")) {
+            return bytes(installer);
+        }
+        return wizz::test::json_response("{}", 404);
+    });
+
+    WindowRig rig;
+    const auto clock = std::make_shared<wizz::FixedClock>();
+    const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
+    auto backend = std::make_shared<wizz::app::CoreUpdateBackend>(
+        config, InstallKind::installed, transport, clock,
+        [](wizz::Duration, std::stop_token stop) { wizz::throw_if_cancelled(stop); });
+    EXPECT_EQ(backend->running_version(), kRunningVersion);
+    wizz::test::app::LaunchLog launches;
+    ASSERT_TRUE(rig.window().enable_updates(launches.hooks(backend)));
+    rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }, 10s));
+
+    EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
+    const std::filesystem::path downloaded = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";
+    EXPECT_TRUE(std::filesystem::exists(downloaded));
+    EXPECT_TRUE(std::filesystem::exists(config.state_file()));
+    EXPECT_TRUE(std::filesystem::exists(config.log_file()));
+    EXPECT_FALSE(std::filesystem::exists(rig.data_root() / "update.log")) << "nothing of the updater in the data root";
+    const std::vector<std::string> urls = transport->urls();
+    ASSERT_EQ(urls.size(), 3u);
+    EXPECT_EQ(urls[0], "https://api.github.com/repos/Giorgi-Apriashvili/WizzairHelper/releases/latest");
+    EXPECT_TRUE(urls[1].contains("SHA256SUMS.txt"));
+    EXPECT_TRUE(urls[2].contains("WizzairHelper-1.2.0-win64-setup.exe"));
+    EXPECT_EQ(transport->requests()[0].header_values("User-Agent"),
+              std::vector<std::string>{"WizzairHelper/1.0.0 (update check)"});
+
+    rig.window().close();
+    ASSERT_EQ(launches.commands.size(), 1u);
+    EXPECT_EQ(launches.commands.front().program, downloaded);
+}
+
+TEST(UpdateController, The_system_hooks_use_the_running_version_and_the_updates_folder)
+{
+    WindowRig rig;
+    bool released = false;
+    const wizz::app::UpdateHooks hooks =
+        wizz::app::UpdateHooks::system(rig.services(), [&released] { released = true; });
+    ASSERT_NE(hooks.backend, nullptr);
+    EXPECT_EQ(hooks.backend->running_version().to_string(), WIZZ_VERSION_STRING);
+    EXPECT_EQ(hooks.backend->install_kind(), InstallKind::portable) << "the test binary has no unins000.exe";
+    EXPECT_TRUE(hooks.launch_installer);
+    EXPECT_TRUE(hooks.open_release_page);
+    EXPECT_EQ(hooks.recheck_interval, wizz::app::kUpdateRecheckInterval);
+    ASSERT_TRUE(hooks.release_app_mutex);
+    hooks.release_app_mutex();
+    EXPECT_TRUE(released);
+    const auto* core = dynamic_cast<const wizz::app::CoreUpdateBackend*>(hooks.backend.get());
+    ASSERT_NE(core, nullptr);
+    EXPECT_EQ(core->config().updates_dir(), rig.data_root() / "updates");
+}
+
+} // namespace

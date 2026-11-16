@@ -93,6 +93,9 @@ offline and reproducibly:
 | `--cancel-after-ms <n>` | Presses Esc and Cancel n ms after the outbound search starts fetching |
 | `--diagnostics` | Writes `diagnostics.json` (40 ms timer gaps, UI-loop watchdog, cancel record, final grids, DPI, layout checks) |
 
+A run with `--autotest` or `--replay` on its command line never checks GitHub for updates (DECISIONS
+D-45), so self-tests stay offline and their request counts unchanged.
+
 Example (an isolated profile and a replayed network):
 
 ```powershell

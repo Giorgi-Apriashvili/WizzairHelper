@@ -48,24 +48,6 @@ namespace {
     }
 }
 
-/// Win32Exception.Message: the system's text for `code` without its trailing line break.
-[[nodiscard]] QString system_message(DWORD code)
-{
-    LPWSTR buffer = nullptr;
-    const DWORD length =
-        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                       nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
-    const auto release = qScopeGuard([buffer] { LocalFree(buffer); });
-    QString text = QString::fromWCharArray(buffer, static_cast<qsizetype>(length));
-    while (!text.isEmpty() && text.back().unicode() <= u' ') {
-        text.chop(1);
-    }
-    if (text.isEmpty()) {
-        return QStringLiteral("Unknown error (0x%1)").arg(QString::number(code, 16));
-    }
-    return text;
-}
-
 /// Process.Start with UseShellExecute, as the predecessor's OpenUrl: ShellExecuteExW without
 /// error UI; returns the Win32 error, ERROR_SUCCESS when the target was started. The call runs
 /// on its own STA thread, as QDesktopServices does, so the shell never spins the UI thread's
@@ -122,6 +104,23 @@ void show_unowned_message(QMessageBox::Icon icon, const QString& text)
 }
 
 } // namespace
+
+QString system_message(unsigned long code)
+{
+    LPWSTR buffer = nullptr;
+    const DWORD length =
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    const auto release = qScopeGuard([buffer] { LocalFree(buffer); });
+    QString text = QString::fromWCharArray(buffer, static_cast<qsizetype>(length));
+    while (!text.isEmpty() && text.back().unicode() <= u' ') {
+        text.chop(1);
+    }
+    if (text.isEmpty()) {
+        return QStringLiteral("Unknown error (0x%1)").arg(QString::number(code, 16));
+    }
+    return text;
+}
 
 GridActions GridActions::system()
 {

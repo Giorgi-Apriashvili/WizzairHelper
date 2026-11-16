@@ -1,26 +1,33 @@
 // WizzairHelper.exe (01 §3): one GUI process per invocation.
 //
 // Start-up order: per-monitor-v2 DPI awareness comes with the process (application
-// manifest, resources/WizzairHelper.manifest), then crash reporting (01 §3.2), then
-// the optional --autotest command line (01 §17.1, D-30) before the QApplication — a
-// bad --out / --ret / --fixed-now value crashes before the window opens, logged in
-// the --data-root profile — then the event loop, the font warm-up (font_warmup.hpp),
-// the services, settings.json, and the main window.
+// manifest, resources/WizzairHelper.manifest), then crash reporting (01 §3.2), the
+// installer's AppMutex (D-47), then the optional --autotest command line (01 §17.1,
+// D-30) before the QApplication — a bad --out / --ret / --fixed-now value crashes
+// before the window opens, logged in the --data-root profile — then the event loop,
+// the font warm-up (font_warmup.hpp), the services, settings.json, the main window
+// and, in a normal run, the self-updater (D-45).
+#include "app_mutex.hpp"
 #include "app_services.hpp"
 #include "application.hpp"
+#include "controller.hpp"
 #include "crash_reporter.hpp"
 #include "font_warmup.hpp"
 #include "main_window.hpp"
 #include "ui_style.hpp"
+#include "update_controller.hpp"
 
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/locale.hpp"
+#include "wizz/services/updater.hpp"
 #include "wizz/ui/autotest_options.hpp"
 #include "wizz/ui/settings.hpp"
+#include "wizz/ui/update_model.hpp"
 
 #include <QApplication>
 #include <QGuiApplication>
 
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -70,10 +77,13 @@ int main(int argc, char* argv[])
     const SystemClock crash_clock;
     CrashReporter crash_reporter(crash_clock);
     crash_reporter.install();
+    // Held until the process exits, or until the update installer is about to start:
+    // the installer (AppMutex=WizzairHelper.AppMutex) sees that the app runs (D-47).
+    app::AppMutex app_mutex{update::kAppMutexName};
 
+    const std::vector<std::string> arguments = command_line_arguments();
     std::optional<ui::AutoTestOptions> autotest;
     try {
-        const std::vector<std::string> arguments = command_line_arguments();
         const std::filesystem::path current_dir = std::filesystem::current_path();
         // errors.log of the isolated profile (D-30), read first so that a bad value
         // below is logged there too.
@@ -100,6 +110,14 @@ int main(int argc, char* argv[])
             app::AppServices::create(app::ServiceConfig::for_run(autotest));
         ui::AppSettings settings = ui::AppSettings::load(services->settings_path());  // before the window (01 §3)
         app::MainWindow window(services, std::move(settings), autotest);
+        if (ui::updates_allowed(arguments)) {  // never with --autotest or --replay (D-45)
+            try {
+                window.enable_updates(app::UpdateHooks::system(*services, [&app_mutex] { app_mutex.release(); }));
+            } catch (const std::exception& error) {
+                // The app works without its updater; say why in the Log only.
+                window.controller()->log(ui::update_strings::check_failed_log(error.what()));
+            }
+        }
         font_warmup.wait();
         window.show_main_window();
         return QApplication::exec();

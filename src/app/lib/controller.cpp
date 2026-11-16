@@ -550,8 +550,12 @@ void Controller::end_phase() noexcept
 
 void Controller::set_working(bool working)
 {
+    const bool changed = working_ != working;
     working_ = working;
     views_.input->set_working(working);
+    if (changed) {
+        Q_EMIT working_changed(working);
+    }
 }
 
 void Controller::store(Leg leg, LegSearchResultPtr result)

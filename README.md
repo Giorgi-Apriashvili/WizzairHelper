@@ -41,6 +41,15 @@ Fares come from wizzair.com's unofficial website API; geocoding uses Photon / No
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.
 Keep usage personal and low-volume.
 
+## Updates
+
+Once a day WizzairHelper asks `api.github.com` for the latest release of this repository (one
+request, no personal data; an hour later if it failed). When there is a newer version, the
+installed app downloads the installer from GitHub, checks it against the release's
+`SHA256SUMS.txt` and installs it silently when you close the app — or at once with "Restart and
+update" in the bar under the search inputs. A portable copy (the ZIP) only shows a link to the
+release page. Details: [DECISIONS D-40..D-49](docs/DECISIONS.md#self-updater).
+
 ## License
 
 MIT — see [LICENSE](LICENSE). The release package ships the licences of its third-party
