@@ -73,12 +73,6 @@ class BusyPanel final : public QWidget {
 public:
     /// Range of the progress bar: 0..BarMax + 1 (01 §10.1, §10.6).
     static constexpr int kBarRangeMax = ui::BusyPanelModel::kBarMax + 1;
-    /// The WinForms status colours of 01 §10.3 and the wait note colour of 01 §10.1. The
-    /// look uses the theme's success, failure and warning colours instead; these are kept
-    /// only for the GUI tests that still compare against them.
-    static constexpr QColor kSuccessColour{0, 100, 0};    // DarkGreen
-    static constexpr QColor kFailureColour{178, 34, 34};  // Firebrick
-    static constexpr QColor kWaitColour{255, 140, 0};     // DarkOrange
 
     /// `clock` must outlive the panel (elapsed time, ETA and wait notes use utc_now).
     /// `locale` supplies the decimal separator of the wait notes. `taskbar_factory`
@@ -159,7 +153,7 @@ private:
     void error_reset_elapsed();
     void render();
     void apply_metrics();
-    void refresh_system_colours();
+    void refresh_theme_colours();
     void apply_status_colour();
     void set_bar_value(int value);
 

@@ -11,6 +11,7 @@
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
+#include "ui_style.hpp"
 #include "window_placement.hpp"
 
 #include "wizz/services/app_paths.hpp"
@@ -128,18 +129,28 @@ TEST(MainWindow, Title_tabs_and_docked_layout)
     EXPECT_TRUE(window.outbound_grid()->offers_plan_return());
     EXPECT_FALSE(window.return_grid()->offers_plan_return());
 
-    // Input panel on top, the tabs filling the middle, the busy panel at the bottom with
-    // its fixed height; nothing overlaps.
+    // Input panel on top, the results card filling the middle (the tabs inside it, inset by
+    // kResultsMargins like the input cards, D-53), the busy panel at the bottom with its
+    // fixed height, full width; nothing overlaps.
     gui::settle();
-    const QRect input = window.input_panel()->geometry();
-    const QRect middle = tabs.geometry();
-    const QRect busy = window.busy_panel()->geometry();
+    const QWidget* central = window.centralWidget();
+    const auto in_central = [central](const QWidget* widget) {
+        return QRect(widget->mapTo(central, QPoint(0, 0)), widget->size());
+    };
+    const QWidget* results = central->findChild<QWidget*>(QStringLiteral("resultsArea"));
+    ASSERT_NE(results, nullptr);
+    ASSERT_TRUE(results->isAncestorOf(&tabs));
+    const QRect input = in_central(window.input_panel());
+    const QRect middle = in_central(results);
+    const QRect busy = in_central(window.busy_panel());
     EXPECT_EQ(input.top(), 0);
     EXPECT_LE(input.bottom(), middle.top());
     EXPECT_LE(middle.bottom(), busy.top());
-    EXPECT_EQ(busy.bottom(), window.centralWidget()->height() - 1);
+    EXPECT_EQ(in_central(&tabs), middle.marginsRemoved(MainWindow::kResultsMargins));
+    EXPECT_EQ(MainWindow::kResultsMargins, QMargins(16, 4, 16, 8));
+    EXPECT_EQ(busy.bottom(), central->height() - 1);
     EXPECT_EQ(busy.height(), window.busy_panel()->metrics().height);
-    EXPECT_EQ(busy.width(), window.centralWidget()->width());
+    EXPECT_EQ(busy.width(), central->width());
     EXPECT_EQ(window.menuWidget(), nullptr) << "no menus or toolbar (01 \u00A73.3)";
 }
 
@@ -172,7 +183,7 @@ TEST(MainWindow, Start_up_logs_its_line_loads_the_map_and_focuses_From)
     EXPECT_EQ(log[1], "Route map: 11 airports, API https://be.wizzair.com/29.23.1/Api.");
     EXPECT_EQ(rig.busy().status_text(),
               "Ready \u2014 11 Wizz Air airports loaded. Choose your trip and press \u201CSearch outbound\u201D.");
-    EXPECT_EQ(rig.busy().status_colour(), wizz::app::BusyPanel::kSuccessColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().success);
     EXPECT_FALSE(rig.controller().is_working());
     EXPECT_EQ(rig.wizz_requests(), 2) << "homepage + route map";
     EXPECT_GT(rig.input().from_box()->count(), 0) << "suggestions after the map loaded";
@@ -535,7 +546,7 @@ TEST(MainWindow, Esc_while_working_cancels_once_like_the_Cancel_button)
     ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
     EXPECT_TRUE(rig.busy().status_text().starts_with("Outbound Cancelled: 0 fares from 0 of 3 requests in "))
         << rig.busy().status_text();
-    EXPECT_EQ(rig.busy().status_colour(), wizz::app::BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_EQ(rig.outbound().summary_text(), "Cancelled before any fares arrived.");
     for (QWidget* control : rig.input().working_controls()) {
         EXPECT_TRUE(control->isEnabled());

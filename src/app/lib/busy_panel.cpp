@@ -139,11 +139,11 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
     error_reset_timer_->setInterval(ui::BusyPanelModel::kErrorResetDelay);
     connect(error_reset_timer_, &QTimer::timeout, this, &BusyPanel::error_reset_elapsed);
 
-    refresh_system_colours();
+    refresh_theme_colours();
     apply_metrics();
     render();
     style::on_theme_change(this, [this] {
-        refresh_system_colours();
+        refresh_theme_colours();
         render();  // the bar's fill
     });
 }
@@ -255,7 +255,7 @@ void BusyPanel::changeEvent(QEvent* event)
         apply_metrics();
         break;
     case QEvent::PaletteChange:
-        refresh_system_colours();  // a colour scheme change re-resolves the palettes
+        refresh_theme_colours();  // a colour scheme change re-resolves the palettes
         break;
     default:
         break;
@@ -272,7 +272,7 @@ bool BusyPanel::event(QEvent* event)
         apply_metrics();  // OnDpiChangedAfterParent: fonts may measure differently on the new screen
         break;
     case QEvent::ThemeChange:
-        refresh_system_colours();
+        refresh_theme_colours();
         break;
     default:
         break;
@@ -371,7 +371,7 @@ void BusyPanel::apply_metrics()
     setFixedHeight(metrics_.height);
 }
 
-void BusyPanel::refresh_system_colours()
+void BusyPanel::refresh_theme_colours()
 {
     if (status_ == nullptr || wait_ == nullptr) {
         return;  // change events sent while the constructor builds the controls

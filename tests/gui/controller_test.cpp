@@ -13,6 +13,7 @@
 #include "date_picker.hpp"
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
+#include "ui_style.hpp"
 
 #include "support/fixtures.hpp"
 
@@ -116,7 +117,7 @@ TEST(ControllerFlows, Named_destination_outbound_streams_into_the_grid_and_ends_
     EXPECT_EQ(rig.outbound().summary_text(),
               "12 fares \u00B7 cheapest 14.99 EUR: BTS \u2192 LTN on Thu 12 Nov");
     EXPECT_EQ(rig.busy().status_text(), "Outbound Done: 12 fares from 3 of 3 requests in 1 s.");
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kSuccessColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().success);
     EXPECT_EQ(text(rig.input().resolved_text()),
               "Outbound: from Budapest (BUD), Hungary \u2192 airports within 200 km: BUD 0 km, BTS 173 km, DEB 184 km.   "
               "To London, United Kingdom \u2014 Wizz Air airports: LGW, LTN \u2192 airports within 30 km: LGW 41 km, "
@@ -195,7 +196,7 @@ TEST(ControllerFlows, A_return_without_destination_or_pick_fails_with_the_type_t
 
     const std::string expected{strings::kReturnNeedsDestination};
     EXPECT_EQ(rig.busy().status_text(), expected);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_TRUE(rig.log_contains(expected));
     ASSERT_EQ(rig.dialogs.errors.size(), 1u);
     EXPECT_EQ(text(rig.dialogs.errors[0]), expected);
@@ -263,7 +264,7 @@ TEST(ControllerFlows, Same_area_takes_the_zero_request_path_with_the_first_note)
         "Start and destination are the same area (0 km apart). Choose a destination farther away, or leave "
         "\u201CTo\u201D empty to search anywhere.";
     EXPECT_EQ(rig.busy().status_text(), note);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_EQ(rig.outbound().summary_text(), note);
     EXPECT_EQ(rig.window().tabs()->currentWidget(), &rig.outbound());
     EXPECT_EQ(rig.tab_text(MainWindow::Page::outbound), "Outbound");
@@ -308,7 +309,7 @@ TEST(ControllerFlows, More_than_500_requests_are_refused_and_the_old_results_sta
                    "app allows, to stay polite to the site. Use a smaller radius, fewer dates, or a specific "
                    "destination.");
     EXPECT_EQ(rig.busy().status_text(), cap);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_TRUE(rig.log_contains(cap));
     ASSERT_EQ(rig.dialogs.errors.size(), 1u);
     EXPECT_EQ(text(rig.dialogs.errors[0]), cap);
@@ -335,7 +336,7 @@ TEST(ControllerFlows, A_big_search_asks_first_and_No_does_not_start_it)
                                    "Continue?"))
         << question;
     EXPECT_EQ(rig.busy().status_text(), strings::kSearchNotStarted);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kSuccessColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().success);
     EXPECT_EQ(rig.wizz_requests(), 2);
     EXPECT_FALSE(rig.controller().is_working());
 }
@@ -478,7 +479,7 @@ TEST(ControllerFlows, The_chooser_waits_for_the_user_and_Cancel_does_not_start_t
     EXPECT_EQ(call.busy_status, "Waiting for your choice:  which place is \u201CLondn\u201D?");
     EXPECT_TRUE(call.busy) << "the panel keeps animating behind the modal chooser";
     EXPECT_EQ(rig.busy().status_text(), strings::kSearchNotStarted);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kSuccessColour) << "UI-10: green, no box";
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().success) << "UI-10: green, no box";
     EXPECT_TRUE(rig.dialogs.errors.empty());
     EXPECT_FALSE(rig.log_contains("Interpreted \u201CLondn\u201D as \u201CLondon\u201D."));
     EXPECT_EQ(rig.wizz_requests(), 2);
@@ -534,7 +535,7 @@ TEST(ControllerFlows, A_failed_route_map_load_is_red_and_retried_on_the_next_sea
     EXPECT_EQ(rig.controller().catalog(), nullptr);
     EXPECT_TRUE(rig.busy().status_text().starts_with("Could not load the Wizz Air route map: "))
         << rig.busy().status_text();
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     const std::vector<std::string> log = rig.log_lines();
     ASSERT_EQ(log.size(), 2u);
     EXPECT_TRUE(log[1].starts_with("ERROR loading route map: ")) << log[1];
@@ -574,7 +575,7 @@ TEST(ControllerFlows, An_unexpected_exception_ends_the_panel_red_and_reaches_the
     rig.controller().spawn(rig.controller().search_outbound());
     ASSERT_TRUE(gui::wait_until([&] { return !rig.flow_errors.empty(); }, 10s));
     EXPECT_EQ(rig.busy().status_text(), strings::kUnexpectedErrorText);
-    EXPECT_EQ(rig.busy().status_colour(), BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_FALSE(rig.busy().is_busy()) << "UI-3: the spinner never keeps spinning";
     EXPECT_FALSE(rig.controller().is_working());
     EXPECT_THROW(std::rethrow_exception(rig.flow_errors.front()), std::logic_error);

@@ -13,9 +13,13 @@ namespace wizz::app {
 
 std::vector<QFont> FontWarmup::default_fonts()
 {
+    // The busy panel's wait note, where the "⏳" appears: the panel's (UI) font at the
+    // semibold weight (busy_panel.cpp), a font engine of its own.
+    QFont wait_note = style::form_font();
+    wait_note.setWeight(QFont::DemiBold);
     // The UI fonts plus the monospace and semibold faces the busy panel and the grids use.
-    return {style::form_font(),         style::bold_form_font(), style::data_font(), style::mono_font(10.0, true),
-            style::mono_font(9.5),        style::semibold_font(10.0), style::hint_font(), style::caption_font()};
+    return {style::form_font(), wait_note,         style::bold_form_font(), style::data_font(),
+            style::mono_font(10.0, true), style::mono_font(9.5), style::hint_font(), style::caption_font()};
 }
 
 QString FontWarmup::default_sample()

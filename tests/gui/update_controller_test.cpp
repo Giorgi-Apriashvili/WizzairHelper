@@ -246,13 +246,18 @@ TEST(UpdateController, An_installed_copy_downloads_and_verifies_then_offers_rest
     EXPECT_TRUE(rig.window_rig.actions.messages.empty());
     EXPECT_TRUE(rig.launches.commands.empty()) << "nothing starts before the window closes";
 
-    // The bar sits between the input panel and the result tabs.
-    const QRect input = rig.window().input_panel()->geometry();
-    const QRect bar = rig.bar().geometry();
-    const QRect tabs = rig.window().tabs()->geometry();
+    // The bar sits between the input panel and the result tabs (central-widget coordinates:
+    // the tabs are inside the results card, D-53).
+    const QWidget* central = rig.window().centralWidget();
+    const auto in_central = [central](const QWidget* widget) {
+        return QRect(widget->mapTo(central, QPoint(0, 0)), widget->size());
+    };
+    const QRect input = in_central(rig.window().input_panel());
+    const QRect bar = in_central(&rig.bar());
+    const QRect tabs = in_central(rig.window().tabs());
     EXPECT_LE(input.bottom(), bar.top());
     EXPECT_LE(bar.bottom(), tabs.top());
-    EXPECT_EQ(bar.width(), rig.window().centralWidget()->width());
+    EXPECT_EQ(bar.width(), central->width());
 }
 
 TEST(UpdateController, A_portable_copy_links_to_the_release_page)
