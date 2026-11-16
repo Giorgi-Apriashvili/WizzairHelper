@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <stop_token>
@@ -200,14 +201,23 @@ TEST_F(ReplayTransportTest, Delays_and_requests_honour_the_stop_token)
     already.request_stop();
     EXPECT_THROW((void)transport.send(get("https://www.wizzair.com/en-gb"), already.get_token()), OperationCancelled);
 
+    // The "slow" rule waits 60 s. The cancel comes once the request is in (the transport
+    // records it before its delay); the send must end long before the delay would —
+    // half of it is far more than any scheduling delay of a loaded machine.
+    constexpr std::chrono::milliseconds kSlowDelay = 60s;
     std::stop_source source;
-    std::jthread canceller{[&source] {
-        std::this_thread::sleep_for(50ms);
+    const std::size_t before = transport.request_count();
+    std::jthread canceller{[&](std::stop_token own) {
+        const auto give_up = std::chrono::steady_clock::now() + kSlowDelay;
+        while (transport.request_count() == before && !own.stop_requested() &&
+               std::chrono::steady_clock::now() < give_up) {
+            std::this_thread::sleep_for(1ms);
+        }
         source.request_stop();
     }};
     const auto started = std::chrono::steady_clock::now();
     EXPECT_THROW((void)transport.send(get("https://x/slow"), source.get_token()), OperationCancelled);
-    EXPECT_LT(std::chrono::steady_clock::now() - started, 10s);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, kSlowDelay / 2);
 }
 
 TEST(ReplayTransportRules, Rules_built_in_code)

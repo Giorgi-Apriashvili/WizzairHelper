@@ -239,6 +239,10 @@ public:
     /// never remembered. `text` is used as given (callers pass trimmed text).
     [[nodiscard]] GeocodeResult geocode(std::string_view text, const NoticeSink& notices, std::stop_token stop);
 
+    /// Callers blocked on the geocoding lock right now (tests wait for a caller to queue
+    /// instead of sleeping).
+    [[nodiscard]] int lock_waiters() const;
+
 private:
     /// RAII ownership of the geocoding lock (SemaphoreSlim(1,1) with a cancellable wait).
     class GeocodingLock;
@@ -258,9 +262,10 @@ private:
     DelayFunc delay_;
 
     // The geocoding lock.
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable_any released_;
     bool busy_ = false;
+    int waiters_ = 0;  ///< guarded by mutex_
 
     // Guarded by the geocoding lock (only touched while busy_ is owned).
     bool memo_loaded_ = false;

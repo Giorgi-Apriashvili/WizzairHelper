@@ -989,6 +989,17 @@ TEST(CurrencyService, A_cancelled_call_remembers_nothing)
 
 // --- single flight (03 §7.2 lock) -----------------------------------------------------
 
+/// Polls `condition` every millisecond until it holds or 60 s pass (a cap that costs
+/// nothing when it holds, generous for a loaded CI runner); returns `condition()`.
+[[nodiscard]] bool wait_until(const std::function<bool()>& condition)
+{
+    const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds{60};
+    while (!condition() && std::chrono::steady_clock::now() < give_up) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return condition();
+}
+
 /// A responder that parks the first request until the test opens the gate.
 class Gate {
 public:
@@ -1045,8 +1056,7 @@ TEST(CurrencyService, Concurrent_callers_share_one_download)
     gate.wait_until_entered();
     auto second = std::async(std::launch::async, [&] { return h.service.get_rates(second_log.sink(), {}); });
     const Gate::OpenOnExit open_on_exit{gate};
-    // Give the second caller time to reach the lock; the outcome is the same if it does not.
-    std::this_thread::sleep_for(100ms);
+    ASSERT_TRUE(wait_until([&] { return h.service.lock_waiters() == 1; })) << "the second caller never queued";
     EXPECT_EQ(second.wait_for(0s), std::future_status::timeout);
     gate.open();
 
@@ -1070,11 +1080,11 @@ TEST(CurrencyService, Waiting_for_the_lock_is_cancellable)
     auto second = std::async(std::launch::async,
                              [&] { return h.service.get_rates(second_log.sink(), cancel.get_token()); });
     const Gate::OpenOnExit open_on_exit{gate};
-    std::this_thread::sleep_for(50ms);
+    ASSERT_TRUE(wait_until([&] { return h.service.lock_waiters() == 1; })) << "the second caller never queued";
     cancel.request_stop();
 
-    // The waiter gives up promptly while the first download is still parked.
-    ASSERT_EQ(second.wait_for(5s), std::future_status::ready);
+    // The waiter gives up while the first download is still parked.
+    ASSERT_EQ(second.wait_for(60s), std::future_status::ready);
     EXPECT_EQ(thrown_type([&] { (void)second.get(); }), typeid(wizz::OperationCancelled).name());
     EXPECT_TRUE(second_log.notices().empty());
 

@@ -1,5 +1,6 @@
 #include "event_watchdog.hpp"
 
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QMetaEnum>
 #include <QMetaObject>
@@ -23,9 +24,14 @@ constexpr double kOver100Ms = 100.0;
 
 } // namespace
 
-EventWatchdog::EventWatchdog(std::function<bool()> is_busy) : is_busy_(std::move(is_busy))
+EventWatchdog::EventWatchdog(std::function<bool()> is_busy, Clock clock)
+    : is_busy_(std::move(is_busy)), clock_(std::move(clock))
 {
-    clock_.start();
+    if (!clock_) {
+        QElapsedTimer started;
+        started.start();
+        clock_ = [started] { return started.nsecsElapsed(); };
+    }
 }
 
 void EventWatchdog::enter(const QObject* receiver, const QEvent* event)

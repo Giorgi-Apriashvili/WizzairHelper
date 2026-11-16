@@ -692,7 +692,7 @@ TEST(FlightGridBehaviour, UI_12_Busy_clipboard_is_retried_without_blocking_then_
     f.grid.copy_selected();
     EXPECT_EQ(f.recorder.clipboard_attempts, 1);  // returns at once; the retries run on a timer
     EXPECT_TRUE(f.recorder.messages.empty());
-    ASSERT_TRUE(wait_until([&] { return !f.recorder.messages.empty(); }, 5s));
+    ASSERT_TRUE(wait_until([&] { return !f.recorder.messages.empty(); }));
     EXPECT_EQ(f.recorder.clipboard_attempts, app::kClipboardAttempts);
     EXPECT_EQ(f.recorder.messages[0].first, QMessageBox::Information);
     EXPECT_EQ(f.recorder.messages[0].second,
@@ -703,7 +703,7 @@ TEST(FlightGridBehaviour, UI_12_Busy_clipboard_is_retried_without_blocking_then_
     f.recorder.clipboard_attempts = 0;
     f.grid.copy_selected();
     f.recorder.clipboard_busy = false;
-    ASSERT_TRUE(wait_until([&] { return !f.recorder.clipboard.empty(); }, 5s));
+    ASSERT_TRUE(wait_until([&] { return !f.recorder.clipboard.empty(); }));
     EXPECT_EQ(f.recorder.clipboard_attempts, 2);
     EXPECT_TRUE(f.recorder.messages.empty());
 }

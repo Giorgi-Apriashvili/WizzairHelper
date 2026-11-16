@@ -85,3 +85,9 @@ Header layout: public headers under `src/<target>/include/wizz/<target>/…`, in
 - Tests never touch live hosts or the user profile; caches use temporary directories.
 - The suite runs under en-US with a fixed clock (2026-11-02T10:00:00Z, local zone UTC) unless a case
   says SYSTEM.
+- Tests hold on a busy CI runner (4 shared vCPUs, 8 test processes at once, Windows Server):
+  wait for the condition itself (`wizz::test::pump_until`, `gui::wait_until`, capped at
+  `kWaitCap`; a cap costs nothing when the condition holds), never a fixed sleep as a
+  precondition; measure what the code controls (counts, the time the test measured around the
+  code) or bound by the code's or the scenario's own constants; never depend on desktop settings
+  such as client-area animations, which Windows Server turns off.

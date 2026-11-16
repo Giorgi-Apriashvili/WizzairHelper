@@ -9,7 +9,9 @@
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/locale.hpp"
 
+#include <QElapsedTimer>
 #include <QTimer>
+#include <QtGlobal>
 
 #include <gtest/gtest.h>
 
@@ -30,7 +32,7 @@ protected:
     [[nodiscard]] bool wait_ticks(int count)
     {
         const int target = probe_.stats().ticks + count;
-        return pump_until([&] { return probe_.stats().ticks >= target; }, 5s);
+        return pump_until([&] { return probe_.stats().ticks >= target; });
     }
 
     wizz::FixedClock clock_;
@@ -81,33 +83,62 @@ TEST_F(TimerGapProbeTest, Work_right_before_End_counts_although_no_tick_followed
     EXPECT_EQ(probe_.stats().longest_gap_status, "Outbound Done: 1 fares from 1 of 1 requests in 1 s.");
 }
 
+// The two tests below compare the probe with times the test measures itself, right
+// around the calls that start and stop a run: the probe's own readings lie inside them.
+// That holds however slow or busy the machine is, where a fixed bound on a gap would not
+// (a loaded CI runner can delay a 40 ms tick by hundreds of ms).
+
 TEST_F(TimerGapProbeTest, Idle_time_between_busy_periods_is_not_a_gap)
 {
+    QElapsedTimer clock;
+    clock.start();
+    const qint64 start_one = clock.nsecsElapsed();
     panel_.begin("One");
     ASSERT_TRUE(wait_ticks(1));
     panel_.end("ok");
-    pump_for(300ms);
+    const qint64 end_one = clock.nsecsElapsed();
+    pump_for(300ms);  // idle: what a probe that measured across runs would count
+    const qint64 start_two = clock.nsecsElapsed();
     panel_.begin("Two");
     ASSERT_TRUE(wait_ticks(2));
     panel_.end("ok");
-    EXPECT_EQ(probe_.stats().runs, 2);
-    EXPECT_LT(probe_.stats().longest_gap_ms, 250.0);
+    const qint64 end_two = clock.nsecsElapsed();
+
+    const TimerGapProbe::Stats& stats = probe_.stats();
+    EXPECT_EQ(stats.runs, 2);
+    EXPECT_EQ(stats.gaps, stats.ticks + stats.runs) << "per run: start to first tick, tick to tick, last tick to stop";
+    // The gaps of a run add up to the run, which lies inside the test's own measurement of
+    // it; counting the idle time would add at least its 300 ms on top.
+    const double runs_ms = static_cast<double>((end_one - start_one) + (end_two - start_two)) / 1e6;
+    const double idle_ms = static_cast<double>(start_two - end_one) / 1e6;
+    ASSERT_GE(idle_ms, 300.0);
+    EXPECT_LE(stats.total_gap_ms, runs_ms) << "the " << idle_ms << " ms between the runs were counted";
 }
 
 TEST_F(TimerGapProbeTest, Harness_work_is_excluded_and_reported_apart)
 {
+    QElapsedTimer clock;
+    clock.start();
+    const qint64 started = clock.nsecsElapsed();
     panel_.begin("Fetching fares…");
     ASSERT_TRUE(wait_ticks(1));
     probe_.exclude_begin();
+    const qint64 excluded_from = clock.nsecsElapsed();
     std::this_thread::sleep_for(150ms);  // a screenshot
+    const qint64 excluded_to = clock.nsecsElapsed();
     probe_.exclude_end();
     ASSERT_TRUE(wait_ticks(1));
     panel_.end("ok");
+    const qint64 ended = clock.nsecsElapsed();
+
     const TimerGapProbe::Stats& stats = probe_.stats();
-    EXPECT_LT(stats.longest_gap_ms, 100.0);
     EXPECT_EQ(stats.exclusions, 1);
-    EXPECT_GE(stats.excluded_ms, 140.0);
-    EXPECT_GE(stats.longest_exclusion_ms, 140.0);
+    const double inside_ms = static_cast<double>(excluded_to - excluded_from) / 1e6;  // within the exclusion
+    EXPECT_GE(stats.excluded_ms, inside_ms);
+    EXPECT_GE(stats.longest_exclusion_ms, inside_ms);
+    // Gaps and the exclusion share the run without overlapping: the screenshot is in no gap.
+    const double run_ms = static_cast<double>(ended - started) / 1e6;
+    EXPECT_LE(stats.total_gap_ms + stats.excluded_ms, run_ms) << "the excluded time was counted in a gap too";
 }
 
 TEST_F(TimerGapProbeTest, Exclusions_while_idle_change_nothing)

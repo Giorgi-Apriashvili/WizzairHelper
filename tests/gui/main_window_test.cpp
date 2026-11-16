@@ -163,7 +163,7 @@ TEST(MainWindow, Start_up_logs_its_line_loads_the_map_and_focuses_From)
     rig.window().show_main_window();
     // OnShownAsync runs after the first Shown, so the focus is set before the map loads.
     EXPECT_EQ(rig.window().focusWidget(), rig.input().from_box()) << "the editable combo takes the focus of its line edit";
-    ASSERT_TRUE(gui::wait_until([&] { return rig.controller().catalog() != nullptr; }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.controller().catalog() != nullptr; }));
     gui::settle();
 
     const std::vector<std::string> log = rig.log_lines();
@@ -379,20 +379,30 @@ TEST(WindowPlacement, Closing_saves_Bounds_when_normal_and_RestoreBounds_otherwi
 
 TEST(MainWindow, Closing_during_a_search_stops_the_work_first_and_shuts_down_cleanly)
 {
+    // The cancel_waiting server answers a timetable request only after a long delay. The
+    // window closes while the search waits for it: closing must cancel the wait, not sit
+    // it out. The bound is half the server's own delay — far more than any scheduling
+    // delay of a loaded machine, far less than waiting the request out would take.
+    std::chrono::milliseconds server_delay{0};
+    for (const wizz::ui::ReplayTransport::Rule& rule : wizz::test::app::scenario_rules("cancel_waiting", true)) {
+        server_delay = std::max(server_delay, rule.delay);
+    }
+    ASSERT_GE(server_delay, 10s);
     QElapsedTimer elapsed;
     {
         WindowRigOptions options;
+        options.scenario = "cancel_waiting";
         options.keep_delays = true;
         WindowRig rig{std::move(options)};
         rig.start();
         rig.controller().spawn(rig.controller().search_outbound());
-        ASSERT_TRUE(gui::wait_until([&] { return rig.busy().status_text().starts_with("Fetching fares"); }, 10s));
+        ASSERT_TRUE(gui::wait_until([&] { return rig.busy().status_text().starts_with("Fetching fares"); }));
         ASSERT_EQ(rig.controller().jobs().live_count(), 1u);
+        elapsed.start();
         rig.window().close();  // FormClosing: _cts?.Cancel(), then the settings
         EXPECT_TRUE(std::filesystem::exists(wizz::app_paths::settings_file(rig.data_root())));
-        elapsed.start();
     }  // the window, its flows and the worker go away without waiting for the search
-    EXPECT_LT(elapsed.elapsed(), 2000) << "the cancelled worker is joined promptly";
+    EXPECT_LT(std::chrono::milliseconds{elapsed.elapsed()}, server_delay / 2) << "the cancelled worker is joined promptly";
 }
 
 TEST(MainWindow, Autotest_never_saves_the_settings)
@@ -485,7 +495,7 @@ TEST(MainWindow, Enter_while_working_starts_nothing)
     enter_in(rig.trips().same_home_box());
     EXPECT_EQ(counter.outbound + counter.inbound, 0);
     rig.controller().cancel_work();
-    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
 }
 
 TEST(MainWindow, Esc_while_working_cancels_once_like_the_Cancel_button)
@@ -499,7 +509,7 @@ TEST(MainWindow, Esc_while_working_cancels_once_like_the_Cancel_button)
 
     rig.controller().spawn(rig.controller().search_outbound());
     ASSERT_TRUE(gui::wait_until(
-        [&] { return rig.busy().status_text().starts_with("Fetching fares"); }, 10s));
+        [&] { return rig.busy().status_text().starts_with("Fetching fares"); }));
 
     // SetWorking (01 §6.4): exactly these controls are disabled; the rest stays usable.
     for (QWidget* control : rig.input().working_controls()) {
@@ -522,7 +532,7 @@ TEST(MainWindow, Esc_while_working_cancels_once_like_the_Cancel_button)
     rig.busy().request_cancel();
     EXPECT_EQ(cancels, 1) << "Esc and Cancel share one idempotent handler (D-11)";
 
-    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
     EXPECT_TRUE(rig.busy().status_text().starts_with("Outbound Cancelled: 0 fares from 0 of 3 requests in "))
         << rig.busy().status_text();
     EXPECT_EQ(rig.busy().status_colour(), wizz::app::BusyPanel::kFailureColour);
@@ -550,7 +560,7 @@ TEST(MainWindow, Esc_that_closes_a_drop_down_or_comes_while_idle_does_not_cancel
     view->showPopup();
     if (QApplication::activePopupWidget() == nullptr) {
         rig.controller().cancel_work();
-        ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }, 10s));
+        ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
         GTEST_SKIP() << "this platform plugin opens no popup windows";
     }
     gui::send_key(view, QEvent::KeyPress, Qt::Key_Escape);  // WF-3: the window's Esc does not cancel
@@ -559,7 +569,7 @@ TEST(MainWindow, Esc_that_closes_a_drop_down_or_comes_while_idle_does_not_cancel
     gui::settle();
     gui::send_key(view, QEvent::KeyPress, Qt::Key_Escape);
     EXPECT_EQ(cancels, 1);
-    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
 }
 
 } // namespace

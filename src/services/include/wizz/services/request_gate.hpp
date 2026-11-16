@@ -97,6 +97,10 @@ public:
     /// at any time and from any thread.
     void cool_down(Duration duration);
 
+    /// Callers queued for the turn lock right now (tests wait for a caller to queue
+    /// instead of sleeping).
+    [[nodiscard]] std::size_t queued_turns() const { return turn_lock_.waiter_count(); }
+
 private:
     [[nodiscard]] std::optional<UtcInstant> next_allowed() const;
 

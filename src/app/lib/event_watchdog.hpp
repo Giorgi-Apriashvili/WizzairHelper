@@ -13,8 +13,6 @@
 //
 // Test-only diagnostics of the --autotest mode (DECISIONS D-30); UI thread only.
 
-#include <QElapsedTimer>
-
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -47,8 +45,12 @@ public:
         std::vector<Dispatch> longest;    ///< the kKeptDispatches longest, longest first
     };
 
-    /// `is_busy` tells whether the progress UI is busy (BusyPanel::is_busy).
-    explicit EventWatchdog(std::function<bool()> is_busy);
+    /// Monotonic nanoseconds since an arbitrary start.
+    using Clock = std::function<std::int64_t()>;
+
+    /// `is_busy` tells whether the progress UI is busy (BusyPanel::is_busy). Time comes from
+    /// `clock`, by default a QElapsedTimer started now; tests pass one they move by hand.
+    explicit EventWatchdog(std::function<bool()> is_busy, Clock clock = {});
 
     /// A dispatch of `event` to `receiver` starts (read before dispatch: the receiver may
     /// be deleted by it).
@@ -70,11 +72,11 @@ private:
         const char* receiver = "";
     };
 
-    [[nodiscard]] std::int64_t now_ns() const { return clock_.nsecsElapsed(); }
+    [[nodiscard]] std::int64_t now_ns() const { return clock_(); }
     void record(const Frame& frame, double ms, std::int64_t now);
 
     std::function<bool()> is_busy_;
-    QElapsedTimer clock_;
+    Clock clock_;
     std::vector<Frame> stack_;
     std::int64_t excluding_since_ns_ = -1;
     Stats stats_;

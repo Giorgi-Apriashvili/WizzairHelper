@@ -74,7 +74,7 @@ void reach_ready(UpdateRig& rig)
 {
     rig.backend->script_checks({release_info(kNewVersion)});
     rig.start();
-    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s)) << "the ready bar did not appear";
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); })) << "the ready bar did not appear";
 }
 
 [[nodiscard]] std::wstring expected_command_line(const UpdateRig& rig, bool relaunch)
@@ -151,9 +151,11 @@ TEST(UpdateController, Re_evaluates_every_hour_so_a_window_left_open_checks_once
     EXPECT_EQ(rig.backend->checks(), 1);
 
     rig.clock->advance(std::chrono::hours{24});  // a day later
-    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->checks() == 2; }, 5s));
-    const int evaluations = rig.backend->evaluations();
-    rig.wait_for_evaluations(evaluations + 3);
+    // The first evaluation that starts after the jump must check: it reads the new time.
+    const int started = rig.backend->evaluations();
+    rig.wait_for_evaluations(started + 1);
+    EXPECT_EQ(rig.backend->checks(), 2) << "due again a day later";
+    rig.wait_for_evaluations(rig.backend->evaluations() + 3);
     EXPECT_EQ(rig.backend->checks(), 2) << "once per day";
 }
 
@@ -170,7 +172,10 @@ TEST(UpdateController, A_failed_check_is_retried_by_the_core_schedule_an_hour_la
     rig.wait_for_evaluations(4);
     EXPECT_EQ(rig.backend->checks(), 1) << "not before an hour has passed";
     rig.clock->advance(std::chrono::minutes{61});
-    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->checks() == 2; }, 5s));
+    // The first evaluation that starts after the jump must retry: it reads the new time.
+    const int started = rig.backend->evaluations();
+    rig.wait_for_evaluations(started + 1);
+    EXPECT_EQ(rig.backend->checks(), 2) << "retried once the hour has passed";
 }
 
 TEST(UpdateController, Is_never_active_in_self_test_runs)
@@ -188,7 +193,7 @@ TEST(UpdateController, Is_never_active_in_self_test_runs)
     EXPECT_EQ(rig.controller(), nullptr);
     rig.window_rig.window().autotest_runner()->set_screenshotter(
         [](const QWidget&, const std::filesystem::path&) -> std::expected<void, std::string> { return {}; });
-    rig.window_rig.start(30s);
+    rig.window_rig.start();
     gui::settle();
     EXPECT_EQ(rig.backend->evaluations(), 0);
     EXPECT_FALSE(rig.bar().isVisible());
@@ -220,7 +225,7 @@ TEST(UpdateController, An_installed_copy_downloads_and_verifies_then_offers_rest
     rig.backend->script_checks({release_info(kNewVersion)});
     rig.clock->advance(std::chrono::hours{24});
     rig.controller()->evaluate();
-    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }));
     gui::settle();
 
     EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
@@ -317,7 +322,7 @@ TEST(UpdateController, A_failed_download_is_logged_and_tried_again_at_the_next_e
                   "Update download failed: Could not download WizzairHelper-1.2.0-win64-setup.exe after 5 tries: HTTP 503."}));
 
     rig.controller()->evaluate();  // the next hourly tick
-    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 5s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }));
     EXPECT_EQ(rig.backend->downloaded(), (std::vector<Version>{kNewVersion, kNewVersion}));
     EXPECT_EQ(rig.backend->checks(), 1) << "the download is retried without another check";
     EXPECT_EQ(update_lines(rig.window_rig).back(), "Update 1.2.0 downloaded and verified.");
@@ -338,7 +343,7 @@ TEST(UpdateController, Restart_and_update_is_disabled_while_a_search_works)
     EXPECT_TRUE(rig.bar().action_button()->isEnabled());
 
     rig.window_rig.controller().request_search_outbound();
-    ASSERT_TRUE(gui::wait_until([&] { return rig.window_rig.controller().is_working(); }, 5s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window_rig.controller().is_working(); }));
     EXPECT_FALSE(rig.bar().action_button()->isEnabled());
     EXPECT_TRUE(rig.bar().later_button()->isEnabled());
     rig.controller()->trigger_action();  // e.g. a click that raced the disabling
@@ -347,7 +352,7 @@ TEST(UpdateController, Restart_and_update_is_disabled_while_a_search_works)
     EXPECT_TRUE(rig.launches.commands.empty());
 
     rig.window_rig.controller().cancel_work();
-    ASSERT_TRUE(gui::wait_until([&] { return !rig.window_rig.controller().is_working(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window_rig.controller().is_working(); }));
     EXPECT_TRUE(rig.bar().action_button()->isEnabled());
 }
 
@@ -498,7 +503,7 @@ TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_t
     wizz::test::app::LaunchLog launches;
     ASSERT_TRUE(rig.window().enable_updates(launches.hooks(backend)));
     rig.start();
-    ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }));
 
     EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
     const std::filesystem::path downloaded = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";

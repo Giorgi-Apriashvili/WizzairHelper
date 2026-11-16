@@ -1356,21 +1356,27 @@ TEST(FlightSearchService, Destroying_the_service_cancels_and_joins_its_searches)
                           std::move(options)};
     harness.warm_map();
 
-    std::promise<void> backing_off;
+    // The back-off the search announces (now → waiting_until on the harness's fixed clock)
+    // bounds the shutdown: a join that waited the back-off out would take all of it,
+    // a cancelled one a fraction — whatever the machine's load.
+    std::promise<wizz::Duration> backing_off;
     std::atomic<bool> announced{false};
     const wizz::ProgressSink sink = [&](const SearchProgress& progress) {
         if (progress.waiting_until_utc && !announced.exchange(true)) {
-            backing_off.set_value();
+            backing_off.set_value(*progress.waiting_until_utc - harness.clock->utc_now());
         }
     };
     std::stop_source caller;
     std::future<LegSearchResultPtr> future =
         harness.service->search_async(budapest_r0_to_london(harness), sink, {}, caller.get_token());
-    ASSERT_EQ(backing_off.get_future().wait_for(30s), std::future_status::ready);
+    std::future<wizz::Duration> backoff = backing_off.get_future();
+    ASSERT_EQ(backoff.wait_for(60s), std::future_status::ready);
+    const wizz::Duration backoff_length = backoff.get();
+    ASSERT_GE(backoff_length, wizz::Duration{std::chrono::seconds{5}}) << "the first retry delay (04 §9)";
 
     const auto started = std::chrono::steady_clock::now();
     harness.service.reset();  // requests stop on the worker's own source and joins it
-    EXPECT_LT(std::chrono::steady_clock::now() - started, 4s);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, backoff_length) << "the shutdown waited the back-off out";
 
     ASSERT_EQ(future.wait_for(0s), std::future_status::ready);
     const LegSearchResultPtr result = future.get();
