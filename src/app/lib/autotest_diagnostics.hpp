@@ -24,7 +24,10 @@
 //               geometry in logical and device pixels, window on its screen;
 //   layout      layout_problems() of the window (clipping, overlap, cut text) and
 //               whether Cancel is fully visible;
-//   environment OS, Qt version, locale, widget style.
+//   environment OS, Qt version, locale, widget style, and the look in use (D-53..D-56):
+//               light, dark or high_contrast, the window colour of its palette and
+//               the family the UI font resolved to, so a run can tell that the look it
+//               asked for (WIZZ_COLOR_SCHEME, the Windows app mode) is the one it got.
 //
 // Key order is fixed (as listed). UI thread only (the collectors read widgets).
 
@@ -109,7 +112,10 @@ struct EnvironmentDiagnostics {
     std::string kernel;                       ///< QSysInfo::kernelVersion()
     std::string qt;                           ///< qVersion()
     std::string locale;                       ///< the app's culture (07 §1)
-    std::string style;                        ///< the widget style's name
+    std::string style;                        ///< the widget style's name ("modern/fusion" for ModernStyle)
+    std::string look;                         ///< "light", "dark" or "high_contrast" (style::appearance())
+    std::string window_colour;                ///< the palette's Window colour, "#rrggbb"
+    std::string font_family;                  ///< the family the UI font resolved to
 };
 
 struct AutoTestDiagnostics {

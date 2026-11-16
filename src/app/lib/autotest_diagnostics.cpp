@@ -3,11 +3,14 @@
 #include "busy_panel.hpp"
 #include "layout_check.hpp"
 #include "main_window.hpp"
+#include "modern_style.hpp"
 #include "qt_strings.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/core/json.hpp"
 
 #include <QApplication>
+#include <QFontInfo>
 #include <QGuiApplication>
 #include <QPushButton>
 #include <QScreen>
@@ -223,9 +226,24 @@ EnvironmentDiagnostics describe_environment(const Locale& locale)
     environment.kernel = to_utf8(QSysInfo::kernelVersion());
     environment.qt = qVersion();
     environment.locale = locale.name();
-    if (const QStyle* style = QApplication::style(); style != nullptr) {
-        environment.style = to_utf8(style->name());
+    if (const auto* modern = dynamic_cast<const ModernStyle*>(QApplication::style()); modern != nullptr) {
+        environment.style = "modern/" + to_utf8(modern->baseStyle()->name());  // a proxy has no name of its own
+    } else if (const QStyle* other = QApplication::style(); other != nullptr) {
+        environment.style = to_utf8(other->name());
     }
+    switch (style::appearance()) {
+    case style::Appearance::light:
+        environment.look = "light";
+        break;
+    case style::Appearance::dark:
+        environment.look = "dark";
+        break;
+    case style::Appearance::high_contrast:
+        environment.look = "high_contrast";
+        break;
+    }
+    environment.window_colour = to_utf8(QApplication::palette().color(QPalette::Window).name());
+    environment.font_family = to_utf8(QFontInfo(QApplication::font()).family());
     return environment;
 }
 
@@ -307,6 +325,9 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("qt").string(environment.qt);
     writer.key("locale").string(environment.locale);
     writer.key("style").string(environment.style);
+    writer.key("look").string(environment.look);
+    writer.key("windowColour").string(environment.window_colour);
+    writer.key("fontFamily").string(environment.font_family);
     writer.end_object();
 
     writer.end_object();

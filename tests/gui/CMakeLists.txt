@@ -80,9 +80,14 @@ set_tests_properties(app.version app.version.powershell app.version.resource PRO
 # an isolated data root, the fixed clock and --diagnostics; check_autotest.py validates
 # summary.json, diagnostics.json (40 ms timer gap below 100 ms — 250 ms in Debug —,
 # UI-loop watchdog, both by the UI thread's CPU time and by wall-clock time unless other
-# processes held the CPUs (D-50); one cancel transition, final grids, layout) and the screenshots.
+# processes held the CPUs (D-50); one cancel transition, final grids, layout; the look the
+# run asked for, D-53..D-56) and the screenshots.
 # The window opens on the real "windows" platform (PrintWindow needs a native
-# window), one at a time. Key scenarios repeat at 150 % and 200 % (QT_SCALE_FACTOR).
+# window), one at a time. A run is "scenario[:variant]...", named
+# autotest.<scenario>[.<variant>]...: scale150 / scale200 run at 150 % / 200 %
+# (QT_SCALE_FACTOR), dark forces the dark look (WIZZ_COLOR_SCHEME=dark; the other runs
+# follow the Windows app mode, and the checker verifies the look either way), minimum
+# starts the window at the 980 x 600 minimum.
 # The crash_* runs fail at start-up on purpose (a bad --fixed-now before the QApplication,
 # a bad replay.json after it): DPI-aware crash box, errors.log record in the --data-root
 # profile with the right timestamp (01 §3.2, D-30).
@@ -92,33 +97,42 @@ if(Python3_Interpreter_FOUND)
         named_destination anywhere_return_from_top not_served same_area over_500
         cancel_waiting cancel_retrying heavy_cached cancel_cached
         crash_bad_fixed_now crash_bad_replay
-        named_destination@1.5 named_destination@2
-        cancel_retrying@1.5 cancel_retrying@2
-        heavy_cached@1.5 heavy_cached@2)
+        named_destination:scale150 named_destination:scale200
+        cancel_retrying:scale150 cancel_retrying:scale200
+        heavy_cached:scale150 heavy_cached:scale200
+        named_destination:minimum
+        named_destination:dark cancel_retrying:dark heavy_cached:dark
+        named_destination:dark:scale200 named_destination:dark:minimum)
     foreach(run IN LISTS _wizz_autotest_runs)
-        string(REPLACE "@" ";" _parts "${run}")
-        list(GET _parts 0 scenario)
+        string(REPLACE ":" ";" _variants "${run}")
+        list(POP_FRONT _variants scenario)
         set(_name autotest.${scenario})
-        set(_scale_args)
-        list(LENGTH _parts _count)
-        if(_count GREATER 1)
-            list(GET _parts 1 _scale)
-            string(REPLACE "." "" _percent "${_scale}")
-            if(_percent STREQUAL "2")
-                set(_percent 200)
+        set(_variant_args)
+        foreach(_variant IN LISTS _variants)
+            string(APPEND _name ".${_variant}")
+            if(_variant STREQUAL "dark")
+                list(APPEND _variant_args --color-scheme dark)
+            elseif(_variant STREQUAL "minimum")
+                list(APPEND _variant_args --window 980x600)
+            elseif(_variant MATCHES "^scale([1-9][0-9]*)$")
+                math(EXPR _whole "${CMAKE_MATCH_1} / 100")
+                math(EXPR _tenths "(${CMAKE_MATCH_1} % 100) / 10")
+                if(_tenths EQUAL 0)
+                    list(APPEND _variant_args --scale ${_whole})
+                else()
+                    list(APPEND _variant_args --scale ${_whole}.${_tenths})
+                endif()
             else()
-                set(_percent "${_percent}0")
+                message(FATAL_ERROR "autotest run ${run}: unknown variant ${_variant}")
             endif()
-            set(_name autotest.${scenario}.scale${_percent})
-            set(_scale_args --scale ${_scale})
-        endif()
+        endforeach()
         add_test(NAME ${_name}
             COMMAND Python3::Interpreter -I "${CMAKE_CURRENT_SOURCE_DIR}/check_autotest.py"
                 --exe "$<TARGET_FILE:WizzairHelper>"
                 --replay-root "${PROJECT_SOURCE_DIR}/tests/replay"
                 --scenario ${scenario}
                 --max-gap-ms "$<IF:$<CONFIG:Debug>,250,100>"
-                ${_scale_args}
+                ${_variant_args}
                 --work-dir "${CMAKE_CURRENT_BINARY_DIR}/autotest/$<CONFIG>/${_name}")
         set_tests_properties(${_name} PROPERTIES
             LABELS autotest
