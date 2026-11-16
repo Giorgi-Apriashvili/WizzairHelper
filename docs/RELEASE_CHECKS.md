@@ -7,6 +7,21 @@ measurements, the DPI runs of 01 §15, and the verification of the release packa
 Date: 2026-11-16. Commands: `ctest --preset release` / `ctest --preset debug` (label `autotest` for
 the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING.md`](../BUILDING.md).
 
+## Published releases
+
+| Version | Date | Commit | What it added |
+|---|---|---|---|
+| [1.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.0.0) | 2026-11-16 | `8dbb08d` | The first release: the app, the per-user installer and portable ZIP, the daily update check and the application icon. |
+
+v1.0.0 verification: the tag's CI run 43859397046 passed on all three legs (msvc-release with the 17
+end-to-end runs, msvc-debug, clang-cl-release) and published the release; locally the same commit
+passed 1446 / 1446 tests in Release, 1429 / 1429 in Debug and 1429 / 1429 with clang-cl.
+`tools/release_check.ps1 -Tag v1.0.0`: three assets (installer 10,124,738 bytes, ZIP 11,663,110
+bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
+`WizzairHelper 1.0.0`, and `releases/latest` is v1.0.0. The measurements below were taken on
+2026-11-16 before the CI hardening (DECISIONS D-50 to D-52), which changed tests, not the
+behaviour measured.
+
 ## Environment
 
 | Item | Value |
