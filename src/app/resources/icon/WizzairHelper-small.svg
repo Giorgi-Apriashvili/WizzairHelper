@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- WizzairHelper app icon (small, 16-32 px: front arc only, bolder strokes, taller pin tip). Original artwork: location pin + departing plane + search-radius ring. -->
+  <defs>
+    <linearGradient id="pinFill" x1="0.25" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#E8309A"/>
+      <stop offset="1" stop-color="#B00062"/>
+    </linearGradient>
+    <linearGradient id="ringFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF9A1A"/>
+      <stop offset="1" stop-color="#F06C00"/>
+    </linearGradient>
+  </defs>
+  <!-- search radius: front arc only, clear of the pin tip -->
+  <path d="M28 200A100 32 0 0 0 228 200" fill="none" stroke="url(#ringFill)" stroke-width="28" stroke-linecap="round"/>
+  <!-- location pin -->
+  <path d="M128 4C80.5 4 42 42.5 42 90C42 132.4 128 196 128 196C128 196 214 132.4 214 90C214 42.5 175.5 4 128 4Z" fill="url(#pinFill)"/>
+  <!-- plane (top view) departing up-right -->
+  <path transform="translate(128 90) rotate(45)" d="M0 -58.8Q12.6 -58.8 12.6 -38.6L12.6 -16.8L55.4 11.8L55.4 26.9L12.6 10.1L12.6 31.9L28.6 43.7L28.6 53.8L11.3 48.7L0 50.4L-11.3 48.7L-28.6 53.8L-28.6 43.7L-12.6 31.9L-12.6 10.1L-55.4 26.9L-55.4 11.8L-12.6 -16.8L-12.6 -38.6Q-12.6 -58.8 0 -58.8Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round"/>
+</svg>
