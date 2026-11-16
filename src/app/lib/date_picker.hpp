@@ -16,7 +16,7 @@
 // UI-11, UX-16). dateChanged fires for user and code changes alike, only when
 // the date really changes.
 //
-// The calendar drop-down (DECISIONS D-54) has no week-number column; weekends are
+// The calendar drop-down (DECISIONS D-53) has no week-number column; weekends are
 // in the theme's accent text colour (Qt's default pure red is 4.0:1 on white,
 // below AA), days of the neighbouring months in its muted text (Qt's disabled
 // colour fails AA too, and those days can be picked). High Contrast keeps the

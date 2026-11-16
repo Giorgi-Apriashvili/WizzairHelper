@@ -61,7 +61,7 @@ inline constexpr std::string_view kLabelNights = "nights";
 inline constexpr std::string_view kHintReturn = "Return flights go from the destination area back to any airport near home.";
 inline constexpr std::string_view kSearchOutbound = "Search outbound";
 inline constexpr std::string_view kSearchReturn = "Search return";
-// Prototype "layout" direction: the grouped input area names its sections, and
+// The grouped input area (DECISIONS D-53) names its sections, and
 // "Outbound between" / "Return between" become the section name + "between".
 inline constexpr std::string_view kSectionWhere = "Where";
 inline constexpr std::string_view kSectionTravellers = "Travellers & prices";

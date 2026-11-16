@@ -13,7 +13,11 @@ checked by the UI thread's own CPU time always and by their wall-clock length
 unless other processes held the CPUs during them (DECISIONS D-50), so a busy
 machine does not fail a run. Run with `python -I` (no site or user
 paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
-QT_SCALE_FACTOR (01 §15, 05 §5).
+QT_SCALE_FACTOR (01 §15, 05 §5). `--window 980x600` starts the window at that size (the whole
+window in logical pixels, like 01 §4.1) through the profile's settings.json, which the app then
+must leave unchanged. `--color-scheme light|dark`, `--high-contrast` and `--fonts windows10` set
+the look's diagnostic switches WIZZ_COLOR_SCHEME, WIZZ_HIGH_CONTRAST and WIZZ_FONTS (DECISIONS
+D-56); without them the run inherits the caller's environment.
 
 The replay directory is tests/replay/<scenario>, except for the heavy cached
 replays (heavy_cached, cancel_cached), whose timetables are generated into
@@ -783,7 +787,17 @@ def main():
     parser.add_argument('--scale', help='QT_SCALE_FACTOR for the run, e.g. 1.5 or 2')
     parser.add_argument('--max-gap-ms', type=float, default=100.0,
                         help='limit for the longest gap of the 40 ms progress timer (05 §5: 100 ms)')
+    parser.add_argument('--window', help='start size of the whole window in logical pixels, e.g. 980x600')
+    parser.add_argument('--color-scheme', choices=['light', 'dark'], help='WIZZ_COLOR_SCHEME for the run')
+    parser.add_argument('--high-contrast', action='store_true', help='WIZZ_HIGH_CONTRAST=1 for the run')
+    parser.add_argument('--fonts', choices=['windows10'], help='WIZZ_FONTS for the run')
     args = parser.parse_args()
+    window = None
+    if args.window:
+        match = re.fullmatch(r'(\d+)x(\d+)', args.window)
+        if not match:
+            parser.error('--window must be WIDTHxHEIGHT, e.g. 980x600')
+        window = (int(match.group(1)), int(match.group(2)))
 
     work_dir = os.path.abspath(args.work_dir)
     replay_root = os.path.abspath(args.replay_root)
@@ -796,6 +810,12 @@ def main():
         env['QT_SCALE_FACTOR'] = args.scale
     else:
         env.pop('QT_SCALE_FACTOR', None)
+    if args.color_scheme:
+        env['WIZZ_COLOR_SCHEME'] = args.color_scheme
+    if args.high_contrast:
+        env['WIZZ_HIGH_CONTRAST'] = '1'
+    if args.fonts:
+        env['WIZZ_FONTS'] = args.fonts
     if args.scenario in CRASH_SCENARIOS:
         return run_crash(args, env, work_dir, replay_root)
 
@@ -803,6 +823,16 @@ def main():
     out_dir = os.path.join(work_dir, 'out')
     data_root = os.path.join(work_dir, 'data')
     replay = prepare(replay_root, work_dir) if prepare else os.path.join(replay_root, args.scenario)
+    settings_path = os.path.join(data_root, 'settings.json')
+    settings_text = None
+    if window:
+        # settings.json holds the window size in device pixels (01 §13); the autotest run loads it
+        # like a normal start and must not write it back.
+        ratio = float(args.scale or 1)
+        os.makedirs(data_root)
+        settings_text = json.dumps({'WindowWidth': round(window[0] * ratio), 'WindowHeight': round(window[1] * ratio)})
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            f.write(settings_text)
     command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root, '--replay', replay,
                '--fixed-now', FIXED_NOW, '--diagnostics'] + flags
     print('running:', subprocess.list2cmdline(command), '(QT_SCALE_FACTOR=%s)' % (args.scale or 'unset'))
@@ -828,7 +858,15 @@ def main():
     checker = Checker(summary, diagnostics, out_dir)
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
-    checker.expect(not os.path.exists(os.path.join(data_root, 'settings.json')), 'settings.json written in autotest')
+    if settings_text is None:
+        checker.expect(not os.path.exists(settings_path), 'settings.json written in autotest')
+    else:
+        with open(settings_path, encoding='utf-8') as f:
+            checker.expect(f.read() == settings_text, 'settings.json changed in autotest')
+        ratio = float(args.scale or 1)
+        work = diagnostics.get('display', {}).get('screenAvailable') or [0, 0, 0, 0]  # logical pixels
+        if work[2] >= window[0] and work[3] >= window[1]:
+            checker.diag_equal('display.outerDeviceSize', [round(window[0] * ratio), round(window[1] * ratio)])
     checker.expect(not os.path.exists(os.path.join(data_root, 'errors.log')), 'errors.log written: the app crashed')
     timer = diagnostics.get('timer', {})
     events = diagnostics.get('uiEvents') or {}

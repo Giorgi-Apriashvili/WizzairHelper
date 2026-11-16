@@ -14,8 +14,8 @@ namespace wizz::app {
 std::vector<QFont> FontWarmup::default_fonts()
 {
     // The UI fonts plus the monospace and semibold faces the busy panel and the grids use.
-    return {style::form_font(), style::bold_form_font(), style::mono_font(10.0, true), style::mono_font(9.5),
-            style::semibold_font(10.0), style::hint_font(), style::caption_font()};
+    return {style::form_font(),         style::bold_form_font(), style::data_font(), style::mono_font(10.0, true),
+            style::mono_font(9.5),        style::semibold_font(10.0), style::hint_font(), style::caption_font()};
 }
 
 QString FontWarmup::default_sample()

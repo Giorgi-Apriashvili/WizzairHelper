@@ -1,6 +1,6 @@
 #pragma once
-// The input panel at the top of the main window (01 §4.2-§4.5, §6.1-§6.4),
-// prototype "layout" direction: the inputs are grouped into four titled cards
+// The input panel at the top of the main window (01 §4.2-§4.5, §6.1-§6.4) in the
+// look of DECISIONS D-53: the inputs are grouped into four titled cards
 // (SectionCard) in a 2 x 2 grid, read left to right, top to bottom:
 //
 //   ┌ WHERE  (empty “To” = anywhere) ──────────┐  ┌ TRAVELLERS & PRICES ───────────────┐
@@ -16,7 +16,9 @@
 //
 // The place boxes stretch with the window; the other inputs keep their width.
 // At narrow widths the Search return button moves under the night limits
-// (TrailingRowLayout), so the minimum window (980 x 600) clips nothing.
+// (TrailingRowLayout), so the minimum window (980 x 600) clips nothing. Both
+// search buttons sit at the bottom right of their cards, on one line: the second
+// row of cards is as tall as the Return card's two rows anyway (D-53).
 //
 // The date and nights coupling (01 §6.1, §6.2) is ui::DateRules: the panel
 // forwards every picker / nights change (user or code) to the model and shows the
@@ -30,7 +32,7 @@
 // return dates; nothing for the night boxes; other controls keep the last
 // mapping. The tab order follows the cards: origin, radius, destination, radius,
 // adults, fare, currency, outbound dates, Search outbound, return dates, night
-// limits, Search return (01 §6.3 had the outbound dates before adults).
+// limits, Search return (01 §6.3 had the outbound dates before adults; D-54).
 
 #include "wizz/core/domain.hpp"
 #include "wizz/core/locale.hpp"
@@ -184,7 +186,8 @@ public:
     [[nodiscard]] QLabel* resolved_label() const noexcept { return resolved_; }
     /// The section cards 0..3: Where, Travellers & prices, Outbound, Return.
     [[nodiscard]] QWidget* row(int index) const;
-    /// The grouped layout has no wrapping FlowLayout rows: always null.
+    /// The grouped layout has no wrapping FlowLayout rows: always null (kept for the GUI
+    /// tests of the old three-row layout until they move to the cards).
     [[nodiscard]] FlowLayout* row_layout(int index) const;
     /// The controls SetWorking disables, in the 01 §6.4 order.
     [[nodiscard]] std::vector<QWidget*> working_controls() const;

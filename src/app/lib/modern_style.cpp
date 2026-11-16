@@ -356,7 +356,7 @@ int ModernStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, con
     case PM_TabBarTabHSpace:
         return 28;
     case PM_TabBarTabVSpace:
-        return 14;
+        return 10;
     case PM_TabBarBaseOverlap:
     case PM_TabBarBaseHeight:
     case PM_TabBarTabShiftHorizontal:
@@ -384,7 +384,7 @@ int ModernStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, con
         if (is_list(widget)) {
             return 10;  // list item text clear of the selection pill
         }
-        if (in_item_view(widget)) {
+        if (in_item_view(widget) && !in_calendar(widget)) {
             return 7;  // grid cell text 8 px from the cell edges
         }
         break;
@@ -422,6 +422,8 @@ int ModernStyle::styleHint(StyleHint hint, const QStyleOption* option, const QWi
         return 0;  // nothing moves unless the app moves it (D-34)
     case SH_DialogButtonBox_ButtonsHaveIcons:
         return 0;
+    case SH_UnderlineShortcut:
+        return 0;  // like Windows by default: no mnemonic underlines (the Alt shortcuts still work)
     default:
         break;
     }
@@ -742,8 +744,10 @@ void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* op
     case PE_FrameFocusRect:
         if (qobject_cast<const QAbstractButton*>(widget) != nullptr) {
             draw_focus_ring(painter, option->rect, t().accent_line, kRadius);
+        } else if (in_calendar(widget)) {
+            draw_focus_ring(painter, option->rect, t().accent_line, 4);  // the current day
         }
-        return;  // item views show focus through the selection
+        return;  // lists and grids show focus through the selection and its accent bar
     case PE_IndicatorCheckBox: {
         const bool enabled = option->state.testFlag(State_Enabled);
         const bool checked = option->state.testAnyFlags(State_On | State_NoChange);
@@ -764,8 +768,8 @@ void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* op
             painter->drawPolyline(QPolygonF() << o + QPointF(s * 0.25, s * 0.52) << o + QPointF(s * 0.43, s * 0.70)
                                               << o + QPointF(s * 0.76, s * 0.33));
         } else {
-            painter->setPen(QPen(!enabled ? t().border : hovered ? t().input_border_hover : t().input_underline, 1.0));
-            painter->setBrush(enabled ? t().input : t().input_disabled);
+            painter->setPen(QPen(!enabled ? t().border : hovered ? t().text_secondary : t().input_underline, 1.0));
+            painter->setBrush(!enabled ? t().input_disabled : hovered ? t().hover : t().input);
             painter->drawRoundedRect(box, 4, 4);
         }
         painter->restore();
@@ -911,10 +915,9 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
         return;
     case CE_HeaderSection: {
         const QRect r = option->rect;
-        painter->fillRect(r, t().surface_alt);
-        if (option->state.testFlag(State_MouseOver) && option->state.testFlag(State_Enabled)) {
-            painter->fillRect(r, t().surface_alt);
-        }
+        const bool hovered = option->state.testFlag(State_MouseOver) && option->state.testFlag(State_Enabled);
+        // Headers sort when clicked: the section under the mouse darkens a little.
+        painter->fillRect(r, hovered ? mix(t().surface_alt, t().text, 0.07) : t().surface_alt);
         painter->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), t().border);
         const auto* header = qstyleoption_cast<const QStyleOptionHeader*>(option);
         const bool last = header != nullptr && (header->position == QStyleOptionHeader::End ||

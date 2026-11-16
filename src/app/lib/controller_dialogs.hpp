@@ -17,14 +17,21 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 
+class QMessageBox;
 class QWidget;
 
 namespace wizz::app {
+
+/// The show_error box: caption "WizzairHelper", Information icon, OK, plain `text`.
+[[nodiscard]] std::unique_ptr<QMessageBox> make_error_box(const QString& text, QWidget* owner);
+/// The confirm_big_search box: caption "Big search", Question icon, Yes / No, plain `text`.
+[[nodiscard]] std::unique_ptr<QMessageBox> make_big_search_box(const QString& text, QWidget* owner);
 
 struct ControllerDialogs {
     std::function<void(const QString& text)> show_error;

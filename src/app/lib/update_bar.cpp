@@ -1,5 +1,6 @@
 #include "update_bar.hpp"
 
+#include "modern_style.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
 #include "ui_style.hpp"
@@ -9,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 
 #include <algorithm>
@@ -50,7 +52,8 @@ UpdateBar::UpdateBar(QWidget* parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("updateBar"));
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(kAccentWidth + kPadding.left(), kPadding.top(), kPadding.right(), kPadding.bottom());
+    layout->setContentsMargins(kOuterMargins.left() + kAccentWidth + kPadding.left(), kOuterMargins.top() + kPadding.top(),
+                               kOuterMargins.right() + kPadding.right(), kOuterMargins.bottom() + kPadding.bottom());
     layout->setSpacing(kSpacing);
 
     message_ = new QLabel(this);
@@ -102,9 +105,17 @@ QColor UpdateBar::background_colour()
 void UpdateBar::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter{this};
-    painter.fillRect(rect(), background_colour());
-    painter.fillRect(QRect{0, 0, kAccentWidth, height()}, style::theme().accent_line);
-    painter.fillRect(QRect{0, height() - 1, width(), 1}, style::theme().border);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF card = QRectF(rect().marginsRemoved(kOuterMargins)).adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath shape;
+    shape.addRoundedRect(card, ModernStyle::kCardRadius, ModernStyle::kCardRadius);
+    painter.fillPath(shape, background_colour());
+    painter.save();
+    painter.setClipPath(shape);
+    painter.fillRect(QRectF(card.left(), card.top(), kAccentWidth, card.height()), style::theme().accent_line);
+    painter.restore();
+    painter.setPen(QPen(style::theme().border, 1.0));
+    painter.drawPath(shape);
 }
 
 void UpdateBar::changeEvent(QEvent* event)

@@ -19,6 +19,7 @@
 // Fonts, with their Windows 10 fallbacks (QFont::setFamilies picks the first
 // installed family):
 //   UI       Segoe UI Variable Text 10 pt  -> Segoe UI 10 pt
+//   grids    Segoe UI Variable Text 9 pt   -> Segoe UI 9 pt (cells; headers semibold 10 pt)
 //   semibold Segoe UI Variable Text Semibold -> Segoe UI Semibold
 //   captions Segoe UI Variable Small Semibold 8 pt -> Segoe UI Semibold 8 pt
 //   mono     Cascadia Mono (Windows Terminal on Windows 10) -> Consolas -> Courier New
@@ -173,6 +174,9 @@ void schedule_appearance_refresh();
 [[nodiscard]] bool windows10_fonts();
 /// The UI font: Segoe UI Variable Text 10 pt, Segoe UI 10 pt on Windows 10.
 [[nodiscard]] QFont form_font();
+/// The result grids' cells: Segoe UI Variable Text 9 pt (Segoe UI 9 pt), denser than the
+/// UI font so more rows fit; their headers stay at the UI size, semibold.
+[[nodiscard]] QFont data_font();
 /// Its semibold version (search buttons, table headers).
 [[nodiscard]] QFont bold_form_font();
 /// Segoe UI Variable Text Semibold (Segoe UI Semibold on Windows 10) at `point_size`.

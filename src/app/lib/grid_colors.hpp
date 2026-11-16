@@ -1,7 +1,7 @@
 #pragma once
-// Colours of the result grids (01 §8.1, §8.3, §9.1), prototype "layout"
-// direction: they come from the light or dark theme (ui_style.hpp) instead of
-// the WinForms SystemColors.
+// Colours of the result grids (01 §8.1, §8.3, §9.1): they come from the theme
+// of the look in use (ui_style.hpp, DECISIONS D-53) instead of the WinForms
+// SystemColors, so they change with it.
 
 #include <QColor>
 
@@ -17,7 +17,8 @@ namespace wizz::app::grid_colors {
 [[nodiscard]] QColor cheapest_back();
 [[nodiscard]] QColor cheapest_selection_back();
 
-/// The WinForms colours of 01 §8.3, kept for reference (the theme replaces them).
+/// The WinForms colours of 01 §8.3; the theme replaces them (kept for the GUI tests that
+/// still compare against them).
 inline constexpr QColor kCheapestBack{220, 245, 220};
 inline constexpr QColor kCheapestSelectionBack{40, 140, 70};
 

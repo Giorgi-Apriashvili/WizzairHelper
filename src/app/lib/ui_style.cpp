@@ -110,6 +110,9 @@ void install(Appearance look)
         }
         if (plain != nullptr) {
             QApplication::setStyle(plain);
+            // setStyle() fills Qt's per-class fonts from Windows (Segoe UI 9 pt for item views,
+            // menus, message boxes, tooltips); the app font replaces them, so every class uses it.
+            QApplication::setFont(form_font());
         }
         QApplication::setPalette(QPalette());
         s.theme = high_contrast_theme(QApplication::palette());
@@ -120,6 +123,7 @@ void install(Appearance look)
     if (!ModernStyle::is_active()) {
         if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
             QApplication::setStyle(new ModernStyle(fusion));  // the application takes ownership
+            QApplication::setFont(form_font());               // over the per-class fonts, see above
         }
     }
     const QPalette palette = make_palette(s.theme);
@@ -495,6 +499,11 @@ bool windows10_fonts()
 QFont form_font()
 {
     return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), kFormPointSize);
+}
+
+QFont data_font()
+{
+    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
 }
 
 QFont semibold_font(qreal point_size)

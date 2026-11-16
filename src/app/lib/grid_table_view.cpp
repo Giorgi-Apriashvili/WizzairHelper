@@ -1,7 +1,6 @@
 #include "grid_table_view.hpp"
 
 #include "grid_row_delegate.hpp"
-#include "modern_style.hpp"
 #include "ui_style.hpp"
 
 #include <QApplication>
@@ -54,6 +53,7 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     setFrameShape(QFrame::NoFrame);
     setWordWrap(false);
     setShowGrid(false);  // rows are separated by the delegate's line, columns by space
+    setFont(style::data_font());  // denser cells; the header keeps the UI size (below)
     apply_theme();
     style::on_theme_change(this, [this] { apply_theme(); });
     setCornerButtonEnabled(false);
@@ -72,7 +72,7 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     columns->setSectionResizeMode(QHeaderView::Interactive);
     columns->setStretchLastSection(false);
     columns->setHighlightSections(false);
-    columns->setFont(style::semibold_font(QApplication::font().pointSizeF()));
+    columns->setFont(style::bold_form_font());  // semibold, the UI size
     // WinForms header cells: MiddleLeft, wrapped text.
     columns->setDefaultAlignment(Qt::Alignment::fromInt(Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap));
     columns->setTextElideMode(Qt::ElideNone);

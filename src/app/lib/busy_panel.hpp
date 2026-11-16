@@ -8,14 +8,15 @@
 // de-duplicated taskbar calls to TaskbarProgress and runs the 4 s one-shot that
 // clears the taskbar Error state.
 //
-// Layout (01 §10.1), prototype "layout" look: the theme's surface colour with a
-// 1 px top border (a status bar), padding (14, 5, 14, 5), a 4 × 2 grid:
+// Layout (01 §10.1) in the look of DECISIONS D-53: the theme's surface colour with
+// a 1 px top border (a status bar), padding (14, 5, 14, 5), a 4 × 2 grid:
 //   col 0: 36 px  spinner (both rows, 6 px right margin)
 //   col 1: 100 %  progress bar (margin 0, 2, 14, 2) / status line (elided)
 //   col 2: auto   elapsed (Cascadia Mono 10 pt semibold) / wait note (warning, semibold)
 //   col 3: auto   Cancel (both rows, right, default 3 px button margin)
 // Row heights come from font metrics and are recomputed on font, style and
-// device-pixel-ratio changes (UI-6).
+// device-pixel-ratio changes (UI-6). Every colour (background, status, wait note,
+// elapsed time, the bar's fill) is taken from the theme again when the look changes.
 //
 // Cancel and Esc share request_cancel (D-11, 07 §4): it disables Cancel, shows
 // "Cancelling… (finishing the current request)" and emits cancel_requested()
@@ -72,7 +73,9 @@ class BusyPanel final : public QWidget {
 public:
     /// Range of the progress bar: 0..BarMax + 1 (01 §10.1, §10.6).
     static constexpr int kBarRangeMax = ui::BusyPanelModel::kBarMax + 1;
-    /// Status colours (01 §10.3) and the wait note colour (01 §10.1).
+    /// The WinForms status colours of 01 §10.3 and the wait note colour of 01 §10.1. The
+    /// look uses the theme's success, failure and warning colours instead; these are kept
+    /// only for the GUI tests that still compare against them.
     static constexpr QColor kSuccessColour{0, 100, 0};    // DarkGreen
     static constexpr QColor kFailureColour{178, 34, 34};  // Firebrick
     static constexpr QColor kWaitColour{255, 140, 0};     // DarkOrange
