@@ -18,7 +18,7 @@ were resolved.
 |---|---|
 | `fixtures/`, `history/live-cache-2026-11-02/` | Byte-exact test inputs: captured responses and a frozen live dataset |
 | `src/core` | Pure logic: decimal, JSON, Unicode/locale, time, geo, catalog, planner, pricing, round trips |
-| `src/services` | I/O: libcurl transport, caches, Wizz client, currency service, place resolver, search service |
+| `src/services` | I/O: libcurl transport, caches, Wizz client, currency service, place resolver, search service, self-updater core |
 | `src/ui_logic` | Qt-free presentation rules: texts, busy-panel model, date rules, grid rules, settings, autotest |
 | `src/app` | The Qt 6 desktop application (`WizzairHelper.exe`) |
 | `tests/` | Conformance suite (05), ui_logic tests, widget tests (`tests/gui`) and end-to-end autotest replays |
@@ -34,7 +34,8 @@ cmake --workflow --preset full          # configure, build and test everything (
 cmake --workflow --preset release-package   # release ZIP under build/msvc-x64-release/package
 ```
 
-Settings, caches and `errors.log` live in `%LOCALAPPDATA%\WizzairHelper\`.
+Settings, caches and `errors.log` live in `%LOCALAPPDATA%\WizzairHelper\`; the updater keeps its
+state, log and downloads in its `updates\` subfolder.
 
 Fares come from wizzair.com's unofficial website API; geocoding uses Photon / Nominatim
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.
