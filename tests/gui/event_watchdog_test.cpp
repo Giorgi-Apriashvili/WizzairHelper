@@ -1,7 +1,11 @@
 // EventWatchdog (05 §7.3 R-03, "a watchdog on the UI loop"): the exclusive time of
 // each UI-thread dispatch, nested dispatches and harness work left out, the longest
-// ones with event type and receiver, overall and while busy; and its hook in
-// Application::notify.
+// ones with event type and receiver, overall and while busy, with their own CPU
+// time (D-50); and its hook in Application::notify.
+//
+// Sleeps stand in for waiting and spin_cpu() for work. A busy machine may stretch
+// any of them, so the checks never assume how long a stretch took: they bracket
+// it with the test's own clock or read lower bounds only.
 
 #include "application.hpp"
 #include "diagnostics_test_support.hpp"
@@ -14,13 +18,25 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <string_view>
 #include <thread>
 
 namespace {
 
 using namespace std::chrono_literals;
+using Clock = std::chrono::steady_clock;
 using wizz::app::EventWatchdog;
+using wizz::test::ms_between;
+using wizz::test::spin_cpu;
+
+/// The kept dispatch of event type `event`, or null.
+[[nodiscard]] const EventWatchdog::Dispatch* find(const EventWatchdog::Stats& stats, std::string_view event)
+{
+    const auto found = std::ranges::find(stats.longest, event, &EventWatchdog::Dispatch::event);
+    return found == stats.longest.end() ? nullptr : &*found;
+}
 
 TEST(EventWatchdog, Keeps_the_exclusive_time_of_nested_dispatches)
 {
@@ -30,6 +46,7 @@ TEST(EventWatchdog, Keeps_the_exclusive_time_of_nested_dispatches)
     const QEvent outer_event{QEvent::Timer};
     const QEvent inner_event{QEvent::MetaCall};
 
+    const Clock::time_point begin = Clock::now();
     watchdog.enter(&outer_receiver, &outer_event);
     std::this_thread::sleep_for(20ms);
     watchdog.enter(&inner_receiver, &inner_event);  // e.g. processEvents inside a handler
@@ -37,20 +54,62 @@ TEST(EventWatchdog, Keeps_the_exclusive_time_of_nested_dispatches)
     watchdog.leave();
     std::this_thread::sleep_for(10ms);
     watchdog.leave();
+    const Clock::time_point end = Clock::now();
 
     const EventWatchdog::Stats& stats = watchdog.stats();
     EXPECT_EQ(stats.dispatches, 2);
     ASSERT_EQ(stats.longest.size(), 2u);
-    EXPECT_GE(stats.longest[0].ms, 75.0);
-    EXPECT_EQ(stats.longest[0].event, "MetaCall");
-    EXPECT_EQ(stats.longest[0].receiver, "QTimer");
-    EXPECT_LT(stats.longest[1].ms, 75.0) << "the outer dispatch's own work: about 30 ms";
-    EXPECT_EQ(stats.longest[1].event, "Timer");
-    EXPECT_EQ(stats.longest[1].receiver, "QObject");
-    EXPECT_EQ(stats.over_50_ms, 1);
-    EXPECT_EQ(stats.over_100_ms, 0);
-    EXPECT_DOUBLE_EQ(stats.longest_ms, stats.longest[0].ms);
+    EXPECT_GE(stats.longest[0].ms, stats.longest[1].ms) << "longest first";
+    const EventWatchdog::Dispatch* inner = find(stats, "MetaCall");
+    const EventWatchdog::Dispatch* outer = find(stats, "Timer");
+    ASSERT_NE(inner, nullptr);
+    ASSERT_NE(outer, nullptr);
+    EXPECT_EQ(inner->receiver, "QTimer");
+    EXPECT_EQ(outer->receiver, "QObject");
+    EXPECT_GE(inner->ms, 75.0);
+    EXPECT_GE(outer->ms, 25.0) << "its own 20 + 10 ms";
+    // The outer dispatch's own time leaves the nested one out: both fit in the bracket.
+    EXPECT_LE(outer->ms + inner->ms, ms_between(begin, end) + 0.5);
+    // Waiting is not work.
+    EXPECT_LT(inner->cpu_ms, 10.0);
+    EXPECT_LT(outer->cpu_ms, 10.0);
+    EXPECT_EQ(stats.over_50_ms, (inner->ms > 50.0 ? 1 : 0) + (outer->ms > 50.0 ? 1 : 0));
+    EXPECT_EQ(stats.over_100_ms, (inner->ms >= 100.0 ? 1 : 0) + (outer->ms >= 100.0 ? 1 : 0));
+    EXPECT_DOUBLE_EQ(stats.longest_ms, std::max(inner->ms, outer->ms));
     EXPECT_EQ(stats.longest_busy_ms, 0.0) << "never busy";
+}
+
+TEST(EventWatchdog, A_dispatch_s_CPU_time_is_its_own_work_without_the_nested_one)
+{
+    EventWatchdog watchdog{[] { return true; }};
+    QObject receiver;
+    const QEvent outer_event{QEvent::Timer};
+    const QEvent inner_event{QEvent::MetaCall};
+
+    watchdog.enter(&receiver, &outer_event);
+    spin_cpu(60.0);
+    watchdog.enter(&receiver, &inner_event);
+    spin_cpu(30.0);
+    watchdog.leave();
+    std::this_thread::sleep_for(30ms);  // waiting: in the outer dispatch's time, not its CPU time
+    watchdog.leave();
+
+    const EventWatchdog::Stats& stats = watchdog.stats();
+    const EventWatchdog::Dispatch* outer = find(stats, "Timer");
+    const EventWatchdog::Dispatch* inner = find(stats, "MetaCall");
+    ASSERT_NE(outer, nullptr);
+    ASSERT_NE(inner, nullptr);
+    EXPECT_GE(outer->cpu_ms, 59.5);
+    EXPECT_LT(outer->cpu_ms, 70.0) << "without the nested 30 ms";
+    EXPECT_GE(inner->cpu_ms, 29.5);
+    EXPECT_LT(inner->cpu_ms, 40.0);
+    EXPECT_GE(outer->ms, outer->cpu_ms + 25.0) << "the wait is in its time";
+    EXPECT_DOUBLE_EQ(stats.longest_busy_cpu_ms, outer->cpu_ms);
+    // The longest busy dispatch that other processes did not hold the CPUs during.
+    EXPECT_LE(stats.longest_busy_own_ms, stats.longest_busy_ms);
+    if (!outer->held_by_others) {
+        EXPECT_DOUBLE_EQ(stats.longest_busy_own_ms, std::max(outer->ms, inner->held_by_others ? 0.0 : inner->ms));
+    }
 }
 
 TEST(EventWatchdog, Harness_work_and_busy_state)
@@ -60,14 +119,20 @@ TEST(EventWatchdog, Harness_work_and_busy_state)
     QObject receiver;
     const QEvent event{QEvent::Timer};
 
+    const Clock::time_point begin = Clock::now();
     watchdog.enter(&receiver, &event);
     std::this_thread::sleep_for(10ms);
     watchdog.exclude_begin();
     std::this_thread::sleep_for(120ms);  // a screenshot
+    spin_cpu(40.0);
     watchdog.exclude_end();
     watchdog.leave();
-    EXPECT_LT(watchdog.stats().longest_ms, 60.0);
-    EXPECT_GT(watchdog.stats().longest_busy_ms, 0.0);
+    const Clock::time_point end = Clock::now();
+    const double first_ms = watchdog.stats().longest_ms;
+    EXPECT_GE(first_ms, 9.5);
+    EXPECT_LE(first_ms, ms_between(begin, end) - 120.0 + 0.5) << "the harness work is left out";
+    EXPECT_LT(watchdog.stats().longest_busy_cpu_ms, 20.0) << "so is its CPU time";
+    EXPECT_DOUBLE_EQ(watchdog.stats().longest_busy_ms, first_ms);
     EXPECT_TRUE(watchdog.stats().longest.front().busy);
 
     busy = false;
@@ -75,8 +140,10 @@ TEST(EventWatchdog, Harness_work_and_busy_state)
     std::this_thread::sleep_for(70ms);
     watchdog.leave();
     EXPECT_GE(watchdog.stats().longest_ms, 65.0);
-    EXPECT_LT(watchdog.stats().longest_busy_ms, 60.0) << "idle work is not busy work";
-    EXPECT_FALSE(watchdog.stats().longest.front().busy);
+    EXPECT_DOUBLE_EQ(watchdog.stats().longest_busy_ms, first_ms) << "idle work is not busy work";
+    const auto idle = std::ranges::find(watchdog.stats().longest, false, &EventWatchdog::Dispatch::busy);
+    ASSERT_NE(idle, watchdog.stats().longest.end());
+    EXPECT_GE(idle->ms, 65.0);
 
     watchdog.leave();  // unbalanced: ignored
     EXPECT_EQ(watchdog.stats().dispatches, 2);

@@ -13,12 +13,22 @@
 // the overdue tick could be delivered. The probe's tick slot runs right after
 // BusyPanel::animate.
 //
+// Each gap also records, through CpuMeter (DECISIONS D-50), the UI thread's own
+// CPU time in it and whether other processes held the CPUs during it. On a busy
+// machine a gap grows while the OS runs other processes, without any UI-thread
+// work; so a check that must hold there reads `longest_gap_cpu_ms` (the UI
+// thread's work, always the app's) and `longest_own_gap_ms` (the longest gap
+// that other processes did not hold the CPUs during: time the UI thread was off
+// the CPU although CPUs were free, e.g. blocked, is the app's too).
+//
 // Work of the test harness itself on the UI thread (the --autotest progress
 // screenshots: layout passes, PrintWindow, PNG encoding) is not the app's and is
 // excluded: between exclude_begin() and exclude_end() the clock of the current
 // gap stands still; the excluded time is reported separately.
 //
 // Test-only diagnostics of the --autotest mode (DECISIONS D-30); UI thread only.
+
+#include "cpu_meter.hpp"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -45,6 +55,8 @@ public:
     /// One long gap: its length, when it ended (ms since the probe started) and the status.
     struct Gap {
         double ms = 0;
+        double cpu_ms = 0;            ///< the UI thread's own CPU time in it
+        bool held_by_others = false;  ///< other processes held the CPUs during it
         double ended_at_ms = 0;
         std::string status;
     };
@@ -60,6 +72,9 @@ public:
         int gaps_over_50_ms = 0;         ///< gaps above kRepaintLimitMs
         int gaps_over_100_ms = 0;        ///< gaps at or above kGapLimitMs
         std::string longest_gap_status;  ///< the busy panel's status line when the longest gap ended
+        double longest_gap_cpu_ms = 0;   ///< the most UI-thread CPU time in one gap
+        double longest_own_gap_ms = 0;   ///< the longest gap other processes did not hold the CPUs during
+        int held_gaps_over_100_ms = 0;   ///< gaps at or above kGapLimitMs that other processes held the CPUs during
         int exclusions = 0;              ///< harness work excluded while the timer ran
         double excluded_ms = 0;          ///< its total time
         double longest_exclusion_ms = 0;
@@ -84,13 +99,15 @@ private:
     void on_started();
     void on_tick();
     void on_stopped();
-    void add_gap(std::int64_t until_ns);
+    void add_gap(std::int64_t until_ns, const CpuMeter::Sample& until);
     [[nodiscard]] std::int64_t now_ns() const { return clock_.nsecsElapsed(); }
 
     BusyPanel& busy_;
     QElapsedTimer clock_;
     std::optional<std::int64_t> last_ns_;  ///< the run's start or its previous tick
+    CpuMeter::Sample last_cpu_;            ///< the counters at last_ns_
     std::optional<std::int64_t> excluding_since_ns_;
+    CpuMeter::Sample excluding_since_cpu_;
     Stats stats_;
 };
 

@@ -108,8 +108,11 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.build }}
 
+      # One test per CPU: the preset's 8 jobs suit a desktop, a hosted runner has 4 vCPUs. The
+      # timing tests (label timing) run alone either way (RUN_SERIAL, DECISIONS D-50).
       - name: Test
-        run: ctest --preset ${{ matrix.test }} --output-on-failure -LE autotest
+        shell: pwsh
+        run: ctest --preset ${{ matrix.test }} --output-on-failure -LE autotest --parallel $env:NUMBER_OF_PROCESSORS
 
       # The end-to-end --autotest runs (label autotest) open the real app window, one at a time,
       # checked by tests/gui/check_autotest.py: one leg only. The test preset fails when no test

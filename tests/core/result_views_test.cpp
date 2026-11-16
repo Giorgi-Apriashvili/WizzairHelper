@@ -215,6 +215,42 @@ TEST(ResultViews, Cheapest_per_destination_groups_by_ordinal_group_key)
                                                                 }));
 }
 
+TEST(ResultViews, Grouped_views_take_the_earliest_of_equal_rows_and_keep_the_input_order_of_ties)
+{
+    // "The first row of each group in SortByPrice order": among rows with the same key the
+    // earliest in the input, and groups whose first rows tie in that order keep the input order.
+    const std::vector<FlightResultPtr> input{
+        flight("A", "BCN", day(11, 10), 6, 0, "40"),
+        flight("B", "LTN", day(11, 10), 6, 0, "20"),
+        flight("C", "LGW", day(11, 10), 6, 0, "20.00"),  // full tie with B, later: never first
+        flight("D", "XYZ", day(11, 11), 6, 0, "20"),     // ties with B by price only (later date)
+        flight("E", "MAD", day(11, 11), 6, 0, "20"),     // full tie with D, later
+        flight("F", "BCN", day(11, 12), 7, 0, "5"),
+        flight("G", "VIE", day(11, 12), 7, 0, "5.0"),    // full tie with F, later
+    };
+    EXPECT_EQ(describe(views::cheapest_per_day(input)), (std::vector<std::string>{
+                                                            "B→LTN 2026-11-10 20",
+                                                            "D→XYZ 2026-11-11 20",
+                                                            "F→BCN 2026-11-12 5",
+                                                        }));
+    EXPECT_EQ(describe(views::cheapest_per_destination(input)), (std::vector<std::string>{
+                                                                    "F→BCN 2026-11-12 5",
+                                                                    "G→VIE 2026-11-12 5.0",
+                                                                    "B→LTN 2026-11-10 20",
+                                                                    "D→XYZ 2026-11-11 20",
+                                                                    "E→MAD 2026-11-11 20",
+                                                                }));
+    // The same answers as taking the first row per group from the fully sorted list.
+    const std::vector<FlightResultPtr> reversed(input.rbegin(), input.rend());
+    EXPECT_EQ(describe(views::cheapest_per_destination(reversed)), (std::vector<std::string>{
+                                                                       "G→VIE 2026-11-12 5.0",
+                                                                       "F→BCN 2026-11-12 5",
+                                                                       "C→LGW 2026-11-10 20.00",
+                                                                       "E→MAD 2026-11-11 20",
+                                                                       "D→XYZ 2026-11-11 20",
+                                                                   }));
+}
+
 TEST(ResultViews, Empty_input_gives_empty_views)
 {
     EXPECT_TRUE(views::sort_by_price({}).empty());

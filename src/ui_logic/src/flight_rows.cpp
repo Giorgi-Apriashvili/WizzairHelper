@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <format>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace wizz::ui {
@@ -380,6 +381,7 @@ void FlightGridModel::append(std::span<const FlightResultPtr> batch)
         const std::size_t idx = shown_.size();
         shown_.push_back(flight);
         rows_.push_back(make_flight_row(idx, flight, *locale_));
+        ++work_.rows_built;
         const auto position = std::ranges::upper_bound(order_, idx, [this](std::size_t a, std::size_t b) {
             return row_less(a, b);
         });
@@ -566,10 +568,25 @@ void FlightGridModel::rebuild(bool keep_top_if_not_picked)
     const FlightResultPtr picked = picked_;  // captured before _shown changes (UI-4, LIVE-1)
     shown_ = view_list(all_, mode_);
     cheapest_ = kNoPrice;
-    rows_.clear();
+    // A row depends only on its fare and the locale, so the rows of fares already shown
+    // are kept and only new fares are formatted: a leg's final result holds the very fares
+    // it streamed, and a flush into a grouped view changes few of its rows (R-03).
+    std::unordered_map<const FlightResult*, std::size_t> shown_before;
+    shown_before.reserve(rows_.size());
+    for (std::size_t idx = 0; idx < rows_.size(); ++idx) {
+        shown_before.try_emplace(rows_[idx].fare.get(), idx);
+    }
+    std::vector<FlightRow> before = std::exchange(rows_, {});
     rows_.reserve(shown_.size());
     for (std::size_t idx = 0; idx < shown_.size(); ++idx) {
-        rows_.push_back(make_flight_row(idx, shown_[idx], *locale_));
+        if (const auto kept = shown_before.find(shown_[idx].get()); kept != shown_before.end()) {
+            rows_.push_back(std::move(before[kept->second]));
+            rows_.back().idx = idx;
+            shown_before.erase(kept);  // a fare listed twice gets a second row of its own
+        } else {
+            rows_.push_back(make_flight_row(idx, shown_[idx], *locale_));
+            ++work_.rows_built;
+        }
         if (shown_[idx]->total_converted && *shown_[idx]->total_converted < cheapest_) {
             cheapest_ = *shown_[idx]->total_converted;
         }
@@ -592,11 +609,13 @@ void FlightGridModel::rebuild(bool keep_top_if_not_picked)
 
 void FlightGridModel::sort_order()
 {
+    ++work_.full_sorts;
     std::ranges::sort(order_, [this](std::size_t a, std::size_t b) { return row_less(a, b); });
 }
 
 bool FlightGridModel::row_less(std::size_t a, std::size_t b) const
 {
+    ++work_.comparisons;
     const FlightRow& left = rows_[a];
     const FlightRow& right = rows_[b];
     if (user_sort_) {

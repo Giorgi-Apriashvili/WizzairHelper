@@ -33,9 +33,19 @@ add_custom_command(TARGET wizzairhelper_gui_tests POST_BUILD
     VERBATIM)
 wizz_copy_qt_plugins(wizzairhelper_gui_tests)
 
+# The R-03 / 05 §5 timing tests (label timing) run alone: each checks the UI thread's own
+# CPU time always and the wall-clock time unless other processes held the CPUs (DECISIONS
+# D-50), so running them beside the rest of the suite would only leave the wall-clock half
+# unchecked. ctest -L timing runs only these.
+set(_wizz_timing_tests "FlightGridPerformance.*:ControllerFlows.R_03_*:ControllerFlows.The_progress_timer_*")
 gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
+    TEST_FILTER "-${_wizz_timing_tests}"
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal")
+gtest_discover_tests(wizzairhelper_gui_tests
+    DISCOVERY_MODE PRE_TEST
+    TEST_FILTER "${_wizz_timing_tests}"
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal" LABELS timing RUN_SERIAL TRUE)
 
 # The real WizzairHelper.exe --version (D-35): exactly "WizzairHelper <version>" and a line
 # feed on standard output and exit code 0, read through pipes (app.version) and captured by
@@ -61,7 +71,8 @@ set_tests_properties(app.version app.version.powershell app.version.resource PRO
 # replay scenarios of tests/replay (heavy_cached / cancel_cached generate theirs) with
 # an isolated data root, the fixed clock and --diagnostics; check_autotest.py validates
 # summary.json, diagnostics.json (40 ms timer gap below 100 ms — 250 ms in Debug —,
-# UI-loop watchdog, one cancel transition, final grids, layout) and the screenshots.
+# UI-loop watchdog, both by the UI thread's CPU time and by wall-clock time unless other
+# processes held the CPUs (D-50); one cancel transition, final grids, layout) and the screenshots.
 # The window opens on the real "windows" platform (PrintWindow needs a native
 # window), one at a time. Key scenarios repeat at 150 % and 200 % (QT_SCALE_FACTOR).
 # The crash_* runs fail at start-up on purpose (a bad --fixed-now before the QApplication,

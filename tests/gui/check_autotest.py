@@ -8,7 +8,10 @@ Runs the real WizzairHelper.exe as
 
 on an isolated profile and a replayed network, then checks summary.json, the
 test-only diagnostics.json (40 ms timer gaps, cancel transitions, final grids,
-layout and display) and the screenshots. Run with `python -I` (no site or user
+layout and display) and the screenshots. The timer gaps and UI dispatches are
+checked by the UI thread's own CPU time always and by their wall-clock length
+unless other processes held the CPUs during them (DECISIONS D-50), so a busy
+machine does not fail a run. Run with `python -I` (no site or user
 paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
 QT_SCALE_FACTOR (01 §15, 05 §5).
 
@@ -157,17 +160,31 @@ class Checker:
     def diagnostics_common(self, max_gap_ms, scale):
         d = self.diagnostics
         self.expect(list(d.keys()) == DIAGNOSTICS_KEYS, 'diagnostics keys: %r' % list(d.keys()))
-        # 05 §5 / R-03: the 40 ms progress timer never pauses for 100 ms or more.
-        gap = self.diag('timer.longestGapMs')
-        self.expect(gap is not None and gap < max_gap_ms,
-                    'timer: longest gap %r ms is not below %r ms (at %r)' %
-                    (gap, max_gap_ms, self.diag('timer.longestGapStatus')))
+        # 05 §5 / R-03: the 40 ms progress timer never pauses for 100 ms or more. On a busy machine a
+        # gap also grows while the OS runs other processes, so (DECISIONS D-50) the UI thread's own
+        # CPU time in a gap is checked always, and the gap itself whenever other processes did not
+        # hold the CPUs during it (idle CPUs or the app's own threads: then the whole gap is the app's).
+        cpu = self.diag('timer.longestGapCpuMs')
+        self.expect(cpu is not None and cpu < max_gap_ms,
+                    'timer: the UI thread worked %r ms in one gap (not below %r ms): %r' %
+                    (cpu, max_gap_ms, (self.diag('timer.longestGaps') or [])[:2]))
+        own = self.diag('timer.longestOwnGapMs')
+        self.expect(own is not None and own < max_gap_ms,
+                    'timer: a gap of %r ms that other processes did not cause is not below %r ms (longest of all '
+                    '%r ms, at %r): %r' % (own, max_gap_ms, self.diag('timer.longestGapMs'),
+                                           self.diag('timer.longestGapStatus'),
+                                           (self.diag('timer.longestGaps') or [])[:2]))
         self.expect((self.diag('timer.runs') or 0) >= 1, 'timer: no busy period was measured')
-        # R-03: no uninterrupted UI-thread work of 100 ms or more while busy (UI-loop watchdog).
-        busy_ms = self.diag('uiEvents.longestBusyMs')
-        self.expect(busy_ms is not None and busy_ms < max_gap_ms,
-                    'uiEvents: a dispatch ran %r ms while busy (not below %r ms): %r' %
-                    (busy_ms, max_gap_ms, (self.diag('uiEvents.longest') or [])[:2]))
+        # R-03: no uninterrupted UI-thread work of 100 ms or more while busy (UI-loop watchdog), the
+        # same two ways.
+        busy_cpu = self.diag('uiEvents.longestBusyCpuMs')
+        self.expect(busy_cpu is not None and busy_cpu < max_gap_ms,
+                    'uiEvents: a dispatch worked %r ms while busy (not below %r ms): %r' %
+                    (busy_cpu, max_gap_ms, (self.diag('uiEvents.longest') or [])[:2]))
+        busy_own = self.diag('uiEvents.longestBusyOwnMs')
+        self.expect(busy_own is not None and busy_own < max_gap_ms,
+                    'uiEvents: a dispatch ran %r ms while busy and other processes did not hold the CPUs (not '
+                    'below %r ms): %r' % (busy_own, max_gap_ms, (self.diag('uiEvents.longest') or [])[:2]))
         # 01 §15: no clipping, overlap or hidden Cancel in any captured state.
         self.diag_equal('layout.problems', [])
         self.diag_equal('layout.cancelVisible', True)
@@ -781,10 +798,13 @@ def main():
     checker.expect(not os.path.exists(os.path.join(data_root, 'errors.log')), 'errors.log written: the app crashed')
     timer = diagnostics.get('timer', {})
     events = diagnostics.get('uiEvents') or {}
-    print('timer: %s runs, %s ticks, longest gap %s ms, mean %s ms, %s gaps over 50 ms; longest UI dispatch %s ms '
-          '(%s ms while busy); DPR %s; %s' %
-          (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('meanGapMs'),
+    print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
+          'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
+          'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; %s' %
+          (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
+           timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
+           events.get('longestBusyCpuMs'), events.get('longestBusyOwnMs'),
            diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:
