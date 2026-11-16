@@ -14,10 +14,6 @@
 
 namespace wizz::app {
 
-namespace {
-
-} // namespace
-
 GridRowDelegate::GridRowDelegate(QObject* parent)
     : QStyledItemDelegate(parent), selection_(grid_colors::highlight())
 {
