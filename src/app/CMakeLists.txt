@@ -2,8 +2,9 @@
 # so that GUI tests (tests/gui) can link the widgets.
 #
 #   wizzairhelper_app (wizz::app): every widget, the controller, autotest runner,
-#                                  crash reporter — sources under lib/
-#   WizzairHelper.exe            : main.cpp + version resource + application manifest
+#                                  crash reporter — sources under lib/ — and the window
+#                                  icon's PNGs (Qt resource :/icons/)
+#   WizzairHelper.exe            : main.cpp + version and icon resources + application manifest
 #
 # Owns all widgets, the active job ID, explicit fare selection, timers,
 # settings, diagnostics and the hidden --autotest mode. Never blocks the UI
@@ -35,6 +36,20 @@ target_link_libraries(wizzairhelper_app
             windowscodecs   # WIC PNG encoder for --autotest screenshots
             dwmapi)
 
+# The application icon (D-50). Its two SVG sources and everything made from them are
+# committed in resources/icon (tools/make_app_icon.py regenerates them), so the build needs
+# no image tools. The ten PNGs are embedded as the Qt resource "app_icon" under :/icons/ for
+# the window icon (app_info.cpp; PNG is built into Qt Gui, no image-format plugin); the .ico
+# is the exe's icon resource (resources/WizzairHelper.rc).
+set(_wizz_icon_pngs)
+foreach(_size IN ITEMS 16 20 24 32 40 48 64 96 128 256)
+    list(APPEND _wizz_icon_pngs "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/WizzairHelper-${_size}.png")
+endforeach()
+qt_add_resources(wizzairhelper_app app_icon
+    PREFIX "/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon"
+    FILES ${_wizz_icon_pngs})
+
 # The .manifest source is merged into the linker's manifest and embedded (per-monitor-v2
 # DPI awareness before anything is shown, 01 §3 / 06 §4). It also replaces Qt's generated
 # default manifest, which the Visual Studio generator links with /MANIFEST:NO and so
@@ -46,6 +61,11 @@ qt_add_executable(WizzairHelper WIN32
 
 target_link_libraries(WizzairHelper PRIVATE wizz::app)
 set_target_properties(WizzairHelper PROPERTIES OUTPUT_NAME "WizzairHelper")
+
+# The resource script's ICON statement reads resources/icon/WizzairHelper.ico (D-50); the
+# Visual Studio generator tracks that by itself, Ninja needs to be told.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/resources/WizzairHelper.rc" PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/WizzairHelper.ico")
 
 # The version resource takes its numbers from project(VERSION), the single source of the
 # version (D-37), through a generated header: resources/WizzairHelper.rc includes it.

@@ -22,9 +22,14 @@ target_link_libraries(wizzairhelper_gui_tests PRIVATE
     wizz::app
     GTest::gtest)
 
-# The --autotest replay scenarios (D-30), shared by the in-process flow tests.
+# The --autotest replay scenarios (D-30), shared by the in-process flow tests. The AppIcon
+# tests (D-50) read the committed icon files and the icon group of the real WizzairHelper.exe
+# of the same configuration, which is therefore built first.
 target_compile_definitions(wizzairhelper_gui_tests PRIVATE
-    WIZZ_TEST_REPLAY_DIR="${PROJECT_SOURCE_DIR}/tests/replay")
+    WIZZ_TEST_REPLAY_DIR="${PROJECT_SOURCE_DIR}/tests/replay"
+    WIZZ_TEST_ICON_DIR="${PROJECT_SOURCE_DIR}/src/app/resources/icon"
+    WIZZ_TEST_APP_EXE="$<TARGET_FILE:WizzairHelper>")
+add_dependencies(wizzairhelper_gui_tests WizzairHelper)
 
 add_custom_command(TARGET wizzairhelper_gui_tests POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
