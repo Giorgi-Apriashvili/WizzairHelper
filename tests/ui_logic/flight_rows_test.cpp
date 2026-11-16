@@ -13,8 +13,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <chrono>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -616,42 +619,153 @@ TEST(FlightGrid, Self_test_accessors)
 }
 
 // ---------------------------------------------------------------------------
-// R-03: no grid operation may take 100 ms (6000 fares in batches of 40)
+// Rebuilds format only the fares they did not show before (R-03)
 // ---------------------------------------------------------------------------
 
-TEST(FlightGrid, R_03_Streaming_6000_fares_stays_cheap)
+/// Every row's cell texts, in display order.
+[[nodiscard]] std::vector<std::string> all_cells(const FlightGridModel& grid)
+{
+    std::vector<std::string> cells;
+    for (std::size_t row = 0; row < grid.row_count(); ++row) {
+        for (const FlightColumn column : kFlightColumns) {
+            cells.push_back(grid.cell_text(row, column));
+        }
+    }
+    return cells;
+}
+
+TEST(FlightGrid, Rebuilds_keep_the_rows_of_the_fares_already_shown)
+{
+    const std::vector<FlightResultPtr> fares = fss01();
+    FlightGridModel grid{en_ptr()};
+    grid.set_results(fares, "EUR", "");
+    EXPECT_EQ(grid.work().rows_built, 12u);
+
+    // The same fares in another order (a leg's final result after streaming): no row is
+    // formatted again, and each row takes its new Idx.
+    const std::vector<FlightResultPtr> reversed(fares.rbegin(), fares.rend());
+    grid.set_results(reversed, "EUR", "");
+    EXPECT_EQ(grid.work().rows_built, 12u);
+    FlightGridModel fresh{en_ptr()};
+    fresh.set_results(reversed, "EUR", "");
+    EXPECT_EQ(all_cells(grid), all_cells(fresh));
+    EXPECT_EQ(display_routes(grid), display_routes(fresh));
+    for (std::size_t row = 0; row < grid.row_count(); ++row) {
+        EXPECT_EQ(grid.row(row).idx, fresh.row(row).idx);
+        EXPECT_EQ(grid.shown_results()[grid.row(row).idx], grid.row(row).fare);
+    }
+
+    // A grouped view shows a subset: nothing new to format; back to all fares, only the
+    // fares the grouped view did not show.
+    grid.choose_view(ViewMode::cheapest_per_day);
+    EXPECT_EQ(grid.work().rows_built, 12u);
+    const std::size_t grouped = grid.row_count();
+    grid.choose_view(ViewMode::all_fares);
+    EXPECT_EQ(grid.work().rows_built, 12u + (12u - grouped));
+
+    // Equal copies are other fares (a re-price makes new ones): all formatted.
+    std::vector<FlightResultPtr> copies;
+    for (const FlightResultPtr& fare : fares) {
+        copies.push_back(std::make_shared<const FlightResult>(*fare));
+    }
+    const std::size_t before_copies = grid.work().rows_built;
+    grid.set_results(copies, "EUR", "");
+    EXPECT_EQ(grid.work().rows_built, before_copies + 12u);
+    EXPECT_EQ(grid.row(0).fare, copies[grid.row(0).idx]);
+
+    // A fare listed twice gets two rows.
+    const std::vector<FlightResultPtr> twice{copies[0], copies[0]};
+    grid.set_results(twice, "EUR", "");
+    ASSERT_EQ(grid.row_count(), 2u);
+    EXPECT_NE(grid.row(0).idx, grid.row(1).idx);
+    EXPECT_EQ(grid.cell_text(0, FlightColumn::date), grid.cell_text(1, FlightColumn::date));
+    EXPECT_EQ(grid.row(0).fare, grid.row(1).fare);
+}
+
+// ---------------------------------------------------------------------------
+// R-03: streaming 6000 fares in batches of 40 stays cheap. The work is counted, not
+// timed, so the bounds are the same on every machine, idle or busy (DECISIONS D-50);
+// the time a flush takes with the widgets is FlightGridPerformance's (tests/gui).
+// ---------------------------------------------------------------------------
+
+constexpr std::size_t kManyFares = 6000;
+constexpr std::size_t kBatch = 40;
+
+/// 6000 distinct fares: the CT-FSS-01 fares shifted by day and price.
+[[nodiscard]] std::vector<FlightResultPtr> many_fares()
 {
     const std::vector<FlightResultPtr> base = fss01();
     std::vector<FlightResultPtr> fares;
-    fares.reserve(6000);
-    for (int i = 0; i < 6000; ++i) {
-        FlightResult copy = *base[static_cast<std::size_t>(i) % base.size()];
-        copy.fare.date = copy.fare.date.add_days(i / 12);
-        copy.total_converted = *copy.total_converted + Decimal{i % 37};
+    fares.reserve(kManyFares);
+    for (std::size_t i = 0; i < kManyFares; ++i) {
+        FlightResult copy = *base[i % base.size()];
+        copy.fare.date = copy.fare.date.add_days(static_cast<std::int64_t>(i / base.size()));
+        copy.total_converted = *copy.total_converted + Decimal{static_cast<int>(i % 37)};
         fares.push_back(std::make_shared<const FlightResult>(std::move(copy)));
     }
+    return fares;
+}
+
+/// The most comparisons a binary search (std::upper_bound) over `rows` rows makes, plus one.
+[[nodiscard]] std::size_t binary_insertion_bound(std::size_t rows)
+{
+    return static_cast<std::size_t>(std::bit_width(rows)) + 1;
+}
+
+/// Comparisons an O(n log n) sort of `rows` rows stays below (std::sort: about n log2 n).
+[[nodiscard]] std::size_t full_sort_bound(std::size_t rows)
+{
+    return 3 * rows * static_cast<std::size_t>(std::bit_width(rows));
+}
+
+TEST(FlightGrid, R_03_Streaming_6000_fares_stays_cheap)
+{
+    const std::vector<FlightResultPtr> fares = many_fares();
     FlightGridModel grid{en_ptr()};
     grid.clear("EUR", false);
-    auto slowest = std::chrono::steady_clock::duration::zero();
-    for (std::size_t start = 0; start < fares.size(); start += 40) {
-        const auto begin = std::chrono::steady_clock::now();
-        grid.append(std::span<const FlightResultPtr>{fares}.subspan(start, 40));
-        slowest = std::max(slowest, std::chrono::steady_clock::now() - begin);
+    for (std::size_t start = 0; start < fares.size(); start += kBatch) {
+        const FlightGridModel::Work before = grid.work();
+        grid.append(std::span<const FlightResultPtr>{fares}.subspan(start, kBatch));
+        const FlightGridModel::Work& after = grid.work();
+        // All fares (01 §8.6): each new row is formatted once and finds its place by binary
+        // search; nothing is sorted again.
+        ASSERT_EQ(after.rows_built - before.rows_built, kBatch) << "flush at " << start;
+        ASSERT_LE(after.comparisons - before.comparisons, kBatch * binary_insertion_bound(grid.row_count()))
+            << "flush at " << start;
+        ASSERT_EQ(after.full_sorts, before.full_sorts) << "flush at " << start;
     }
-    EXPECT_EQ(grid.row_count(), 6000u);
-    const auto begin = std::chrono::steady_clock::now();
+    EXPECT_EQ(grid.row_count(), kManyFares);
+
+    // The final result holds the streamed fares themselves: their rows are kept; one sort.
+    const FlightGridModel::Work before = grid.work();
     grid.set_results(result_views::sort_by_price(fares), "EUR", "6000 fares");
-    const auto rebuild = std::chrono::steady_clock::now() - begin;
-#ifdef NDEBUG
-    constexpr auto kBudget = std::chrono::milliseconds{100};
-#else
-    constexpr auto kBudget = std::chrono::milliseconds{1000};  // Debug iterator checks; the release gate is 100 ms
-#endif
-    EXPECT_LT(slowest, kBudget);
-    EXPECT_LT(rebuild, kBudget);
+    EXPECT_EQ(grid.work().rows_built - before.rows_built, 0u);
+    EXPECT_EQ(grid.work().full_sorts - before.full_sorts, 1u);
+    EXPECT_LE(grid.work().comparisons - before.comparisons, full_sort_bound(kManyFares));
     for (std::size_t row = 1; row < grid.row_count(); ++row) {
         ASSERT_LE(grid.row(row - 1).price_sort, grid.row(row).price_sort);
     }
+}
+
+TEST(FlightGrid, R_03_Streaming_into_a_grouped_view_formats_only_the_new_rows)
+{
+    const std::vector<FlightResultPtr> fares = many_fares();
+    FlightGridModel grid{en_ptr()};
+    grid.clear("EUR", false);
+    grid.choose_view(ViewMode::cheapest_per_day);
+    for (std::size_t start = 0; start < fares.size(); start += kBatch) {
+        const FlightGridModel::Work before = grid.work();
+        grid.append(std::span<const FlightResultPtr>{fares}.subspan(start, kBatch));
+        const FlightGridModel::Work& after = grid.work();
+        // A grouped view rebuilds on every flush (01 §8.6): one sort of the view, and rows
+        // only for the days whose cheapest fare is new — at most the batch, not every day.
+        ASSERT_LE(after.rows_built - before.rows_built, kBatch) << "flush at " << start;
+        ASSERT_EQ(after.full_sorts - before.full_sorts, 1u) << "flush at " << start;
+        ASSERT_LE(after.comparisons - before.comparisons, full_sort_bound(grid.row_count())) << "flush at " << start;
+    }
+    EXPECT_EQ(grid.all_results().size(), kManyFares);
+    const std::vector<FlightResultPtr> per_day = view_list(grid.all_results(), ViewMode::cheapest_per_day);
+    EXPECT_TRUE(std::ranges::equal(grid.shown_results(), per_day)) << "one row per day";
 }
 
 } // namespace

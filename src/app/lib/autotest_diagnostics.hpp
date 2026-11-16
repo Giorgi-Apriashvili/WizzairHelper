@@ -5,10 +5,13 @@
 // beyond summary.json:
 //
 //   timer       the BusyPanel's 40 ms timer: runs, ticks, longest / mean gap and the
-//               gaps above 50 ms (R-04) and 100 ms (05 §5) — TimerGapProbe;
+//               gaps above 50 ms (R-04) and 100 ms (05 §5); the most UI-thread CPU
+//               time in one gap and the longest gap that other processes did not
+//               hold the CPUs during (D-50) — TimerGapProbe;
 //   uiEvents    the UI-loop watchdog (R-03): the longest uninterrupted UI-thread
-//               dispatches, overall and while busy — EventWatchdog (null when the
-//               QApplication is not wizz::app::Application);
+//               dispatches, overall and while busy, with their CPU time and the
+//               same attribution — EventWatchdog (null when the QApplication is
+//               not wizz::app::Application);
 //   cancel      --cancel-after-ms: when Esc and Cancel were pressed, what the panel
 //               showed, and how many cancellation transitions they produced (D-11:
 //               exactly one while busy);

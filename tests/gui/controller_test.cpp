@@ -24,7 +24,6 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QCheckBox>
-#include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -36,6 +35,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -71,6 +71,30 @@ void section11_inputs(WindowRig& rig)
 [[nodiscard]] std::string text(const QString& value)
 {
     return value.toStdString();
+}
+
+/// 05 §5 for the 40 ms progress timer, in the form that holds on a busy machine (DECISIONS
+/// D-50): the UI thread's own CPU time in any gap stays below the limit, and so does every
+/// gap that other processes did not hold the CPUs during. A gap other processes held may be
+/// longer: the OS ran them, not the UI thread's work.
+void expect_timer_kept_going(const wizz::app::TimerGapProbe::Stats& stats, const char* what)
+{
+#ifdef NDEBUG
+    constexpr double kLimitMs = wizz::app::TimerGapProbe::kGapLimitMs;
+#else
+    constexpr double kLimitMs = 250.0;  // Debug build
+#endif
+    std::printf("[   R-03   ] %s: %d ticks, longest gap %.1f ms (UI-thread CPU %.1f ms at most in one gap), longest "
+                "gap not held by other processes %.1f ms, %d gaps of 100 ms or more held by them\n",
+                what, stats.ticks, stats.longest_gap_ms, stats.longest_gap_cpu_ms, stats.longest_own_gap_ms,
+                stats.held_gaps_over_100_ms);
+    EXPECT_LT(stats.longest_gap_cpu_ms, kLimitMs) << what << ": the UI thread's work in one gap";
+    EXPECT_LT(stats.longest_own_gap_ms, kLimitMs)
+        << what << ": a gap that other processes did not hold the CPUs during (" << stats.held_gaps_over_100_ms
+        << " gaps of 100 ms or more were theirs)";
+    testing::Test::RecordProperty("longest_timer_gap_ms", static_cast<int>(stats.longest_gap_ms));
+    testing::Test::RecordProperty("longest_timer_gap_cpu_ms", static_cast<int>(stats.longest_gap_cpu_ms));
+    testing::Test::RecordProperty("longest_own_timer_gap_ms", static_cast<int>(stats.longest_own_gap_ms));
 }
 
 TEST(ControllerFlows, Named_destination_outbound_streams_into_the_grid_and_ends_green)
@@ -611,29 +635,13 @@ TEST(ControllerFlows, The_progress_timer_keeps_ticking_while_a_search_streams)
     WindowRig rig{std::move(options)};
     rig.start();
     section11_inputs(rig);
-    auto* timer = rig.busy().findChild<QTimer*>(QStringLiteral("animationTimer"));
-    ASSERT_NE(timer, nullptr);
-    QElapsedTimer clock;
-    qint64 last = -1;
-    qint64 longest = 0;
-    int ticks = 0;
-    QObject::connect(timer, &QTimer::timeout, [&] {
-        const qint64 now = clock.elapsed();
-        if (last >= 0) {
-            longest = std::max(longest, now - last);
-        }
-        last = now;
-        ++ticks;
-    });
-    clock.start();
+    ASSERT_NE(rig.busy().findChild<QTimer*>(QStringLiteral("animationTimer")), nullptr);
+    wizz::app::TimerGapProbe probe{rig.busy()};
     rig.run(rig.controller().search_outbound(), 15s);
-    EXPECT_GT(ticks, 20);
-#ifdef NDEBUG
-    EXPECT_LT(longest, 100) << "05 \u00A75: the 40 ms timer's longest gap";
-#else
-    EXPECT_LT(longest, 250) << "Debug build";
-#endif
-    RecordProperty("longest_timer_gap_ms", static_cast<int>(longest));
+    // The fake network sets the pace (three paced requests, over a second): the timer ticks
+    // all along, however busy the machine is.
+    EXPECT_GT(probe.stats().ticks, 20);
+    expect_timer_kept_going(probe.stats(), "05 \u00A75: the 40 ms timer while a search streams");
 }
 
 TEST(ControllerFlows, Leg_started_is_signalled_for_each_fetch_phase_only)
@@ -688,12 +696,7 @@ TEST(ControllerFlows, R_03_A_heavy_cached_replay_keeps_the_40_ms_timer_going_and
     EXPECT_EQ(grid.duplicate_rows, 0u);
     EXPECT_FALSE(std::ranges::contains(rig.outbound().all_results(), old_row));
     EXPECT_GE(probe.stats().runs, 2) << "Finding places and the fetch phase";
-#ifdef NDEBUG
-    EXPECT_LT(probe.stats().longest_gap_ms, 100.0) << "05 §5 under a heavy cached replay";
-#else
-    EXPECT_LT(probe.stats().longest_gap_ms, 250.0) << "Debug build";
-#endif
-    RecordProperty("longest_timer_gap_ms", static_cast<int>(probe.stats().longest_gap_ms));
+    expect_timer_kept_going(probe.stats(), "05 §5 under a heavy cached replay");
 }
 
 } // namespace

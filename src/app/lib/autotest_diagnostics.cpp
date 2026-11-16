@@ -81,6 +81,9 @@ void write_timer(json::Writer& writer, const TimerGapProbe::Stats& timer)
     writer.key("gapsOver50Ms").integer(timer.gaps_over_50_ms);
     writer.key("gapsOver100Ms").integer(timer.gaps_over_100_ms);
     writer.key("longestGapStatus").string(timer.longest_gap_status);
+    writer.key("longestGapCpuMs").number(tenths(timer.longest_gap_cpu_ms));
+    writer.key("longestOwnGapMs").number(tenths(timer.longest_own_gap_ms));
+    writer.key("heldGapsOver100Ms").integer(timer.held_gaps_over_100_ms);
     writer.key("harnessExclusions").integer(timer.exclusions);
     writer.key("harnessExcludedMs").number(tenths(timer.excluded_ms));
     writer.key("longestHarnessExclusionMs").number(tenths(timer.longest_exclusion_ms));
@@ -88,6 +91,8 @@ void write_timer(json::Writer& writer, const TimerGapProbe::Stats& timer)
     for (const TimerGapProbe::Gap& gap : timer.longest_gaps) {
         writer.begin_object();
         writer.key("ms").number(tenths(gap.ms));
+        writer.key("cpuMs").number(tenths(gap.cpu_ms));
+        writer.key("heldByOthers").boolean(gap.held_by_others);
         writer.key("endedAtMs").number(tenths(gap.ended_at_ms));
         writer.key("status").string(gap.status);
         writer.end_object();
@@ -108,10 +113,14 @@ void write_events(json::Writer& writer, const std::optional<EventWatchdog::Stats
     writer.key("over100Ms").integer(events->over_100_ms);
     writer.key("longestMs").number(tenths(events->longest_ms));
     writer.key("longestBusyMs").number(tenths(events->longest_busy_ms));
+    writer.key("longestBusyCpuMs").number(tenths(events->longest_busy_cpu_ms));
+    writer.key("longestBusyOwnMs").number(tenths(events->longest_busy_own_ms));
     writer.key("longest").begin_array();
     for (const EventWatchdog::Dispatch& dispatch : events->longest) {
         writer.begin_object();
         writer.key("ms").number(tenths(dispatch.ms));
+        writer.key("cpuMs").number(tenths(dispatch.cpu_ms));
+        writer.key("heldByOthers").boolean(dispatch.held_by_others);
         writer.key("endedAtMs").number(tenths(dispatch.ended_at_ms));
         writer.key("event").string(dispatch.event);
         writer.key("receiver").string(dispatch.receiver);

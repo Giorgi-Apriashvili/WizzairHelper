@@ -8,9 +8,10 @@
 // FlightGridModel holds an index array over immutable rows: a rebuild is one
 // sort of that array, a streamed batch is a binary insertion per row, so a Qt
 // QAbstractTableModel can expose it with one reset / one insertion
-// notification per batch (01 §8.6 performance rules, R-03). Rows are
-// identified by `Idx` (their position in the current view list `_shown`);
-// the pick is a FlightResultPtr (object identity, WF-1).
+// notification per batch (01 §8.6 performance rules, R-03). A rebuild formats
+// only the fares it did not show before (a row depends on nothing but its fare
+// and the locale). Rows are identified by `Idx` (their position in the current
+// view list `_shown`); the pick is a FlightResultPtr (object identity, WF-1).
 //
 // Times in cells are invariant "HH:mm" (07 §1); CopySelected uses the culture
 // formats as 01 §8.9 says. UI thread only.
@@ -246,6 +247,15 @@ public:
     [[nodiscard]] ScrollRequest take_scroll_request() noexcept;
     [[nodiscard]] FlightMenuState context_menu(bool busy) const;
 
+    /// The work the grid has done since it was made, counted so the R-03 tests can bound
+    /// it independently of how fast or busy the machine is.
+    struct Work {
+        std::size_t rows_built = 0;   ///< rows formatted (`AddRow`)
+        std::size_t comparisons = 0;  ///< row comparisons of the display sort, insertions included
+        std::size_t full_sorts = 0;   ///< sorts of the whole display order
+    };
+    [[nodiscard]] const Work& work() const noexcept { return work_; }
+
     // --- Self-test accessors (01 §8.10) -----------------------------------------------
 
     /// `VisibleRowsText(max)`: the first `max` rows in display order.
@@ -278,6 +288,7 @@ private:
     std::optional<ColumnSort<FlightColumn>> user_sort_;
     std::optional<std::size_t> current_;  ///< Idx of the current row
     ScrollRequest scroll_ = ScrollRequest::none;
+    mutable Work work_;  ///< counted in const comparisons too
 };
 
 } // namespace wizz::ui

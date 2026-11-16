@@ -37,7 +37,8 @@ ctest --preset debug               # or: --preset release
 | workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full`; `release-package` = configure `msvc-x64` + build `dist` |
 
 CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs the same presets: `release`
-and `debug` with `ctest -LE autotest`, the `autotest` label and `dist` in the Release leg
+and `debug` with `ctest -LE autotest` (one test per CPU of the runner instead of the preset's 8),
+the `autotest` label and `dist` in the Release leg
 ([`docs/RELEASING.md`](docs/RELEASING.md)).
 
 In a git worktree without the vcpkg submodule, point at another checkout's vcpkg; to reuse an
@@ -58,6 +59,10 @@ the configure step after adding files.
 - `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, run by CTest with
   `QT_QPA_PLATFORM=minimal` (no window appears). Run the binary directly without that variable to
   use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots.
+- Label `timing`: the R-03 / 05 §5 timing tests of `wizzairhelper_gui_tests` (`FlightGridPerformance.*`,
+  the progress timer under a replay). They run alone (RUN_SERIAL) and check the UI thread's own CPU
+  time always and wall-clock time unless other processes held the CPUs (DECISIONS D-50), so they hold
+  on a busy machine. To try that locally, pin the test binary to 2 logical CPUs beside 4 busy loops.
 - `app.version*`: the real `WizzairHelper.exe --version` read through pipes, captured by Windows
   PowerShell, and its version resource (D-35, D-37). No window opens.
 - `autotest.*` (label `autotest`): the real `WizzairHelper.exe` in its hidden self-test mode on

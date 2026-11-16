@@ -39,7 +39,8 @@ Python 3).
    commit, `vcpkg.json` and the runner image). The first run builds Qt from source (Debug and
    Release) and takes well over an hour; later runs restore it.
 4. Configure, build and test through the same presets as local work:
-   `ctest --preset <p> --output-on-failure -LE autotest`.
+   `ctest --preset <p> --output-on-failure -LE autotest --parallel <CPUs of the runner>`. The
+   timing tests (label `timing`) run alone and hold on a busy runner (DECISIONS D-50).
 5. The `autotest` label in `msvc-release` only: the real app window, one run at a time. The test
    preset fails when no test matches, so a runner without Python fails instead of skipping them.
 6. `cmake --build --preset dist`, `SHA256SUMS.txt`, upload (`if-no-files-found: error`).

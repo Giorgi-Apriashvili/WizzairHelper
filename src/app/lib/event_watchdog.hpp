@@ -11,7 +11,18 @@
 // ran over 50 / 100 ms and the longest ones with the event type and the
 // receiver's class, separately for the time the busy panel was busy.
 //
+// Like TimerGapProbe, each dispatch also gets its exclusive UI-thread CPU time
+// and, when it ran 50 ms or more, whether other processes held the CPUs during
+// it (CpuMeter, DECISIONS D-50), so that the R-03 check can hold on a busy
+// machine: `longest_busy_cpu_ms` is the UI thread's own work,
+// `longest_busy_own_ms` the longest dispatch that other processes did not hold
+// the CPUs during. The CPU counters cost about 50 µs, so they are read at most
+// every 10 ms and at the end of a long dispatch: its window starts up to 10 ms
+// early.
+//
 // Test-only diagnostics of the --autotest mode (DECISIONS D-30); UI thread only.
+
+#include "cpu_meter.hpp"
 
 #include <QElapsedTimer>
 
@@ -30,11 +41,13 @@ class EventWatchdog {
 public:
     /// One long dispatch.
     struct Dispatch {
-        double ms = 0;            ///< exclusive time
-        double ended_at_ms = 0;   ///< since the watchdog started
-        std::string event;        ///< QEvent::Type name, e.g. "MetaCall", "Timer", "UpdateRequest"
-        std::string receiver;     ///< the receiver's class name
-        bool busy = false;        ///< the busy panel was busy when it ended
+        double ms = 0;                ///< exclusive time
+        double cpu_ms = 0;            ///< exclusive UI-thread CPU time
+        bool held_by_others = false;  ///< other processes held the CPUs during it
+        double ended_at_ms = 0;       ///< since the watchdog started
+        std::string event;            ///< QEvent::Type name, e.g. "MetaCall", "Timer", "UpdateRequest"
+        std::string receiver;         ///< the receiver's class name
+        bool busy = false;            ///< the busy panel was busy when it ended
     };
     static constexpr std::size_t kKeptDispatches = 5;
 
@@ -44,6 +57,8 @@ public:
         int over_100_ms = 0;
         double longest_ms = 0;
         double longest_busy_ms = 0;       ///< the longest while busy (R-03)
+        double longest_busy_cpu_ms = 0;   ///< the most exclusive UI-thread CPU time of one dispatch while busy
+        double longest_busy_own_ms = 0;   ///< the longest while busy that other processes did not hold the CPUs during
         std::vector<Dispatch> longest;    ///< the kKeptDispatches longest, longest first
     };
 
@@ -63,20 +78,29 @@ public:
     [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
 
 private:
+    /// How often the CPU counters are read at most (at the start of a dispatch).
+    static constexpr std::int64_t kSampleEveryNs = 10'000'000;
+
     struct Frame {
         std::int64_t start_ns = 0;
-        std::int64_t nested_ns = 0;   ///< time of dispatches nested inside this one
+        std::int64_t nested_ns = 0;      ///< time of dispatches nested inside this one
+        std::uint64_t start_cycles = 0;  ///< the UI thread's cycles at the start
+        std::uint64_t nested_cycles = 0; ///< UI-thread cycles of nested dispatches and harness work
+        CpuMeter::Sample window_start;   ///< the CPU counters at most kSampleEveryNs before the start
         int event_type = 0;
         const char* receiver = "";
     };
 
     [[nodiscard]] std::int64_t now_ns() const { return clock_.nsecsElapsed(); }
-    void record(const Frame& frame, double ms, std::int64_t now);
+    void record(const Frame& frame, const Dispatch& measured, std::int64_t now);
 
     std::function<bool()> is_busy_;
     QElapsedTimer clock_;
     std::vector<Frame> stack_;
+    CpuMeter::Sample sampled_;            ///< the latest CPU counters
+    std::int64_t sampled_ns_ = -1;        ///< when they were read
     std::int64_t excluding_since_ns_ = -1;
+    std::uint64_t excluding_since_cycles_ = 0;
     Stats stats_;
 };
 
