@@ -4,7 +4,9 @@
 // 3 o'clock, pixel centres on integer coordinates).
 
 #include "diagnostics_test_support.hpp"
+#include "look_test_support.hpp"
 #include "spinner_widget.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/busy_panel_model.hpp"
 
@@ -19,6 +21,7 @@
 
 namespace {
 
+namespace style = wizz::app::style;
 using wizz::app::SpinnerWidget;
 using wizz::test::save_snapshot;
 
@@ -95,20 +98,32 @@ private:
     std::optional<wizz::ui::SpinnerGeometry> geometry_;
 };
 
+/// The arc: the accent (#C5006E) in light, the lighter accent line in dark (D-53).
 void expect_magenta(const Sample& s)
 {
+    const style::Theme& theme = style::theme();
+    const QColor arc = theme.dark ? theme.accent_line : theme.accent;
     EXPECT_GE(s.alpha, 200);
-    EXPECT_NEAR(s.red, 197, 30);
-    EXPECT_LE(s.green, 30);
-    EXPECT_NEAR(s.blue, 110, 30);
+    EXPECT_NEAR(s.red, arc.red(), 30);
+    EXPECT_NEAR(s.green, arc.green(), 30);
+    EXPECT_NEAR(s.blue, arc.blue(), 30);
+}
+
+/// Translucent text colour: 01 §10.8's ARGB(40, 0, 0, 0) ring became the theme's text at
+/// alpha 40 (50 in dark), so it shows on either surface; the idle dot at alpha 120.
+void expect_text_at_alpha(const Sample& s, int alpha)
+{
+    const QColor text = style::theme().text;
+    EXPECT_NEAR(s.alpha, alpha, 12);
+    // A translucent pixel keeps its colour only roughly (premultiplied rounding).
+    EXPECT_NEAR(s.red, text.red(), 10);
+    EXPECT_NEAR(s.green, text.green(), 10);
+    EXPECT_NEAR(s.blue, text.blue(), 10);
 }
 
 void expect_track(const Sample& s)
 {
-    EXPECT_NEAR(s.alpha, 40, 12);  // ARGB(40, 0, 0, 0)
-    EXPECT_EQ(s.red, 0);
-    EXPECT_EQ(s.green, 0);
-    EXPECT_EQ(s.blue, 0);
+    expect_text_at_alpha(s, style::theme().dark ? 50 : 40);
 }
 
 TEST(SpinnerWidget, Starts_idle_at_angle_0)
@@ -208,8 +223,7 @@ TEST(SpinnerWidget, Idle_draws_the_ring_and_a_grey_centre_dot)
     EXPECT_FALSE(render.has_magenta());
     const auto& g = *render.geometry();
     const Sample dot = render.at(g.dot_left + g.dot_diameter / 2, g.dot_top + g.dot_diameter / 2);
-    EXPECT_NEAR(dot.alpha, 120, 10);  // ARGB(120, 0, 0, 0)
-    EXPECT_EQ(dot.red, 0);
+    expect_text_at_alpha(dot, 120);  // 01: ARGB(120, 0, 0, 0)
     expect_track(render.at_angle(50, render.radius()));
     expect_track(render.at_angle(230, render.radius()));
 }
@@ -230,6 +244,30 @@ TEST(SpinnerWidget, Paints_inside_its_contents_rect)
         }
     }
     EXPECT_GT(image.pixelColor(26, 21).alpha(), 0);  // the ring's right side (3 o'clock), at 30 − 4
+}
+
+TEST(SpinnerWidget, Dark_draws_the_lighter_accent_and_a_light_ring)
+{
+    // On the dark surface the arc is the accent line (#F05AA8, 3:1 on dark surfaces) and
+    // the ring and dot are the light text colour, so the spinner stays visible.
+    wizz::test::look::LookGuard guard;
+    qputenv("WIZZ_COLOR_SCHEME", "dark");
+    ASSERT_TRUE(style::apply_application_look());
+    ASSERT_TRUE(style::theme().dark);
+    const SpinnerRender render(30, 43, true, 0);
+    ASSERT_TRUE(render.geometry().has_value());
+    const double r = render.radius();
+    const Sample arc = render.at_angle(50, r);
+    EXPECT_GE(arc.alpha, 200);
+    EXPECT_NEAR(arc.red, 0xF0, 30);
+    EXPECT_NEAR(arc.green, 0x5A, 30);
+    EXPECT_NEAR(arc.blue, 0xA8, 30);
+    expect_track(render.at_angle(230, r));
+    EXPECT_GT(render.at_angle(230, r).red, 180) << "a light ring";
+
+    const SpinnerRender idle(30, 43, false, 0);
+    const auto& g = *idle.geometry();
+    expect_text_at_alpha(idle.at(g.dot_left + g.dot_diameter / 2, g.dot_top + g.dot_diameter / 2), 120);
 }
 
 } // namespace

@@ -4,6 +4,8 @@
 
 #include "app_test_support.hpp"
 #include "autotest_diagnostics.hpp"
+#include "look_test_support.hpp"
+#include "ui_style.hpp"
 #include "ui_logic/ui_samples.hpp"
 
 #include "wizz/core/json.hpp"
@@ -91,7 +93,8 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
                                                       .cancel_requests = 1,
                                                       .status_after_press = "Cancelling…",
                                                       .cancel_enabled_after_press = false};
-    diagnostics.searches.push_back({.name = "outbound", .wizz_requests = 3, .duration_ms = 12.0, .final_status = "x"});
+    diagnostics.searches.push_back(
+        {.name = "outbound", .wizz_requests = 3, .duration_ms = 12.0, .final_status = "x", .final_status_cut = true});
     diagnostics.grids.push_back({.name = "outbound", .rows = 3, .result_flights = 3});
     diagnostics.grids.push_back({.name = "return", .rows = 0, .result_flights = std::nullopt});
     diagnostics.layout = LayoutDiagnostics{.checks = 2, .problems = {}, .cancel_visible = true};
@@ -110,6 +113,7 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
     EXPECT_TRUE(json.contains("\"cancelRequests\": 1"));
     EXPECT_TRUE(json.contains("\"resultFlights\": null"));
     EXPECT_TRUE(json.contains("\"statesChecked\": 2"));
+    EXPECT_TRUE(json.contains("\"finalStatusCut\": true"));
     const wizz::json::Value parsed = wizz::json::parse(json);
     EXPECT_TRUE(parsed.is_object());
 }
@@ -131,6 +135,34 @@ TEST(AutoTestDiagnostics, Display_layout_and_environment_of_the_main_window)
     EXPECT_EQ(environment.locale, "en-US");
     EXPECT_FALSE(environment.qt.empty());
     EXPECT_FALSE(environment.os.empty());
+    // The look in use (the suite runs the app's light look): what a dark run checks.
+    EXPECT_EQ(environment.style, "modern/fusion");
+    EXPECT_EQ(environment.look, wizz::app::style::theme().dark ? "dark" : "light");
+    EXPECT_EQ(environment.window_colour, wizz::app::style::theme().window.name().toStdString());
+    EXPECT_FALSE(environment.font_family.empty());
+}
+
+TEST(AutoTestDiagnostics, The_environment_names_a_dark_and_a_high_contrast_look)
+{
+    const wizz::test::look::LookGuard guard;
+    qputenv("WIZZ_COLOR_SCHEME", "dark");
+    ASSERT_TRUE(wizz::app::style::apply_application_look());
+    wizz::app::EnvironmentDiagnostics environment = wizz::app::describe_environment(*wizz::Locale::en_us());
+    EXPECT_EQ(environment.look, "dark");
+    EXPECT_EQ(environment.window_colour, "#131217");
+    EXPECT_EQ(environment.style, "modern/fusion");
+
+    wizz::app::style::set_high_contrast_probe([] { return true; });
+    ASSERT_TRUE(wizz::app::style::refresh_appearance());
+    environment = wizz::app::describe_environment(*wizz::Locale::en_us());
+    EXPECT_EQ(environment.look, "high_contrast");
+    EXPECT_TRUE(environment.style == "windowsvista" || environment.style == "windows") << environment.style;
+
+    AutoTestDiagnostics diagnostics;
+    diagnostics.environment = environment;
+    const std::string json = wizz::app::to_json(diagnostics);
+    EXPECT_TRUE(json.contains("\"look\": \"high_contrast\"")) << json;
+    EXPECT_TRUE(json.contains("\"windowColour\": \"#")) << json;
 }
 
 } // namespace

@@ -106,10 +106,15 @@ private:
     /// The `Idx` of display row `row` (the key that persistent indexes follow).
     [[nodiscard]] std::size_t idx_at(int row) const;
     void notify_currency(const std::string& before);
+    /// Takes the row colours from the theme again (the brushes are shared by every cell).
+    void apply_theme();
 
     ui::FlightGridModel grid_;
     QFont bold_;
     QBrush gray_text_;
+    QBrush cheapest_;
+    QBrush cheapest_selection_;
+    bool high_contrast_ = false;  ///< the cheapest rows are semibold instead of tinted
     bool keep_horizontal_scroll_ = false;
 };
 

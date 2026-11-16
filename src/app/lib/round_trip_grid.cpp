@@ -1,5 +1,6 @@
 #include "round_trip_grid.hpp"
 
+#include "elided_label.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
 
@@ -9,7 +10,6 @@
 #include <QCheckBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
-#include <QLabel>
 #include <QMenu>
 #include <QScopedValueRollback>
 #include <QVBoxLayout>
@@ -34,12 +34,13 @@ constexpr std::array kColumnWidths{
     ColumnWidth{TripColumn::total, 95},        ColumnWidth{TripColumn::nights, 55},
     ColumnWidth{TripColumn::out_date, 95},     ColumnWidth{TripColumn::outbound, 300},
     ColumnWidth{TripColumn::out_price, 80},    ColumnWidth{TripColumn::return_date, 95},
-    ColumnWidth{TripColumn::return_leg, 300},  ColumnWidth{TripColumn::return_price, 85},
+    ColumnWidth{TripColumn::return_leg, 300},  ColumnWidth{TripColumn::return_price, 100},
     ColumnWidth{TripColumn::booking_notes, 260},
 };
-/// "Booking / notes" fills the remaining width; no minimum is set, so WinForms' default
-/// DataGridViewColumn.MinimumWidth (5) applies.
-constexpr int kNotesMinimumWidth = 5;
+/// "Booking / notes" fills the remaining width, at least L(120): at 5 px its header wrapped
+/// word by word into a three-line header row (D-53). "Return price" is 100 wide so the
+/// semibold header stays on one line, which keeps one more row in view.
+constexpr int kNotesMinimumWidth = 120;
 
 [[nodiscard]] int section(TripColumn column) noexcept
 {

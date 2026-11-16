@@ -1,11 +1,13 @@
 #include "input_panel.hpp"
 
 #include "date_picker.hpp"
-#include "flow_layout.hpp"
 #include "fractional_spin_box.hpp"
+#include "modern_style.hpp"
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
+#include "section_card.hpp"
+#include "trailing_row_layout.hpp"
 #include "ui_style.hpp"
 
 #include "wizz/core/text.hpp"
@@ -13,12 +15,15 @@
 
 #include <QComboBox>
 #include <QEvent>
+#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QScopedValueRollback>
 #include <QStringList>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <utility>
 
@@ -28,22 +33,20 @@ namespace {
 
 namespace strings = ui::strings;
 
-// 01 §4.3 / §4.4 geometry (logical pixels).
-constexpr QMargins kPanelPadding{10, 8, 10, 4};
-constexpr QMargins kRowMargins{0, 1, 0, 1};
-constexpr QMargins kLabelMargins{3, 7, 3, 0};
-constexpr QMargins kHintMargins{10, 7, 3, 0};
-constexpr QMargins kResolvedMargins{3, 4, 3, 2};
-constexpr int kPlaceWidth = 210;
-constexpr int kRadiusWidth = 64;
-constexpr int kDateWidth = 130;
-constexpr int kAdultsWidth = 48;
-constexpr int kFareWidth = 175;
-constexpr int kCurrencyWidth = 70;
-constexpr int kNightsWidth = 52;
-constexpr int kWideGap = 24;
-constexpr int kSmallGap = 8;
-constexpr int kButtonGap = 16;
+// Geometry of the grouped layout (logical pixels).
+constexpr QMargins kPanelPadding{16, 6, 16, 0};
+constexpr int kCardGap = 8;
+constexpr int kFieldGap = 8;
+constexpr int kResolvedGap = 4;  // between the cards and the resolved line
+constexpr int kPlaceMinimumWidth = 180;
+constexpr int kPlaceMinimumChars = 14;
+constexpr int kRadiusWidth = 76;
+constexpr int kDateWidth = 142;
+constexpr int kAdultsWidth = 64;
+constexpr int kFareWidth = 206;
+constexpr int kCurrencyWidth = 88;
+constexpr int kNightsWidth = 64;
+constexpr QMargins kResolvedMargins{0, 0, 4, 0};
 constexpr double kRadiusStep = 25;
 constexpr int kMaxAdults = 9;
 
@@ -51,28 +54,8 @@ constexpr int kMaxAdults = 9;
 {
     auto* label = new QLabel(to_qstring(text), parent);
     label->setTextFormat(Qt::PlainText);
+    style::set_text_tone(*label, style::TextTone::secondary);
     return label;
-}
-
-void make_gray(QWidget& widget)
-{
-    QPalette palette = widget.palette();
-    palette.setColor(QPalette::WindowText, style::gray_text());
-    widget.setPalette(palette);
-}
-
-/// `Lbl(text)`.
-void add_label(FlowLayout& row, std::string_view text)
-{
-    row.add_widget(make_label(text, row.parentWidget()), kLabelMargins);
-}
-
-/// `Hint(text)`.
-void add_hint(FlowLayout& row, std::string_view text)
-{
-    QLabel* hint = make_label(text, row.parentWidget());
-    make_gray(*hint);
-    row.add_widget(hint, kHintMargins);
 }
 
 [[nodiscard]] FractionalSpinBox* make_numeric(QWidget* parent, const NumberSymbols& symbols, double minimum,
@@ -114,44 +97,95 @@ void InputPanel::build()
     const NumberSymbols& symbols = locale_->number_symbols();
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(kPanelPadding);
-    outer->setSpacing(0);
-    for (int i = 0; i < 3; ++i) {
-        auto* row = new QWidget(this);
-        row->setObjectName(QStringLiteral("row%1").arg(i + 1));
-        auto* layout = new FlowLayout(row);
-        layout->setContentsMargins(kRowMargins);
-        rows_[i] = row;
-        row_layouts_[i] = layout;
-        outer->addWidget(row);
+    outer->setSpacing(kResolvedGap);
+
+    auto* where = new SectionCard(to_qstring(strings::kSectionWhere), style::glyph::kMapPin, false, this);
+    where->set_hint(to_qstring(strings::kHintAnywhere));
+    auto* travellers = new SectionCard(to_qstring(strings::kSectionTravellers), style::glyph::kPeople, false, this);
+    auto* outbound = new SectionCard(to_qstring(strings::kSectionOutbound), style::glyph::kAirplane, false, this);
+    auto* inbound = new SectionCard(to_qstring(strings::kSectionReturn), style::glyph::kAirplane, true, this);
+    inbound->set_hint(to_qstring(strings::kHintReturn));
+    const std::array<SectionCard*, 4> cards{where, travellers, outbound, inbound};
+    const std::array<const char*, 4> names{"whereCard", "travellersCard", "outboundCard", "returnCard"};
+    for (std::size_t i = 0; i < cards.size(); ++i) {
+        cards[i]->setObjectName(QString::fromLatin1(names[i]));
+        rows_[i] = cards[i];
     }
 
-    // Row 1, where.
-    FlowLayout& row1 = *row_layouts_[0];
-    QWidget* const parent1 = rows_[0];
-    from_ = new PlaceCombo(parent1);
-    from_->setFixedWidth(kPlaceWidth);
-    from_->setToolTip(to_qstring(strings::kTooltipFrom));
-    from_radius_ = make_numeric(parent1, symbols, 0, ui::kMaxRadiusKm, kRadiusStep, kRadiusWidth);
-    to_ = new PlaceCombo(parent1);
-    to_->setFixedWidth(kPlaceWidth);
-    to_->setToolTip(to_qstring(strings::kTooltipTo));
-    to_radius_ = make_numeric(parent1, symbols, 0, ui::kMaxRadiusKm, kRadiusStep, kRadiusWidth);
-    add_label(row1, strings::kLabelFrom);
-    row1.add_widget(from_);
-    add_label(row1, strings::kLabelWithin);
-    row1.add_widget(from_radius_);
-    add_label(row1, strings::kLabelKm);
-    row1.add_gap(kWideGap);
-    add_label(row1, strings::kLabelTo);
-    row1.add_widget(to_);
-    add_label(row1, strings::kLabelWithin);
-    row1.add_widget(to_radius_);
-    add_label(row1, strings::kLabelKm);
-    add_hint(row1, strings::kHintAnywhere);
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(kCardGap);
+    grid->setVerticalSpacing(kCardGap);
+    grid->addWidget(where, 0, 0);
+    grid->addWidget(travellers, 0, 1);
+    grid->addWidget(outbound, 1, 0);
+    grid->addWidget(inbound, 1, 1);
+    grid->setColumnStretch(0, 3);  // the place boxes grow; the right cards keep their size
+    grid->setColumnStretch(1, 2);
+    outer->addLayout(grid);
 
-    // Row 2, outbound.
-    FlowLayout& row2 = *row_layouts_[1];
-    QWidget* const parent2 = rows_[1];
+    // Where: From / To with their radii, aligned in a grid.
+    from_ = new PlaceCombo(where);
+    to_ = new PlaceCombo(where);
+    for (PlaceCombo* place : {from_, to_}) {
+        place->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        place->setMinimumContentsLength(kPlaceMinimumChars);
+        place->setMinimumWidth(kPlaceMinimumWidth);
+        place->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+    from_->setToolTip(to_qstring(strings::kTooltipFrom));
+    to_->setToolTip(to_qstring(strings::kTooltipTo));
+    from_radius_ = make_numeric(where, symbols, 0, ui::kMaxRadiusKm, kRadiusStep, kRadiusWidth);
+    to_radius_ = make_numeric(where, symbols, 0, ui::kMaxRadiusKm, kRadiusStep, kRadiusWidth);
+    auto* places = new QGridLayout;
+    places->setContentsMargins(0, 0, 0, 0);
+    places->setHorizontalSpacing(kFieldGap);
+    places->setVerticalSpacing(SectionCard::kRowGap);
+    const auto add_place_row = [&](int row, std::string_view label, PlaceCombo* place, FractionalSpinBox* radius) {
+        QLabel* name = make_label(label, where);
+        name->setBuddy(place);
+        places->addWidget(name, row, 0, Qt::AlignLeft | Qt::AlignVCenter);
+        places->addWidget(place, row, 1);
+        places->addWidget(make_label(strings::kLabelWithin, where), row, 2, Qt::AlignRight | Qt::AlignVCenter);
+        places->addWidget(radius, row, 3);
+        places->addWidget(make_label(strings::kLabelKm, where), row, 4, Qt::AlignLeft | Qt::AlignVCenter);
+    };
+    add_place_row(0, strings::kLabelFrom, from_, from_radius_);
+    add_place_row(1, strings::kLabelTo, to_, to_radius_);
+    places->setColumnStretch(1, 1);
+    where->body()->addLayout(places);
+
+    // Travellers & prices: adults and fare, then the currency.
+    adults_ = make_numeric(travellers, symbols, 1, kMaxAdults, 1, kAdultsWidth);
+    fare_ = new QComboBox(travellers);
+    for (const std::string_view item : strings::kFareItems) {
+        fare_->addItem(to_qstring(item));
+    }
+    fare_->setFixedWidth(kFareWidth);
+    ModernStyle::use_styled_popup(*fare_);
+    currency_ = new QComboBox(travellers);
+    for (const std::string_view code : strings::kCurrencies) {
+        currency_->addItem(to_qstring(code));
+    }
+    currency_->setFixedWidth(kCurrencyWidth);
+    ModernStyle::use_styled_popup(*currency_);
+    auto* who = new QGridLayout;
+    who->setContentsMargins(0, 0, 0, 0);
+    who->setHorizontalSpacing(kFieldGap);
+    who->setVerticalSpacing(SectionCard::kRowGap);
+    QLabel* adults_label = make_label(strings::kLabelAdults, travellers);
+    adults_label->setBuddy(adults_);
+    QLabel* currency_label = make_label(strings::kLabelPricesIn, travellers);
+    currency_label->setBuddy(currency_);
+    who->addWidget(adults_label, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    who->addWidget(adults_, 0, 1, Qt::AlignLeft);
+    who->addWidget(fare_, 0, 2, Qt::AlignLeft);
+    who->addWidget(currency_label, 1, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    who->addWidget(currency_, 1, 1, 1, 2, Qt::AlignLeft);
+    who->setColumnStretch(3, 1);
+    travellers->body()->addLayout(who);
+
+    // Outbound: the date window, then Search outbound at the right.
     const ui::DateBounds bounds = rules_.bounds();
     const auto make_picker = [&](QWidget* parent) {
         auto* picker = new DatePicker(locale_, parent);
@@ -159,64 +193,74 @@ void InputPanel::build()
         picker->setFixedWidth(kDateWidth);
         return picker;
     };
-    out_from_ = make_picker(parent2);
-    out_to_ = make_picker(parent2);
-    adults_ = make_numeric(parent2, symbols, 1, kMaxAdults, 1, kAdultsWidth);
-    fare_ = new QComboBox(parent2);
-    for (const std::string_view item : strings::kFareItems) {
-        fare_->addItem(to_qstring(item));
-    }
-    fare_->setFixedWidth(kFareWidth);
-    currency_ = new QComboBox(parent2);
-    for (const std::string_view code : strings::kCurrencies) {
-        currency_->addItem(to_qstring(code));
-    }
-    currency_->setFixedWidth(kCurrencyWidth);
-    search_out_ = new SearchButton(to_qstring(strings::kSearchOutbound), parent2);
-    add_label(row2, strings::kLabelOutboundBetween);
-    row2.add_widget(out_from_);
-    add_label(row2, strings::kLabelAnd);
-    row2.add_widget(out_to_);
-    row2.add_gap(kWideGap);
-    add_label(row2, strings::kLabelAdults);
-    row2.add_widget(adults_);
-    row2.add_gap(kSmallGap);
-    row2.add_widget(fare_);
-    row2.add_gap(kSmallGap);
-    add_label(row2, strings::kLabelPricesIn);
-    row2.add_widget(currency_);
-    row2.add_gap(kButtonGap);
-    row2.add_widget(search_out_);
+    out_from_ = make_picker(outbound);
+    out_to_ = make_picker(outbound);
+    search_out_ = new SearchButton(to_qstring(strings::kSearchOutbound), outbound);
+    search_out_->set_glyph(style::glyph::kSearch);
+    const auto add_dates = [&](SectionCard* card, DatePicker* from, DatePicker* to) {
+        auto* row = new TrailingRowLayout;
+        card->body()->addLayout(row);
+        row->add_widget(make_label(strings::kLabelBetween, card));
+        row->add_widget(from);
+        row->add_widget(make_label(strings::kLabelAnd, card));
+        row->add_widget(to);
+    };
+    add_dates(outbound, out_from_, out_to_);
+    auto* out_actions = new TrailingRowLayout;
+    outbound->body()->addLayout(out_actions);
+    out_actions->set_trailing(search_out_);
 
-    // Row 3, return.
-    FlowLayout& row3 = *row_layouts_[2];
-    QWidget* const parent3 = rows_[2];
-    ret_from_ = make_picker(parent3);
-    ret_to_ = make_picker(parent3);
-    min_nights_ = make_numeric(parent3, symbols, 0, ui::DateRules::kMinNightsMaximum, 1, kNightsWidth);
-    max_nights_ = make_numeric(parent3, symbols, 0, ui::DateRules::kMaxNightsMaximum, 1, kNightsWidth);
-    search_ret_ = new SearchButton(to_qstring(strings::kSearchReturn), parent3);
-    add_label(row3, strings::kLabelReturnBetween);
-    row3.add_widget(ret_from_);
-    add_label(row3, strings::kLabelAnd);
-    row3.add_widget(ret_to_);
-    row3.add_gap(kWideGap);
-    add_label(row3, strings::kLabelRoundTripsStay);
-    row3.add_widget(min_nights_);
-    add_label(row3, strings::kLabelNightsTo);
-    row3.add_widget(max_nights_);
-    add_label(row3, strings::kLabelNights);
-    row3.add_gap(kButtonGap);
-    row3.add_widget(search_ret_);
-    add_hint(row3, strings::kHintReturn);
+    // Return: the date window, the night limits of the round trips, Search return.
+    ret_from_ = make_picker(inbound);
+    ret_to_ = make_picker(inbound);
+    min_nights_ = make_numeric(inbound, symbols, 0, ui::DateRules::kMinNightsMaximum, 1, kNightsWidth);
+    max_nights_ = make_numeric(inbound, symbols, 0, ui::DateRules::kMaxNightsMaximum, 1, kNightsWidth);
+    search_ret_ = new SearchButton(to_qstring(strings::kSearchReturn), inbound);
+    search_ret_->set_glyph(style::glyph::kSearch);
+    add_dates(inbound, ret_from_, ret_to_);
+    auto* stay = new TrailingRowLayout;
+    inbound->body()->addLayout(stay);
+    stay->add_widget(make_label(strings::kLabelRoundTripsStay, inbound));
+    stay->add_widget(min_nights_);
+    stay->add_widget(make_label(strings::kLabelNightsTo, inbound));
+    stay->add_widget(max_nights_);
+    stay->add_widget(make_label(strings::kLabelNights, inbound));
+    stay->set_trailing(search_ret_);
 
-    // The resolved line. It wraps at the panel's client width − 20 (the padding),
-    // i.e. MaximumSize.Width = max(200, ClientWidth − 20) for any real window width.
-    resolved_ = make_label(strings::kResolvedDefault, this);
+    // The resolved line, muted, wrapping at the panel width.
+    resolved_ = new QLabel(to_qstring(strings::kResolvedDefault), this);
+    resolved_->setTextFormat(Qt::PlainText);
     resolved_->setWordWrap(true);
     resolved_->setContentsMargins(kResolvedMargins);
-    make_gray(*resolved_);
-    outer->addWidget(resolved_);
+    resolved_->setFont(style::hint_font());
+    style::set_text_tone(*resolved_, style::TextTone::muted);
+    auto* resolved_row = new QHBoxLayout;
+    resolved_row->setContentsMargins(2, 0, 0, 0);
+    resolved_row->setSpacing(4);
+    resolved_row->addWidget(new GlyphLabel(style::glyph::kInfo, false, this, GlyphLabel::Tone::muted, 9.0), 0,
+                            Qt::AlignTop);
+    resolved_row->addWidget(resolved_, 1);
+    outer->addLayout(resolved_row);
+
+    // Screen readers: every input has a name of its own (the cards carry their captions).
+    const std::array<std::pair<QWidget*, std::string_view>, 13> accessible{{
+        {from_, strings::kLabelFrom},
+        {from_radius_, strings::kNameFromRadius},
+        {to_, strings::kLabelTo},
+        {to_radius_, strings::kNameToRadius},
+        {adults_, strings::kLabelAdults},
+        {fare_, strings::kNameFare},
+        {currency_, strings::kLabelPricesIn},
+        {out_from_, strings::kNameOutboundFirst},
+        {out_to_, strings::kNameOutboundLast},
+        {ret_from_, strings::kNameReturnFirst},
+        {ret_to_, strings::kNameReturnLast},
+        {min_nights_, strings::kNameMinNights},
+        {max_nights_, strings::kNameMaxNights},
+    }};
+    for (const auto& [widget, name] : accessible) {
+        widget->setAccessibleName(to_qstring(name));
+    }
 }
 
 void InputPanel::wire()
@@ -268,8 +312,8 @@ void InputPanel::apply_tab_order()
 
 std::vector<QWidget*> InputPanel::tab_order() const
 {
-    return {from_,    from_radius_, to_,       to_radius_, out_from_,   out_to_,     adults_,    fare_,
-            currency_, search_out_, ret_from_, ret_to_,    min_nights_, max_nights_, search_ret_};
+    return {from_,   from_radius_, to_,      to_radius_, adults_,     fare_,       currency_, out_from_,
+            out_to_, search_out_,  ret_from_, ret_to_,    min_nights_, max_nights_, search_ret_};
 }
 
 std::vector<QWidget*> InputPanel::working_controls() const
@@ -280,12 +324,7 @@ std::vector<QWidget*> InputPanel::working_controls() const
 
 QWidget* InputPanel::row(int index) const
 {
-    return index >= 0 && index < 3 ? rows_[index] : nullptr;
-}
-
-FlowLayout* InputPanel::row_layout(int index) const
-{
-    return index >= 0 && index < 3 ? row_layouts_[index] : nullptr;
+    return index >= 0 && index < 4 ? rows_[index] : nullptr;
 }
 
 // --- Settings ------------------------------------------------------------------------------

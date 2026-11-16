@@ -1,14 +1,15 @@
 // LogView (01 §12.1): line prefix with the culture time separator, CRLF text for
-// summary.json, caret and scroll at the end, no size limit, and the box's look.
+// summary.json, caret and scroll at the end, no size limit, and the box's look (D-53).
 
 #include "diagnostics_test_support.hpp"
 #include "log_view.hpp"
-#include "system_colours.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/core/clocks.hpp"
 #include "wizz/ui/summary_json.hpp"
 
 #include <QFont>
+#include <QLineEdit>
 #include <QPalette>
 #include <QScrollBar>
 #include <QTextBlock>
@@ -65,19 +66,27 @@ TEST(LogViewLocale, The_prefix_uses_the_culture_time_separator)
     EXPECT_EQ(view.text(), "[07.00.00] x\r\n");
 }
 
-TEST_F(LogViewTest, Is_a_read_only_unwrapped_courier_box_on_the_window_colour)
+TEST_F(LogViewTest, Is_a_read_only_unwrapped_monospace_box_on_the_surface_colour)
 {
+    // 01 §12.1's box (read-only, no wrap, both scroll bars, never the grey read-only
+    // colour) in the look of D-53: Cascadia Mono 9.5 pt (Consolas), the theme's text on its
+    // surface, no frame of its own (the results card frames it).
     EXPECT_TRUE(view_.isReadOnly());
     EXPECT_FALSE(view_.isUndoRedoEnabled());
     EXPECT_EQ(view_.lineWrapMode(), QPlainTextEdit::NoWrap);
     EXPECT_EQ(view_.horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOn);
     EXPECT_EQ(view_.verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOn);
-    EXPECT_EQ(view_.font().family(), QStringLiteral("Courier New"));
-    EXPECT_DOUBLE_EQ(view_.font().pointSizeF(), 9.0);
+    EXPECT_EQ(view_.font(), wizz::app::style::mono_font(9.5));
+    EXPECT_EQ(view_.font().families().front(),
+              wizz::app::style::windows10_fonts() ? QStringLiteral("Consolas") : QStringLiteral("Cascadia Mono"));
+    EXPECT_TRUE(view_.font().families().contains(QStringLiteral("Consolas")));
+    EXPECT_DOUBLE_EQ(view_.font().pointSizeF(), 9.5);
     EXPECT_FALSE(view_.font().bold());
+    EXPECT_EQ(view_.frameShape(), QFrame::NoFrame);
+    const wizz::app::style::Theme& theme = wizz::app::style::theme();
     EXPECT_EQ(view_.viewport()->backgroundRole(), QPalette::Base);
-    EXPECT_EQ(view_.palette().color(QPalette::Base), wizz::app::system_colour(wizz::app::SystemColour::window));
-    EXPECT_EQ(view_.palette().color(QPalette::Text), wizz::app::system_colour(wizz::app::SystemColour::window_text));
+    EXPECT_EQ(view_.palette().color(QPalette::Base), theme.surface);
+    EXPECT_EQ(view_.palette().color(QPalette::Text), theme.text);
 
     view_.resize(300, 120);
     view_.show();
@@ -86,9 +95,44 @@ TEST_F(LogViewTest, Is_a_read_only_unwrapped_courier_box_on_the_window_colour)
     const QImage image = view_.viewport()->grab().toImage();
     wizz::test::save_snapshot(image, QStringLiteral("log-view-viewport"));
     EXPECT_TRUE(view_.viewport()->autoFillBackground());  // also after the style's polish
-    const QColor window = wizz::app::system_colour(wizz::app::SystemColour::window);  // SystemColors.Window, not grey
-    EXPECT_EQ(image.pixelColor(image.width() - 2, image.height() - 2), window);
-    EXPECT_EQ(image.pixelColor(image.width() / 2, image.height() - 3), window);
+    EXPECT_EQ(image.pixelColor(image.width() - 2, image.height() - 2), theme.surface);
+    EXPECT_EQ(image.pixelColor(image.width() / 2, image.height() - 3), theme.surface);
+}
+
+TEST_F(LogViewTest, A_focused_log_shows_an_accent_bar_down_its_left_edge)
+{
+    // Keyboard focus is visible on every control (D-53): the log has no frame to ring, so a
+    // 3 px accent bar runs down its left while it has the focus, the surface otherwise.
+    QWidget window;
+    auto* view = new LogView(clock_, Locale::en_us(), &window);
+    auto* other = new QLineEdit(&window);  // holds the focus first
+    view->setGeometry(0, 0, 300, 120);
+    other->setGeometry(0, 130, 100, 26);
+    window.resize(300, 160);
+    window.show();
+    view->append_line("abc");
+    other->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    if (view->hasFocus() || !other->hasFocus()) {
+        GTEST_SKIP() << "this platform does not move the focus between widgets";
+    }
+    const wizz::app::style::Theme& theme = wizz::app::style::theme();
+    const int y = view->viewport()->geometry().center().y();
+
+    QImage image = view->grab().toImage();
+    for (int x = 0; x < 3; ++x) {
+        EXPECT_EQ(image.pixelColor(x, y), theme.surface) << "unfocused, x " << x;
+    }
+    view->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    if (!view->hasFocus()) {
+        GTEST_SKIP() << "this platform gives no window the focus";
+    }
+    image = view->grab().toImage();
+    for (int x = 0; x < 3; ++x) {
+        EXPECT_EQ(image.pixelColor(x, y), theme.accent_line) << "focused, x " << x;
+    }
+    EXPECT_NE(image.pixelColor(3, y), theme.accent_line) << "3 px wide";
 }
 
 TEST_F(LogViewTest, Appending_moves_the_caret_to_the_end_and_scrolls_there)

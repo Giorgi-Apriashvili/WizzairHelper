@@ -4,9 +4,14 @@
 // The full text stays available through text() and, while it is cut, as the
 // hover tooltip (as AutoEllipsis does). Unlike QLabel it never asks for the
 // width of its text: the layout gives it the space and it elides into that.
+// An optional compact font (the busy panel's: 1 pt smaller) takes a text that
+// does not fit in the label's own font before anything is cut.
 
+#include <QFont>
 #include <QString>
 #include <QWidget>
+
+#include <optional>
 
 namespace wizz::app {
 
@@ -22,6 +27,14 @@ public:
 
     [[nodiscard]] Qt::Alignment alignment() const noexcept { return alignment_; }
     void setAlignment(Qt::Alignment alignment);
+
+    /// A smaller font for a text that does not fit in the label's font (none by default):
+    /// the text is drawn in it when it does not fit otherwise, and cut only when it does
+    /// not fit in it either.
+    void set_compact_font(const std::optional<QFont>& font);
+    [[nodiscard]] const std::optional<QFont>& compact_font() const noexcept { return compact_; }
+    /// The font the text is drawn in for the current text and width.
+    [[nodiscard]] QFont painted_font() const;
 
     /// The text as painted into the current contents rectangle.
     [[nodiscard]] QString elided_text() const;
@@ -40,6 +53,7 @@ protected:
 private:
     QString text_;
     Qt::Alignment alignment_ = Qt::AlignLeft | Qt::AlignVCenter;
+    std::optional<QFont> compact_;
 };
 
 } // namespace wizz::app

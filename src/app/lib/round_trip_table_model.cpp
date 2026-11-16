@@ -1,5 +1,7 @@
 #include "round_trip_table_model.hpp"
 
+#include "ui_style.hpp"
+
 #include <cstddef>
 #include <utility>
 
@@ -25,9 +27,9 @@ static_assert([] {
 } // namespace
 
 RoundTripTableModel::RoundTripTableModel(std::shared_ptr<const Locale> locale, QObject* parent)
-    : KeyedTableModel(parent), grid_(std::move(locale))
+    : KeyedTableModel(parent), grid_(std::move(locale)), bold_(style::semibold_face())
 {
-    bold_.setBold(true);  // only the weight is set: it resolves against the view's font
+    // bold_ sets only the semibold families: the size resolves against the view's font.
 }
 
 int RoundTripTableModel::column_index(ui::TripColumn column) noexcept
@@ -86,6 +88,11 @@ QVariant RoundTripTableModel::headerData(int section, Qt::Orientation orientatio
 {
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < columnCount()) {
         return QString::fromStdString(grid_.header(column_at(section)));
+    }
+    if (orientation == Qt::Horizontal && role == Qt::TextAlignmentRole && section >= 0 && section < columnCount()) {
+        // Headers line up with their values (numbers right), wrapped.
+        const Qt::Alignment horizontal = alignment(column_at(section)) & Qt::AlignHorizontal_Mask;
+        return static_cast<int>(horizontal.toInt() | Qt::AlignVCenter | Qt::TextWordWrap);
     }
     return QAbstractTableModel::headerData(section, orientation, role);
 }

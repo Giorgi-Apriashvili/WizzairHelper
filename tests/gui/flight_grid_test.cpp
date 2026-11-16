@@ -3,17 +3,24 @@
 // CT-FSS-01 fares (core pricing over the fixture map CAT and RATES), notes,
 // null cells and row colours. en-US.
 
+#include "elided_label.hpp"
 #include "flight_grid_samples.hpp"
 #include "grid_colors.hpp"
 #include "grid_row_delegate.hpp"
 #include "grid_test_support.hpp"
+#include "modern_style.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/core/pricing.hpp"
 #include "wizz/core/result_views.hpp"
 
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QHeaderView>
+#include <QImage>
+#include <QItemSelectionModel>
 #include <QLabel>
+#include <QLineEdit>
 #include <QStyleOptionViewItem>
 
 #include <gtest/gtest.h>
@@ -51,7 +58,14 @@ TEST(FlightGridWidget, Top_bar_texts_and_metrics)
     const QList<QLabel*> labels = f.grid.findChildren<QLabel*>();
     EXPECT_TRUE(std::ranges::any_of(labels, [](const QLabel* l) { return l->text() == QStringLiteral("Show:"); }));
     EXPECT_EQ(f.grid.summary_label()->palette().color(QPalette::WindowText), app::grid_colors::gray_text());
-    EXPECT_EQ(f.grid.summary_label()->textFormat(), Qt::PlainText);
+    // One line that never widens the window: a summary longer than the bar ends with "…" and
+    // shows in full as the tooltip.
+    f.grid.set_summary("12 fares · cheapest 14.99 EUR: BTS → LTN on Thu 12 Nov, then BUD → LTN on Sat 14 Nov");
+    app::ElidedLabel* summary = f.grid.summary_label();
+    summary->resize(120, summary->height());
+    EXPECT_TRUE(summary->is_elided());
+    EXPECT_EQ(summary->tooltip_text(), summary->text());
+    EXPECT_EQ(summary->sizePolicy().horizontalPolicy(), QSizePolicy::Ignored);
 }
 
 TEST(FlightGridWidget, Columns_headers_widths_and_flags)
@@ -70,16 +84,22 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     EXPECT_TRUE(table.isColumnHidden(col(FlightColumn::idx)));
     EXPECT_TRUE(table.isColumnHidden(col(FlightColumn::price_sort)));
     EXPECT_FALSE(table.isColumnHidden(col(FlightColumn::km_from_dest)));
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::date)), 120);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::departs)), 58);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::from)), 170);
+    // The widths of 01 §8.2, adjusted for the look's fonts and cell padding (D-53): Date,
+    // Departs and All departures wider, From and To narrower.
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::date)), 124);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::departs)), 64);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::from)), 160);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::km_from_start)), 70);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::to)), 190);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::to)), 180);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::km_from_dest)), 70);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::total)), 92);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::per_person)), 84);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::fare_local)), 110);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::all_departures)), 150);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::all_departures)), 170);
+    // The cells use the 9 pt data font, the headers the semibold UI font (D-53).
+    EXPECT_EQ(table.font(), app::style::data_font());
+    EXPECT_EQ(table.horizontalHeader()->font(), app::style::bold_form_font());
+    EXPECT_FALSE(table.showGrid()) << "rows are separated by the delegate's line";
 
     // Read-only, full-row single selection, no row headers, no border, fixed columns order.
     EXPECT_EQ(table.editTriggers(), QAbstractItemView::NoEditTriggers);
@@ -107,11 +127,15 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     EXPECT_EQ(FlightTableModel::alignment(FlightColumn::notes), Qt::AlignLeft | Qt::AlignVCenter);
     f.grid.set_results(fss01(), "EUR", "");
     const QModelIndex total = f.grid.model()->index(0, col(FlightColumn::total));
-    EXPECT_TRUE(total.data(Qt::FontRole).value<QFont>().bold());
+    // Semibold: the semibold family (a weight of 600 on the Text family gives its Bold), at the
+    // view's size.
+    EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().families(), app::style::semibold_face().families());
+    EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().resolveMask(), QFont::FamiliesResolved);
     EXPECT_FALSE(f.grid.model()->index(0, col(FlightColumn::per_person)).data(Qt::FontRole).isValid());
     EXPECT_EQ(total.data(Qt::TextAlignmentRole).value<Qt::Alignment>(), Qt::AlignRight | Qt::AlignVCenter);
     EXPECT_EQ(f.grid.model()->flags(total), Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemNeverHasChildren);
-    EXPECT_EQ(table.rowHeight(0), table.fontMetrics().height() + 9);
+    EXPECT_EQ(table.rowHeight(0), table.fontMetrics().height() + 12) << "D-53: font height + 12 (WinForms + 9)";
+    EXPECT_EQ(table.row_height(), table.rowHeight(0));
 }
 
 TEST(FlightGridWidget, Headers_follow_the_currency_and_km_from_dest_hides_for_anywhere)
@@ -194,7 +218,7 @@ TEST(FlightGridWidget, UI_5_User_resized_widths_survive_rebuilds)
     f.grid.clear("EUR", false, "");
     f.grid.set_results(fss01(), "GBP", "");
     EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::from)), 250);
-    EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::date)), 120);
+    EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::date)), 124);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +321,10 @@ TEST(FlightGridWidget, Cheapest_rows_are_green_including_ties)
         return f.grid.model()->index(row, col(FlightColumn::from)).data(Qt::BackgroundRole);
     };
     ASSERT_TRUE(background(0).isValid());
-    EXPECT_EQ(background(0).value<QBrush>().color(), QColor(220, 245, 220));
+    // 01 §8.3's light green became the theme's cheapest tint (D-53); text stays readable on it
+    // (Look.Token_pairs_meet_WCAG_AA).
+    EXPECT_EQ(background(0).value<QBrush>().color(), app::style::theme().cheapest);
+    EXPECT_EQ(app::grid_colors::cheapest_back(), app::style::theme().cheapest);
     for (int row = 1; row < 12; ++row) {
         EXPECT_FALSE(background(row).isValid()) << row;
     }
@@ -313,7 +340,7 @@ TEST(FlightGridWidget, Cheapest_rows_are_green_including_ties)
     EXPECT_EQ(f.grid.model()->fare_at(1), b);
 }
 
-TEST(FlightGridWidget, Selected_rows_use_the_system_highlight_and_the_cheapest_the_dark_green)
+TEST(FlightGridWidget, Selected_rows_use_the_selection_tint_and_the_cheapest_a_deeper_green)
 {
     Fixture f;
     f.grid.set_results(fss01(), "EUR", "");
@@ -326,14 +353,20 @@ TEST(FlightGridWidget, Selected_rows_use_the_system_highlight_and_the_cheapest_t
         delegate.initStyleOption(&option, f.grid.model()->index(row, col(FlightColumn::date)));
         return option;
     };
+    // Every selection is the theme's soft tint with the normal text colour; a selected
+    // cheapest row a deeper green (01 §8.3's dark green / SystemColors.Highlight, D-53).
+    const app::style::Theme& theme = app::style::theme();
+    EXPECT_EQ(app::grid_colors::highlight(), theme.selection);
+    EXPECT_EQ(app::grid_colors::highlight_text(), theme.selection_text);
+    EXPECT_EQ(app::grid_colors::cheapest_selection_back(), theme.cheapest_selection);
     const QStyleOptionViewItem cheapest = option_for(0, true);
     EXPECT_FALSE(cheapest.state.testFlag(QStyle::State_Selected));
-    EXPECT_EQ(cheapest.backgroundBrush.color(), QColor(40, 140, 70));
-    EXPECT_EQ(cheapest.palette.color(QPalette::Text), app::grid_colors::highlight_text());
-    EXPECT_EQ(option_for(0, false).backgroundBrush.color(), QColor(220, 245, 220));
+    EXPECT_EQ(cheapest.backgroundBrush.color(), theme.cheapest_selection);
+    EXPECT_EQ(cheapest.palette.color(QPalette::Text), theme.selection_text);
+    EXPECT_EQ(option_for(0, false).backgroundBrush.color(), theme.cheapest);
     EXPECT_EQ(f.grid.model()->index(0, 2).data(app::GridRowDelegate::SelectionBackgroundRole).value<QBrush>().color(),
-              QColor(40, 140, 70));
-    const QStyleOptionViewItem other = option_for(1, true);  // the system highlight applies
+              theme.cheapest_selection);
+    const QStyleOptionViewItem other = option_for(1, true);  // the selection tint applies
     EXPECT_FALSE(other.state.testFlag(QStyle::State_Selected));
     EXPECT_EQ(other.backgroundBrush.color(), app::grid_colors::highlight());
     EXPECT_EQ(other.palette.color(QPalette::Text), app::grid_colors::highlight_text());
@@ -350,6 +383,107 @@ TEST(FlightGridWidget, Selected_rows_use_the_system_highlight_and_the_cheapest_t
     hovered.state.setFlag(QStyle::State_MouseOver, true);
     delegate.initStyleOption(&hovered, f.grid.model()->index(1, col(FlightColumn::date)));
     EXPECT_FALSE(hovered.state.testFlag(QStyle::State_MouseOver));
+}
+
+TEST(FlightGridWidget, Cheapest_rows_differ_from_the_others_and_from_the_selection)
+{
+    // What the tint means (01 §8.3), whatever the tokens are: a cheapest row's background is
+    // not a normal row's, and selecting it shows a third colour, not the normal selection.
+    Fixture f;
+    f.grid.set_results(fss01(), "EUR", "");
+    const app::GridRowDelegate delegate;
+    const auto background = [&](int row, bool selected) {
+        QStyleOptionViewItem option;
+        option.initFrom(f.grid.table()->viewport());
+        option.state.setFlag(QStyle::State_Selected, selected);
+        delegate.initStyleOption(&option, f.grid.model()->index(row, col(FlightColumn::from)));
+        return option.backgroundBrush.style() == Qt::NoBrush ? f.grid.table()->palette().color(QPalette::Base)
+                                                             : option.backgroundBrush.color();
+    };
+    ASSERT_EQ(f.grid.model()->index(0, 0).data(FlightTableModel::RowToneRole).toInt(),
+              static_cast<int>(ui::RowTone::cheapest));
+    ASSERT_NE(f.grid.model()->index(1, 0).data(FlightTableModel::RowToneRole).toInt(),
+              static_cast<int>(ui::RowTone::cheapest));
+    EXPECT_NE(background(0, false), background(1, false)) << "cheapest vs a normal row";
+    EXPECT_NE(background(0, true), background(1, true)) << "selected cheapest vs the normal selection";
+    EXPECT_NE(background(0, true), background(0, false)) << "a selected cheapest row vs an unselected one";
+    EXPECT_NE(background(1, true), background(1, false)) << "the selection shows";
+}
+
+TEST(FlightGridWidget, Row_separators_and_the_row_bar_show_selection_and_keyboard_focus)
+{
+    // D-53: no cell grid and no per-cell focus frame. A 1 px separator under every row; a 3 px
+    // bar at the left of the selected row: the accent while the grid has the keyboard focus,
+    // the muted text colour without it; the accent bar also on the current row of a focused
+    // grid that is not selected (Ctrl+Space, Ctrl+click); a ring round a focused grid without
+    // a current row.
+    QWidget window;
+    auto* grid = new app::FlightGrid(Locale::en_us(), true, &window);
+    auto* other = new QLineEdit(&window);  // takes the focus away
+    grid->setGeometry(0, 0, 900, 420);
+    other->setGeometry(0, 430, 100, 26);
+    window.resize(900, 460);
+    window.show();
+    app::GridTableView* table = grid->table();
+    const app::style::Theme& theme = app::style::theme();
+    const auto grab = [table] {
+        QCoreApplication::processEvents();
+        return table->viewport()->grab().toImage();
+    };
+
+    table->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    if (!table->hasFocus()) {
+        GTEST_SKIP() << "this platform gives no widget the focus";
+    }
+    QImage image = grab();
+    EXPECT_EQ(image.pixelColor(1, image.height() / 2), theme.accent_line) << "the ring round the empty grid";
+
+    grid->set_results(fss01(), "EUR", "");
+    table->selectRow(1);  // row 0 is the cheapest
+    ASSERT_GT(table->rowViewportPosition(3), 0);
+    const auto middle = [table](int row) { return table->rowViewportPosition(row) + table->rowHeight(row) / 2; };
+    image = grab();
+    for (int x = 0; x < app::ModernStyle::kSelectionBarWidth; ++x) {
+        EXPECT_EQ(image.pixelColor(x, middle(1)), theme.accent_line) << "focused and selected, x " << x;
+    }
+    EXPECT_NE(image.pixelColor(3, middle(1)), theme.accent_line) << "3 px wide";
+    EXPECT_NE(image.pixelColor(1, middle(2)), theme.accent_line) << "only on that row";
+    EXPECT_NE(image.pixelColor(1, image.height() - 3), theme.accent_line) << "no ring with a current row";
+    for (int row = 0; row < 3; ++row) {
+        const int bottom = table->rowViewportPosition(row) + table->rowHeight(row) - 1;
+        EXPECT_EQ(image.pixelColor(image.width() / 2, bottom), theme.row_separator) << "under row " << row;
+    }
+    const int above_separator = table->rowViewportPosition(2) + table->rowHeight(2) - 2;
+    EXPECT_EQ(image.pixelColor(4, above_separator), theme.surface) << "1 px";
+
+    other->setFocus(Qt::OtherFocusReason);
+    ASSERT_FALSE(table->hasFocus());
+    image = grab();
+    for (int x = 0; x < app::ModernStyle::kSelectionBarWidth; ++x) {
+        EXPECT_EQ(image.pixelColor(x, middle(1)), theme.text_muted) << "the selected row without focus, x " << x;
+    }
+
+    // The current row loses its selection while the grid keeps the focus (Ctrl+Space in
+    // single selection does that): the bar still shows where the keyboard is.
+    table->setFocus(Qt::TabFocusReason);
+    table->selectionModel()->clearSelection();
+    ASSERT_EQ(table->currentIndex().row(), 1);
+    ASSERT_FALSE(table->selectionModel()->isRowSelected(1));
+    image = grab();
+    for (int x = 0; x < app::ModernStyle::kSelectionBarWidth; ++x) {
+        EXPECT_EQ(image.pixelColor(x, middle(1)), theme.accent_line) << "the focused current row, x " << x;
+    }
+    // Moving the current row moves the bar, also when the current cell is not in the first column.
+    table->setCurrentIndex(table->model()->index(2, 5));
+    table->selectionModel()->clearSelection();
+    image = grab();
+    EXPECT_EQ(image.pixelColor(1, middle(2)), theme.accent_line);
+    EXPECT_NE(image.pixelColor(1, middle(1)), theme.accent_line) << "gone from the previous row";
+
+    other->setFocus(Qt::OtherFocusReason);
+    image = grab();
+    EXPECT_EQ(image.pixelColor(1, middle(2)), theme.surface) << "no focus, no selection: no bar";
 }
 
 TEST(FlightGridWidget, Truncated_cells_qualify_for_a_tooltip)

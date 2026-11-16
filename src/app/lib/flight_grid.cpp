@@ -1,7 +1,9 @@
 #include "flight_grid.hpp"
 
+#include "elided_label.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
+#include "modern_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
@@ -32,11 +34,11 @@ struct ColumnWidth {
     int width;
 };
 constexpr std::array kColumnWidths{
-    ColumnWidth{FlightColumn::date, 120},          ColumnWidth{FlightColumn::departs, 58},
-    ColumnWidth{FlightColumn::from, 170},          ColumnWidth{FlightColumn::km_from_start, 70},
-    ColumnWidth{FlightColumn::to, 190},            ColumnWidth{FlightColumn::km_from_dest, 70},
+    ColumnWidth{FlightColumn::date, 124},          ColumnWidth{FlightColumn::departs, 64},
+    ColumnWidth{FlightColumn::from, 160},          ColumnWidth{FlightColumn::km_from_start, 70},
+    ColumnWidth{FlightColumn::to, 180},            ColumnWidth{FlightColumn::km_from_dest, 70},
     ColumnWidth{FlightColumn::total, 92},          ColumnWidth{FlightColumn::per_person, 84},
-    ColumnWidth{FlightColumn::fare_local, 110},    ColumnWidth{FlightColumn::all_departures, 150},
+    ColumnWidth{FlightColumn::fare_local, 110},    ColumnWidth{FlightColumn::all_departures, 170},
     ColumnWidth{FlightColumn::notes, 260},
 };
 /// Notes fills the remaining width, min L(120).
@@ -77,6 +79,7 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     }
     view_->setCurrentIndex(0);
     view_->setFixedWidth(kViewComboWidth);
+    ModernStyle::use_styled_popup(*view_);
     summary_ = grid_bar::make_summary_label(this);
     QHBoxLayout* bar = grid_bar::make_row();
     grid_bar::add(bar, show, grid_bar::kLabelMargin);

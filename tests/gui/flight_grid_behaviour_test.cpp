@@ -5,6 +5,7 @@
 // (UI-12), the browser failure box, summary texts and the self-test
 // accessors. Side effects go to an ActionRecorder. en-US.
 
+#include "elided_label.hpp"
 #include "flight_grid_samples.hpp"
 #include "grid_test_support.hpp"
 

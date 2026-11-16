@@ -4,6 +4,7 @@
 #include "busy_panel.hpp"
 #include "controller.hpp"
 #include "crash_reporter.hpp"
+#include "elided_label.hpp"
 #include "flight_grid.hpp"
 #include "input_panel.hpp"
 #include "log_view.hpp"
@@ -308,6 +309,7 @@ void AutoTestRunner::record_search(std::string name, std::int64_t requests_befor
         .wizz_requests = window_.services().wizz->request_count() - requests_before,
         .duration_ms = duration_ms,
         .final_status = window_.busy_panel()->status_text(),
+        .final_status_cut = window_.busy_panel()->status_label()->is_elided(),
     });
 }
 

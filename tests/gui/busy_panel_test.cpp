@@ -1,14 +1,14 @@
-// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11, D-34):
-// texts, colours, enabled states, bar, spinner, timers, taskbar forwarding, Cancel/Esc
-// idempotence, the still idle bar and the font-driven layout of §10.1. Time comes from a
-// FixedClock.
+// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11, D-34) in
+// the look of D-53: texts, the theme's colours, enabled states, bar, spinner, timers,
+// taskbar forwarding, Cancel/Esc idempotence, the completely still idle bar and the
+// font-driven layout of §10.1. Time comes from a FixedClock.
 
 #include "busy_panel.hpp"
 #include "diagnostics_test_support.hpp"
 #include "elided_label.hpp"
 #include "mock_taskbar_list.hpp"
 #include "spinner_widget.hpp"
-#include "system_colours.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/core/clocks.hpp"
 #include "wizz/ui/strings.hpp"
@@ -20,11 +20,12 @@
 #include <QPainter>
 #include <QPalette>
 #include <QProgressBar>
+#include <QAbstractAnimation>
+#include <QImage>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QStyle>
 #include <QStyleFactory>
-#include <QStyleOptionProgressBar>
 #include <QTimer>
 
 #include <gtest/gtest.h>
@@ -38,10 +39,10 @@
 #include <string>
 #include <vector>
 
-#include <windows.h>
 
 namespace {
 
+namespace style = wizz::app::style;
 using namespace std::chrono_literals;
 using wizz::Duration;
 using wizz::FixedClock;
@@ -49,8 +50,7 @@ using wizz::Locale;
 using wizz::SearchProgress;
 using wizz::app::BusyPanel;
 using wizz::app::BusyPanelMetrics;
-using wizz::app::system_colour;
-using wizz::app::SystemColour;
+using wizz::app::PanelProgressBar;
 using wizz::test::is_state_call;
 using wizz::test::is_value_call;
 using wizz::test::MockTaskbarList;
@@ -159,34 +159,46 @@ TEST_F(BusyPanelTest, Timers_are_a_precise_40_ms_tick_and_a_4_s_one_shot)
     EXPECT_FALSE(reset->isActive());
 }
 
-TEST_F(BusyPanelTest, Fonts_and_colours_follow_01_10_1)
+TEST_F(BusyPanelTest, Fonts_and_colours_follow_the_theme)
 {
-    EXPECT_EQ(panel_->background_colour(), system_colour(SystemColour::control_light));
+    // 01 §10.1's ControlLight / ControlText / DarkOrange and Courier New became the look's
+    // tokens and fonts (D-53): a status bar on the surface colour, the elapsed time in
+    // Cascadia Mono 10 pt semibold, the wait note semibold in the warning colour.
+    const style::Theme& theme = style::theme();
+    EXPECT_EQ(panel_->background_colour(), theme.surface);
 
     const QFont elapsed = panel_->elapsed_label()->font();
-    EXPECT_EQ(elapsed.family(), QStringLiteral("Courier New"));
-    EXPECT_DOUBLE_EQ(elapsed.pointSizeF(), 9.5);
-    EXPECT_TRUE(elapsed.bold());
+    EXPECT_EQ(elapsed, BusyPanel::elapsed_font());
+    EXPECT_EQ(elapsed.families(), style::mono_font(10.0).families());
+    // Cascadia Mono, Consolas under WIZZ_FONTS=windows10 (a Windows 10 without Windows Terminal).
+    EXPECT_EQ(elapsed.families().front(), style::windows10_fonts() ? QStringLiteral("Consolas") : QStringLiteral("Cascadia Mono"));
+    EXPECT_DOUBLE_EQ(elapsed.pointSizeF(), 10.0);
+    EXPECT_EQ(elapsed.weight(), QFont::DemiBold);
 
     const QLabel* wait = panel_->wait_label();
-    EXPECT_TRUE(wait->font().bold());
-    EXPECT_EQ(wait->font().family(), panel_->font().family());
+    // The semibold family (a weight of 600 on the panel's family would give its Bold) at the
+    // panel's size.
+    EXPECT_EQ(wait->font().families(), style::semibold_face().families());
     EXPECT_DOUBLE_EQ(wait->font().pointSizeF(), panel_->font().pointSizeF());
-    EXPECT_EQ(wait->palette().color(wait->foregroundRole()), QColor(255, 140, 0));  // DarkOrange
+    EXPECT_EQ(wait->palette().color(wait->foregroundRole()), theme.warning);
 
-    EXPECT_EQ(status_colour(), system_colour(SystemColour::control_text));  // ControlText
+    EXPECT_EQ(status_colour(), theme.text);
+    EXPECT_EQ(panel_->status_colour(), theme.text);
     const QLabel* elapsed_label = panel_->elapsed_label();
-    EXPECT_EQ(elapsed_label->palette().color(elapsed_label->foregroundRole()), system_colour(SystemColour::control_text));
+    EXPECT_EQ(elapsed_label->palette().color(elapsed_label->foregroundRole()), theme.text_secondary);
 }
 
-TEST_F(BusyPanelTest, Background_is_painted_in_control_light)
+TEST_F(BusyPanelTest, Background_is_the_surface_under_a_top_border)
 {
     panel_->resize(500, panel_->height());
     const QImage image = panel_->grab().toImage();
-    const QColor control_light = system_colour(SystemColour::control_light);  // COLOR_3DLIGHT
-    EXPECT_EQ(image.pixelColor(1, 1), control_light);
-    EXPECT_EQ(image.pixelColor(image.width() - 2, image.height() - 2), control_light);
-    EXPECT_EQ(image.pixelColor(image.width() / 2, 2), control_light);  // above the bar (top padding)
+    const style::Theme& theme = style::theme();
+    EXPECT_EQ(image.pixelColor(1, 1), theme.surface);
+    EXPECT_EQ(image.pixelColor(image.width() - 2, image.height() - 2), theme.surface);
+    EXPECT_EQ(image.pixelColor(image.width() / 2, 2), theme.surface);  // above the bar (top padding)
+    for (const int x : {0, image.width() / 2, image.width() - 1}) {
+        EXPECT_EQ(image.pixelColor(x, 0), theme.border) << "the status bar's 1 px top edge at x " << x;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +211,7 @@ TEST_F(BusyPanelTest, Begin_starts_a_cancellable_marquee_busy_period)
 
     EXPECT_TRUE(panel_->is_busy());
     EXPECT_EQ(status(), "Loading Wizz Air route map…");
-    EXPECT_EQ(status_colour(), system_colour(SystemColour::control_text));
+    EXPECT_EQ(status_colour(), style::theme().text);
     EXPECT_TRUE(panel_->cancel_button()->isEnabled());
     EXPECT_EQ(panel_->progress_bar()->minimum(), 0);
     EXPECT_EQ(panel_->progress_bar()->maximum(), 0);  // marquee
@@ -331,8 +343,8 @@ TEST_F(BusyPanelTest, Successful_end_is_green_full_and_idle)
 
     EXPECT_FALSE(panel_->is_busy());
     EXPECT_EQ(status(), "Places found.");
-    EXPECT_EQ(status_colour(), QColor(0, 100, 0));
-    EXPECT_EQ(panel_->status_colour(), QColor(0, 100, 0));
+    EXPECT_EQ(status_colour(), style::theme().success);
+    EXPECT_EQ(panel_->status_colour(), style::theme().success);
     EXPECT_EQ(text_of(panel_->elapsed_label()), "0:05");  // truncated, no ETA
     EXPECT_EQ(text_of(panel_->wait_label()), "");
     EXPECT_FALSE(panel_->cancel_button()->isEnabled());
@@ -352,7 +364,8 @@ TEST_F(BusyPanelTest, Failed_end_is_red_keeps_the_bar_and_clears_the_taskbar_err
     panel_->end("Cancelled.", false);
 
     EXPECT_EQ(status(), "Cancelled.");
-    EXPECT_EQ(status_colour(), QColor(178, 34, 34));
+    EXPECT_EQ(status_colour(), style::theme().failure);
+    EXPECT_EQ(panel_->status_colour(), style::theme().failure);
     EXPECT_EQ(panel_->progress_bar()->value(), 150);  // (int)(0.15 × 1000): left where it was
     ASSERT_EQ(mock_.calls.size(), 3U);
     EXPECT_TRUE(is_state_call(mock_.calls[2], TBPF_ERROR));
@@ -364,55 +377,38 @@ TEST_F(BusyPanelTest, Failed_end_is_red_keeps_the_bar_and_clears_the_taskbar_err
 }
 
 // ---------------------------------------------------------------------------
-// The idle bar is still (D-34)
+// The idle bar is completely still (D-34)
 // ---------------------------------------------------------------------------
 
-/// Records every fill the bar asks its style to draw (CE_ProgressBarContents) with the
-/// clip it is drawn under, then lets the real style draw it. The fill is the element the
-/// "windowsvista" style animates: drawing a marquee or a part-filled fill
-/// (minimum < progress < maximum) starts its moving glow, drawing any other fill stops it.
-/// Whether a started glow then visibly moves depends on Windows' client-area animation
-/// setting; what the bar asks for does not, so this records D-34 on any machine.
-class FillRecorder final : public QProxyStyle {
+/// Counts every progress-bar element a widget asks its style to draw. Styles animate
+/// what they draw (the "windowsvista" glow over a part-filled bar, Fusion's moving
+/// stripes over a busy indicator); the bar of D-34 paints itself and asks for none.
+class ProgressElementRecorder final : public QProxyStyle {
 public:
-    struct Fill {
-        int minimum = 0;
-        int maximum = 0;
-        int progress = 0;
-        QRect rect;                 ///< the contents rectangle
-        std::optional<QRect> clip;  ///< the painter's clip, when one is set
-
-        /// The state the style animates (QWindowsVistaStyle: a marquee, or
-        /// 0 < progress < maximum on a bar whose minimum is 0).
-        [[nodiscard]] bool animated() const noexcept
-        {
-            return (minimum == 0 && maximum == 0) || (progress > minimum && progress < maximum);
-        }
-    };
-
     using QProxyStyle::QProxyStyle;
 
     void drawControl(ControlElement element, const QStyleOption* option, QPainter* painter,
                      const QWidget* widget) const override
     {
-        if (element == CE_ProgressBarContents) {
-            if (const auto* bar = qstyleoption_cast<const QStyleOptionProgressBar*>(option)) {
-                fills.push_back(Fill{.minimum = bar->minimum,
-                                     .maximum = bar->maximum,
-                                     .progress = bar->progress,
-                                     .rect = bar->rect,
-                                     .clip = painter->hasClipping()
-                                                 ? std::optional<QRect>{painter->clipBoundingRect().toAlignedRect()}
-                                                 : std::nullopt});
-            }
+        if (element == CE_ProgressBar || element == CE_ProgressBarGroove || element == CE_ProgressBarContents ||
+            element == CE_ProgressBarLabel) {
+            ++requests;
         }
         QProxyStyle::drawControl(element, option, painter, widget);
     }
+    void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
+                       const QWidget* widget) const override
+    {
+        if (element == PE_IndicatorProgressChunk) {
+            ++requests;
+        }
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
+    }
 
-    mutable std::vector<Fill> fills;
+    mutable int requests = 0;
 };
 
-/// Gives the bar back its default style when a test ends, also after a failed ASSERT.
+/// Gives the bar back the application's style when a test ends, also after a failed ASSERT.
 class StyleOverride {
 public:
     StyleOverride(QWidget& widget, QStyle& style) : widget_(widget) { widget_.setStyle(&style); }
@@ -424,176 +420,214 @@ private:
     QWidget& widget_;
 };
 
-/// The app's style ("windowsvista") under the recorder, or the default style without it.
-[[nodiscard]] std::unique_ptr<FillRecorder> fill_recorder()
-{
-    return std::make_unique<FillRecorder>(QStyleFactory::create(QStringLiteral("windowsvista")));  // takes ownership
-}
-
-/// Paints the bar once and returns the fills it asked for.
-[[nodiscard]] std::vector<FillRecorder::Fill> paint(QProgressBar& bar, FillRecorder& recorder)
-{
-    recorder.fills.clear();
-    static_cast<void>(bar.grab());  // runs paintEvent, shown or not
-    return recorder.fills;
-}
-
-TEST_F(BusyPanelTest, An_idle_bar_never_asks_the_style_for_a_fill_it_animates)
-{
-    // D-34: while busy the bar draws its real value (the style's glow is a sign of life);
-    // while idle — after End the bar rests at 1000 of 1001, or part-filled after a failure —
-    // it draws a full fill, for which the style stops its glow, clipped to the real value.
-    QProgressBar* bar = panel_->progress_bar();
-    const std::unique_ptr<FillRecorder> recorder = fill_recorder();
-    const StyleOverride style{*bar, *recorder};
-    panel_->resize(800, panel_->height());
-    panel_->show();
-    panel_->layout()->activate();
-
-    struct Case {
-        const char* name;
-        bool success;
-        int expected_value;
-    };
-    for (const Case& c : {Case{"failed end", false, 150}, Case{"successful end", true, 1000}}) {
-        SCOPED_TRACE(c.name);
-        panel_->begin("Outbound: starting…");
-        panel_->report(progress("Fetching fares", "x", 4, 8));  // shown 0.15 → 150
-        ASSERT_EQ(bar->value(), 150);
-        const std::vector<FillRecorder::Fill> busy = paint(*bar, *recorder);
-        ASSERT_FALSE(busy.empty());
-        for (const FillRecorder::Fill& fill : busy) {
-            EXPECT_EQ(fill.progress, 150) << "busy: the real value is drawn";
-            EXPECT_TRUE(fill.animated()) << "busy: the style may run its glow";
-            EXPECT_FALSE(fill.clip.has_value());
-        }
-
-        panel_->end(c.success ? "Done." : "Cancelled.", c.success);
-        ASSERT_EQ(bar->value(), c.expected_value);
-        ASSERT_GT(bar->value(), bar->minimum());
-        ASSERT_LT(bar->value(), bar->maximum()) << "a part-filled bar: the case the style would animate";
-        const std::vector<FillRecorder::Fill> idle = paint(*bar, *recorder);
-        ASSERT_FALSE(idle.empty());
-        for (const FillRecorder::Fill& fill : idle) {
-            EXPECT_FALSE(fill.animated()) << "idle: drawn as " << fill.progress << " of " << fill.minimum << ".."
-                                          << fill.maximum;
-            EXPECT_EQ(fill.progress, fill.maximum) << "idle: a full fill";
-            ASSERT_TRUE(fill.clip.has_value()) << "idle: clipped to the real value";
-            const double done = static_cast<double>(c.expected_value - bar->minimum()) / (bar->maximum() - bar->minimum());
-            EXPECT_EQ(fill.clip->left(), fill.rect.left()) << "left to right";
-            EXPECT_EQ(fill.clip->top(), fill.rect.top());
-            EXPECT_EQ(fill.clip->height(), fill.rect.height());
-            EXPECT_NEAR(fill.clip->width(), fill.rect.width() * done, 1.0) << "the fill width is unchanged";
-        }
-    }
-
-    // Idle and empty (an End before any report): nothing to fill, nothing animated.
-    panel_->begin("Loading Wizz Air route map…");
-    panel_->end("Failed.", false);
-    ASSERT_EQ(bar->value(), bar->minimum());
-    for (const FillRecorder::Fill& fill : paint(*bar, *recorder)) {
-        EXPECT_FALSE(fill.animated());
-        EXPECT_EQ(fill.progress, fill.minimum);
-    }
-
-    // Right to left the done part starts at the right edge.
-    panel_->begin("Return: starting…");
-    panel_->report(progress("Fetching fares", "x", 4, 8));
-    panel_->end("Cancelled.", false);
-    bar->setLayoutDirection(Qt::RightToLeft);
-    for (const FillRecorder::Fill& fill : paint(*bar, *recorder)) {
-        EXPECT_FALSE(fill.animated());
-        ASSERT_TRUE(fill.clip.has_value());
-        EXPECT_EQ(fill.clip->right(), fill.rect.right());
-        EXPECT_NEAR(fill.clip->width(), fill.rect.width() * 150.0 / 1001.0, 1.0);
-    }
-    bar->setLayoutDirection(Qt::LeftToRight);
-}
-
-/// Counts the native style's animation frames sent to a widget.
-class StyleAnimationCounter final : public QObject {
+/// Counts the paints and the style's animation frames that reach a widget.
+class RepaintCounter final : public QObject {
 public:
-    explicit StyleAnimationCounter(QObject* target) { target->installEventFilter(this); }
-    int frames = 0;
+    explicit RepaintCounter(QWidget* target) { target->installEventFilter(this); }
+    int paints = 0;
+    int animation_frames = 0;
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override
     {
-        if (event->type() == QEvent::StyleAnimationUpdate) {
-            ++frames;
+        if (event->type() == QEvent::Paint) {
+            ++paints;
+        } else if (event->type() == QEvent::StyleAnimationUpdate) {
+            ++animation_frames;
         }
         return QObject::eventFilter(watched, event);
     }
 };
 
-/// Windows' "Animate controls and elements inside windows" (SPI_GETCLIENTAREAANIMATION),
-/// read only. The "windowsvista" style animates progress bars only when it is on; Windows
-/// Server images, such as the CI runners', turn it off.
-[[nodiscard]] bool client_area_animation_on()
+/// A reference clock in event-loop terms: a precise 16 ms timer (an animation frame). A
+/// window of kStillTicks of its ticks gives anything that animates as many chances to
+/// repaint, however slow the machine is: a busy runner only makes the window longer.
+class ReferenceTicks {
+public:
+    static constexpr int kStillTicks = 25;
+
+    ReferenceTicks()
+    {
+        timer_.setTimerType(Qt::PreciseTimer);
+        timer_.setInterval(16ms);
+        QObject::connect(&timer_, &QTimer::timeout, [this] { ++ticks_; });
+        timer_.start();
+    }
+    /// Lets kStillTicks ticks pass.
+    [[nodiscard]] bool wait_window()
+    {
+        const int end = ticks_ + kStillTicks;
+        return pump_until([this, end] { return ticks_ >= end; });
+    }
+
+private:
+    QTimer timer_;
+    int ticks_ = 0;
+};
+
+/// The bar repainted now, with every update asked for before delivered.
+[[nodiscard]] QImage settled_paint(QWidget& bar, const RepaintCounter& counter)
 {
-    BOOL on = FALSE;
-    return SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0) != FALSE && on != FALSE;
+    const int painted = counter.paints;
+    bar.update();
+    EXPECT_TRUE(pump_until([&] { return counter.paints > painted; })) << "the bar was never painted";
+    return bar.grab().toImage();
 }
 
-TEST_F(BusyPanelTest, An_idle_bar_is_still_after_a_search_ends)
+/// Whether `bar` has a running timer or animation of its own.
+[[nodiscard]] bool has_running_animation(const QWidget& bar)
 {
-    // D-34 as the user sees it, where the style really animates: its glow runs while busy,
-    // and once the panel is idle no animation frame reaches the bar. The test above checks
-    // the cause on any machine; this one needs Windows to animate client areas.
-    if (!client_area_animation_on()) {
-        GTEST_SKIP() << "Windows' client-area animations are off (SPI_GETCLIENTAREAANIMATION, as on Windows "
-                        "Server): the windowsvista style does not animate a progress bar even while busy. "
-                        "An_idle_bar_never_asks_the_style_for_a_fill_it_animates covers D-34 without them.";
+    for (const QTimer* timer : bar.findChildren<QTimer*>()) {
+        if (timer->isActive()) {
+            return true;
+        }
     }
-    if (!QStyleFactory::keys().contains(QStringLiteral("windowsvista"), Qt::CaseInsensitive)) {
-        GTEST_SKIP() << "windowsvista style not available";
+    for (const QAbstractAnimation* animation : bar.findChildren<QAbstractAnimation*>()) {
+        if (animation->state() == QAbstractAnimation::Running) {
+            return true;
+        }
     }
+    return false;
+}
+
+TEST_F(BusyPanelTest, An_idle_bar_is_completely_still_D_34)
+{
+    // D-34 (owner's requirement): when nothing is being processed the bar does not move.
+    // While busy the bar is repainted (the marquee advances with the 40 ms timer: the
+    // detector sees paints on this platform); once idle — full after a success, part-filled
+    // after a failure, empty after an early end — nothing repaints it, no timer or
+    // animation of its own runs, the style draws no part of it, and two paints a window
+    // apart are pixel-identical.
     QProgressBar* bar = panel_->progress_bar();
-    const std::unique_ptr<FillRecorder> recorder = fill_recorder();
-    const StyleOverride style{*bar, *recorder};
-    panel_->resize(800, 60);
+    ProgressElementRecorder recorder{QStyleFactory::create(QStringLiteral("Fusion"))};  // takes ownership
+    const StyleOverride style{*bar, recorder};
+    panel_->resize(800, panel_->height());
     panel_->show();
-    StyleAnimationCounter counter{bar};
+    panel_->layout()->activate();
+    RepaintCounter counter{bar};
+    ReferenceTicks reference;
 
-    // The frame interval of a running glow, in event-loop terms: a reference timer at
-    // the animation clock's 16 ms. A window of kWindowTicks of its ticks gives a running
-    // animation as many chances to deliver a frame, however slow the machine is.
-    constexpr int kWindowTicks = 25;
-    QTimer reference;
-    reference.setTimerType(Qt::PreciseTimer);
-    reference.setInterval(16ms);
-    int ticks = 0;
-    QObject::connect(&reference, &QTimer::timeout, [&ticks] { ++ticks; });
-    reference.start();
-
-    for (const bool success : {true, false}) {
-        SCOPED_TRACE(success ? "successful end" : "failed end");
-        // While busy and part-filled the glow runs (the detector works here).
+    struct Case {
+        const char* name;
+        bool report;  ///< a report moves the bar to 150 of 1001 first
+        bool success;
+        int expected_value;
+    };
+    for (const Case& c : {Case{"failed end", true, false, 150}, Case{"successful end", true, true, 1000},
+                          Case{"early failed end", false, false, 0}}) {
+        SCOPED_TRACE(c.name);
         panel_->begin("Outbound: starting…");
-        panel_->report(progress("Fetching fares", "x", 4, 8));
-        counter.frames = 0;
-        bar->update();
-        if (!pump_until([&counter] { return counter.frames > 0; }, 10s)) {
-            GTEST_SKIP() << "the windowsvista style sent no animation frame in 10 s although the bar is busy and "
-                            "part-filled (no visual styles?): nothing to observe here";
+        ASSERT_EQ(bar->maximum(), 0) << "busy: a marquee";
+        counter.paints = 0;
+        ASSERT_TRUE(pump_until([&counter] { return counter.paints >= 3; })) << "the busy marquee is repainted";
+        if (c.report) {
+            panel_->report(progress("Fetching fares", "x", 4, 8));  // shown 0.15 → 150
+            ASSERT_EQ(bar->value(), 150);
         }
 
-        // Once the idle bar has been painted — that paint stops the glow — no frame may come.
-        panel_->end(success ? "Done." : "Cancelled.", success);
-        const std::size_t painted = recorder->fills.size();
-        bar->update();
-        ASSERT_TRUE(pump_until([&] { return recorder->fills.size() > painted; })) << "the idle bar was never painted";
-        counter.frames = 0;
-        const int window_end = ticks + kWindowTicks;
-        ASSERT_TRUE(pump_until([&] { return ticks >= window_end; }));
-        EXPECT_EQ(counter.frames, 0) << "the style still animates the idle bar";
-        if (success) {
-            EXPECT_EQ(bar->value(), 1000);  // full, as End sets it
-        } else {
-            EXPECT_GT(bar->value(), 0);  // failure leaves the bar part-filled where it was
-            EXPECT_LT(bar->value(), 1000);
+        panel_->end(c.success ? "Done." : "Cancelled.", c.success);
+        ASSERT_EQ(bar->value(), c.expected_value);
+        ASSERT_EQ(bar->maximum(), BusyPanel::kBarRangeMax) << "End shows the continuous bar";
+        const QImage first = settled_paint(*bar, counter);
+
+        counter.paints = 0;
+        counter.animation_frames = 0;
+        ASSERT_TRUE(reference.wait_window());
+        EXPECT_EQ(counter.paints, 0) << "something repaints the idle bar";
+        EXPECT_EQ(counter.animation_frames, 0);
+        EXPECT_FALSE(panel_->animation_timer()->isActive());
+        EXPECT_FALSE(has_running_animation(*bar));
+        EXPECT_EQ(bar->grab().toImage(), first) << "two idle paints differ: the idle bar moves";
+    }
+    EXPECT_EQ(recorder.requests, 0) << "the bar asked its style to draw it (styles animate what they draw)";
+}
+
+TEST(PanelProgressBarTest, A_marquee_moves_only_while_live)
+{
+    // The bar itself: only a live marquee changes from one paint to the next (the
+    // comparison above sees such a change); an idle marquee is the empty track, still.
+    PanelProgressBar bar;
+    bar.resize(400, 18);
+    bar.setRange(0, 0);
+    ReferenceTicks reference;
+
+    bar.set_live(true);
+    const QImage live_first = bar.grab().toImage();
+    ASSERT_TRUE(reference.wait_window());
+    EXPECT_NE(bar.grab().toImage(), live_first) << "a live marquee advances";
+
+    bar.set_live(false);
+    const QImage idle_first = bar.grab().toImage();
+    EXPECT_FALSE(has_running_animation(bar));
+    ASSERT_TRUE(reference.wait_window());
+    EXPECT_EQ(bar.grab().toImage(), idle_first);
+    const QColor track = style::theme().track;
+    for (const int x : {4, 200, 395}) {
+        EXPECT_EQ(idle_first.pixelColor(x, 9), track) << "an idle marquee is the empty track, x " << x;
+    }
+}
+
+/// The colour of the bar's middle line at `x`.
+[[nodiscard]] QColor bar_pixel(const QImage& image, int x)
+{
+    return image.pixelColor(x, image.height() / 2);
+}
+
+/// The fill's width on the middle line, from the left (or the right) edge: up to the last
+/// pixel of exactly `fill` (the rounded ends are blended), 0 when there is none.
+[[nodiscard]] int fill_width(const QImage& image, const QColor& fill, bool from_right = false)
+{
+    constexpr int kRoundedEnd = 4;
+    int last = -1;
+    for (int i = 0; i < image.width(); ++i) {
+        const int x = from_right ? image.width() - 1 - i : i;
+        if (bar_pixel(image, x) == fill) {
+            last = i;
+        } else if (i > kRoundedEnd && last < i - kRoundedEnd) {
+            break;
         }
     }
+    return last + 1;
+}
+
+TEST_F(BusyPanelTest, The_bar_shows_its_value_in_the_accent_then_the_outcome_colour)
+{
+    // The bar paints a 6 px rounded track and a fill of the value's width: the accent line while
+    // busy (the brand magenta in light, the lighter accent line in dark, 3:1 on the track in
+    // both), the outcome colour softened halfway towards the track at rest (D-34, D-53).
+    QProgressBar* bar = panel_->progress_bar();
+    panel_->resize(800, panel_->height());
+    panel_->show();
+    panel_->layout()->activate();
+    const style::Theme& theme = style::theme();
+    const auto softened = [&theme](const QColor& outcome) {
+        return QColor((outcome.red() + theme.track.red()) / 2, (outcome.green() + theme.track.green()) / 2,
+                      (outcome.blue() + theme.track.blue()) / 2);
+    };
+    const auto expected_width = [bar](int value) { return bar->width() * value / BusyPanel::kBarRangeMax; };
+
+    panel_->begin("Outbound: starting…");
+    panel_->report(progress("Fetching fares", "x", 4, 8));  // 150 of 1001
+    QImage image = bar->grab().toImage();
+    EXPECT_NEAR(fill_width(image, theme.accent_line), expected_width(150), 3) << "busy: the accent";
+    EXPECT_EQ(style::light_theme().accent_line, style::light_theme().accent) << "the brand magenta in light";
+    EXPECT_EQ(bar_pixel(image, bar->width() - 4), theme.track);
+    EXPECT_NE(image.pixelColor(bar->width() / 2, 1), theme.track) << "a 6 px track, not the whole height";
+
+    panel_->end("Cancelled.", false);
+    image = bar->grab().toImage();
+    EXPECT_NEAR(fill_width(image, softened(theme.failure)), expected_width(150), 3) << "failed: left where it was";
+    EXPECT_EQ(bar_pixel(image, bar->width() - 4), theme.track);
+
+    bar->setLayoutDirection(Qt::RightToLeft);
+    image = bar->grab().toImage();
+    EXPECT_NEAR(fill_width(image, softened(theme.failure), true), expected_width(150), 3) << "right to left";
+    bar->setLayoutDirection(Qt::LeftToRight);
+
+    panel_->begin("Return: starting…");
+    panel_->end("Done.");
+    image = bar->grab().toImage();
+    EXPECT_NEAR(fill_width(image, softened(theme.success)), expected_width(1000), 3) << "done: full";
 }
 
 TEST_F(BusyPanelTest, The_error_reset_keeps_a_new_busy_period_untouched)
@@ -614,15 +648,15 @@ TEST_F(BusyPanelTest, End_when_not_busy_still_recolours_and_retexts)
     panel_->end("Search not started.", false);
     panel_->end("Search not started (cancelled).", true);
     EXPECT_EQ(status(), "Search not started (cancelled).");
-    EXPECT_EQ(status_colour(), QColor(0, 100, 0));
+    EXPECT_EQ(status_colour(), style::theme().success);
 }
 
-TEST_F(BusyPanelTest, Beginning_again_restores_control_text)
+TEST_F(BusyPanelTest, Beginning_again_restores_the_text_colour)
 {
     panel_->begin("One");
     panel_->end("Failed.", false);
     panel_->begin("Two");
-    EXPECT_EQ(status_colour(), system_colour(SystemColour::control_text));
+    EXPECT_EQ(status_colour(), style::theme().text);
 }
 
 TEST_F(BusyPanelTest, End_if_still_busy_is_the_unexpected_error_safety_net)
@@ -634,7 +668,7 @@ TEST_F(BusyPanelTest, End_if_still_busy_is_the_unexpected_error_safety_net)
     panel_->end_if_still_busy();
     EXPECT_FALSE(panel_->is_busy());
     EXPECT_EQ(status(), "Stopped by an unexpected error — details are in %LOCALAPPDATA%\\WizzairHelper\\errors.log.");
-    EXPECT_EQ(status_colour(), QColor(178, 34, 34));
+    EXPECT_EQ(status_colour(), style::theme().failure);
 
     panel_->end("Done.");
     panel_->end_if_still_busy();
@@ -766,10 +800,12 @@ TEST_F(BusyPanelTest, A_new_cancellable_begin_rearms_cancel)
 // Metrics and layout (01 §10.1, UI-6)
 // ---------------------------------------------------------------------------
 
-TEST_F(BusyPanelTest, Metrics_follow_01_10_1)
+TEST_F(BusyPanelTest, Metrics_follow_01_10_1_with_the_status_bar_padding)
 {
+    // The rows of 01 §10.1, measured from the fonts; the padding is the look's 14 px at
+    // the sides (D-53, 01 had 8) so the panel lines up with the cards above it.
     const BusyPanelMetrics& metrics = panel_->metrics();
-    EXPECT_EQ(metrics.padding, QMargins(8, 5, 8, 5));
+    EXPECT_EQ(metrics.padding, QMargins(14, 5, 14, 5));
     EXPECT_EQ(metrics.spinner_column, 36);
     EXPECT_GE(metrics.bar_row, 22);
     EXPECT_GT(metrics.line, 0);
@@ -818,8 +854,8 @@ TEST_F(BusyPanelTest, Metrics_grow_with_the_form_font)
     EXPECT_EQ(panel_->height(), after.height);
     EXPECT_EQ(after.bar_row, before.bar_row);  // the elapsed font is fixed
     EXPECT_DOUBLE_EQ(panel_->wait_label()->font().pointSizeF(), 24.0);
-    EXPECT_TRUE(panel_->wait_label()->font().bold());
-    EXPECT_DOUBLE_EQ(panel_->elapsed_label()->font().pointSizeF(), 9.5);
+    EXPECT_EQ(panel_->wait_label()->font().families(), style::semibold_face().families());
+    EXPECT_DOUBLE_EQ(panel_->elapsed_label()->font().pointSizeF(), 10.0);
 }
 
 TEST(BusyPanelMetricsTest, Bar_row_grows_with_a_large_elapsed_font)
@@ -859,24 +895,28 @@ protected:
 
 TEST_F(BusyPanelLayoutTest, Cells_sit_in_the_4_by_2_grid_with_the_01_10_1_margins)
 {
+    // 01 §10.1's grid and cell margins; the side padding (14) and the bar's right margin
+    // (14) are the look's (D-53).
     const BusyPanelMetrics& m = panel_->metrics();
+    const int side = m.padding.left();
+    ASSERT_EQ(side, 14);
 
     const QRect spinner = in_panel(panel_->spinner());
-    EXPECT_EQ(spinner, QRect(8, 5, 36, m.bar_row + m.status_row));
+    EXPECT_EQ(spinner, QRect(side, 5, 36, m.bar_row + m.status_row));
     EXPECT_EQ(panel_->spinner()->contentsRect().width(), 30);  // Margin right 6
 
     const QRect bar = in_panel(panel_->progress_bar());
     const QRect status = in_panel(panel_->status_label());
-    EXPECT_EQ(bar.left(), 44);
+    EXPECT_EQ(bar.left(), side + 36);
     EXPECT_EQ(bar.top(), 5 + 2);
     EXPECT_EQ(bar.height(), m.bar_row - 4);
-    EXPECT_EQ(status.left(), 44);
+    EXPECT_EQ(status.left(), side + 36);
     EXPECT_EQ(status.top(), 5 + m.bar_row);
     EXPECT_EQ(status.height(), m.status_row);
-    EXPECT_EQ(bar.width(), status.width() - 8);  // the bar keeps 8 px to the elapsed column
+    EXPECT_EQ(bar.width(), status.width() - 14);  // the bar keeps 14 px to the elapsed column
 
     const QRect cancel = in_panel(panel_->cancel_button());
-    EXPECT_EQ(cancel.right() + 1, kWidth - 8 - 3);
+    EXPECT_EQ(cancel.right() + 1, kWidth - side - 3);
     EXPECT_NEAR(cancel.center().y(), 5 + (m.bar_row + m.status_row) / 2, 1);  // vertically centred
 
     const QRect elapsed = in_panel(panel_->elapsed_label());
@@ -916,6 +956,42 @@ TEST_F(BusyPanelLayoutTest, A_long_status_line_is_elided_but_kept_whole)
     panel_->report(progress("Fetching fares", "short", 0, 0));
     EXPECT_FALSE(label->is_elided());
     EXPECT_TRUE(label->tooltip_text().isEmpty());
+}
+
+TEST_F(BusyPanelLayoutTest, A_status_slightly_too_long_is_drawn_1_pt_smaller_before_it_is_cut)
+{
+    // The request-cap refusal ends with the advice how to fix the search: at the default
+    // window it is shown whole, 1 pt smaller (D-53), instead of losing the advice to "…".
+    const auto* label = panel_->status_label();
+    ASSERT_TRUE(label->compact_font().has_value());
+    EXPECT_EQ(label->compact_font()->families(), panel_->font().families());
+    EXPECT_DOUBLE_EQ(label->compact_font()->pointSizeF(), panel_->font().pointSizeF() - 1.0);
+    const QString text = QString::fromStdString(wizz::ui::strings::request_cap(6794, 148));
+    const int full = QFontMetrics(panel_->font()).horizontalAdvance(text);
+    const int compact = QFontMetrics(*label->compact_font()).horizontalAdvance(text);
+    ASSERT_LT(compact, full);
+
+    panel_->end(wizz::ui::strings::request_cap(6794, 148), false);
+    const int status_x = label->x();
+    const auto width_for_label = [&](int label_width) { return panel_->width() - label->width() + label_width; };
+    panel_->resize(width_for_label((full + compact) / 2), panel_->height());
+    panel_->layout()->activate();
+    ASSERT_LT(label->contentsRect().width(), full);
+    ASSERT_GE(label->contentsRect().width(), compact);
+    EXPECT_FALSE(label->is_elided()) << "fits 1 pt smaller";
+    EXPECT_EQ(label->painted_font(), *label->compact_font());
+    EXPECT_TRUE(label->tooltip_text().isEmpty());
+
+    panel_->resize(width_for_label(full + 20), panel_->height());
+    panel_->layout()->activate();
+    EXPECT_EQ(label->painted_font(), panel_->font()) << "the UI size when it fits";
+    EXPECT_FALSE(label->is_elided());
+
+    panel_->resize(width_for_label(compact / 2), panel_->height());
+    panel_->layout()->activate();
+    EXPECT_TRUE(label->is_elided()) << "too long even 1 pt smaller";
+    EXPECT_EQ(label->tooltip_text(), text);
+    EXPECT_EQ(label->x(), status_x);
 }
 
 TEST_F(BusyPanelLayoutTest, Snapshots_for_visual_inspection)

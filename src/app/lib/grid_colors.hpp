@@ -1,21 +1,20 @@
 #pragma once
-// Colours of the result grids (01 §8.1, §8.3, §9.1). The named system colours
-// are the WinForms SystemColors the predecessor used (GetSysColor), not Qt's
-// palette, whose Highlight follows the Windows accent colour.
+// Colours of the result grids (01 §8.1, §8.3, §9.1): they come from the theme
+// of the look in use (ui_style.hpp, DECISIONS D-53) instead of the WinForms
+// SystemColors, so they change with it.
 
 #include <QColor>
 
 namespace wizz::app::grid_colors {
 
-/// `SystemColors.GrayText` (COLOR_GRAYTEXT): unavailable rows and the summary labels.
+/// Muted text: unavailable rows and the summary labels.
 [[nodiscard]] QColor gray_text();
-/// `SystemColors.Highlight` (COLOR_HIGHLIGHT): the selected row's background.
+/// The selected row's background: a soft tint of the accent.
 [[nodiscard]] QColor highlight();
-/// `SystemColors.HighlightText` (COLOR_HIGHLIGHTTEXT): the selected row's text.
+/// The selected row's text.
 [[nodiscard]] QColor highlight_text();
-
-/// Cheapest rows (01 §8.3): BackColor and SelectionBackColor.
-inline constexpr QColor kCheapestBack{220, 245, 220};
-inline constexpr QColor kCheapestSelectionBack{40, 140, 70};
+/// Cheapest rows (01 §8.3): background, and background while selected.
+[[nodiscard]] QColor cheapest_back();
+[[nodiscard]] QColor cheapest_selection_back();
 
 } // namespace wizz::app::grid_colors

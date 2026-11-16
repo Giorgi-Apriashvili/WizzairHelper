@@ -1,13 +1,16 @@
 #include "grid_table_view.hpp"
 
 #include "grid_row_delegate.hpp"
+#include "ui_style.hpp"
 
+#include <QApplication>
 #include <QContextMenuEvent>
 #include <QEvent>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPersistentModelIndex>
 #include <QResizeEvent>
 #include <QStyle>
@@ -49,6 +52,10 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     setSelectionMode(SingleSelection);
     setFrameShape(QFrame::NoFrame);
     setWordWrap(false);
+    setShowGrid(false);  // rows are separated by the delegate's line, columns by space
+    setFont(style::data_font());  // denser cells; the header keeps the UI size (below)
+    apply_theme();
+    style::on_theme_change(this, [this] { apply_theme(); });
     setCornerButtonEnabled(false);
     setSortingEnabled(false);              // header clicks sort through ui_logic (01 §8.4)
     setVerticalScrollMode(ScrollPerItem);  // the scroll value is the first displayed row (01 §8.6)
@@ -65,6 +72,7 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     columns->setSectionResizeMode(QHeaderView::Interactive);
     columns->setStretchLastSection(false);
     columns->setHighlightSections(false);
+    columns->setFont(style::bold_form_font());  // semibold, the UI size
     // WinForms header cells: MiddleLeft, wrapped text.
     columns->setDefaultAlignment(Qt::Alignment::fromInt(Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap));
     columns->setTextElideMode(Qt::ElideNone);
@@ -161,7 +169,7 @@ void GridTableView::fit_fill_column()
 
 int GridTableView::row_height() const
 {
-    return fontMetrics().height() + 9;
+    return fontMetrics().height() + 12;  // comfortable rows (D-53)
 }
 
 void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest request, int column,
@@ -243,6 +251,41 @@ void GridTableView::contextMenuEvent(QContextMenuEvent* event)
     Q_EMIT context_menu_requested(global_pos);
 }
 
+void GridTableView::currentChanged(const QModelIndex& current, const QModelIndex& previous)
+{
+    QTableView::currentChanged(current, previous);
+    for (const QModelIndex& row : {previous, current}) {
+        if (row.isValid()) {
+            viewport()->update(QRect(0, rowViewportPosition(row.row()), viewport()->width(), rowHeight(row.row())));
+        }
+    }
+}
+
+void GridTableView::focusInEvent(QFocusEvent* event)
+{
+    QTableView::focusInEvent(event);
+    viewport()->update();  // the accent bar of the selected row, or the ring of an empty table
+}
+
+void GridTableView::focusOutEvent(QFocusEvent* event)
+{
+    QTableView::focusOutEvent(event);
+    viewport()->update();
+}
+
+void GridTableView::paintEvent(QPaintEvent* event)
+{
+    QTableView::paintEvent(event);
+    if (hasFocus() && !currentIndex().isValid()) {
+        // No current row can carry the accent bar: ring the table instead, so focus stays visible.
+        QPainter painter(viewport());
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(style::theme().accent_line, 2.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(viewport()->rect()).adjusted(1, 1, -1, -1), 3, 3);
+    }
+}
+
 void GridTableView::keyPressEvent(QKeyEvent* event)
 {
     if (is_enter(*event)) {
@@ -297,6 +340,14 @@ void GridTableView::resizeEvent(QResizeEvent* event)
 {
     QTableView::resizeEvent(event);
     fit_fill_column();
+}
+
+void GridTableView::apply_theme()
+{
+    QPalette colours = palette();
+    colours.setColor(QPalette::Base, style::theme().surface);
+    colours.setColor(QPalette::Text, style::theme().text);
+    setPalette(colours);
 }
 
 void GridTableView::apply_row_height()

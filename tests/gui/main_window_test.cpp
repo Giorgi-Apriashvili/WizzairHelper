@@ -5,12 +5,17 @@
 #include "app_test_support.hpp"
 
 #include "app_info.hpp"
+#include "busy_panel.hpp"
 #include "date_picker.hpp"
+#include "elided_label.hpp"
 #include "fractional_spin_box.hpp"
 #include "grid_table_view.hpp"
+#include "layout_check.hpp"
+#include "minimum_window.hpp"
 #include "place_combo.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
+#include "ui_style.hpp"
 #include "window_placement.hpp"
 
 #include "wizz/services/app_paths.hpp"
@@ -20,6 +25,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFontMetrics>
+#include <QHeaderView>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -128,19 +134,118 @@ TEST(MainWindow, Title_tabs_and_docked_layout)
     EXPECT_TRUE(window.outbound_grid()->offers_plan_return());
     EXPECT_FALSE(window.return_grid()->offers_plan_return());
 
-    // Input panel on top, the tabs filling the middle, the busy panel at the bottom with
-    // its fixed height; nothing overlaps.
+    // Input panel on top, the results card filling the middle (the tabs inside it, inset by
+    // kResultsMargins like the input cards, D-53), the busy panel at the bottom with its
+    // fixed height, full width; nothing overlaps.
     gui::settle();
-    const QRect input = window.input_panel()->geometry();
-    const QRect middle = tabs.geometry();
-    const QRect busy = window.busy_panel()->geometry();
+    const QWidget* central = window.centralWidget();
+    const auto in_central = [central](const QWidget* widget) {
+        return QRect(widget->mapTo(central, QPoint(0, 0)), widget->size());
+    };
+    const QWidget* results = central->findChild<QWidget*>(QStringLiteral("resultsArea"));
+    ASSERT_NE(results, nullptr);
+    ASSERT_TRUE(results->isAncestorOf(&tabs));
+    const QRect input = in_central(window.input_panel());
+    const QRect middle = in_central(results);
+    const QRect busy = in_central(window.busy_panel());
     EXPECT_EQ(input.top(), 0);
     EXPECT_LE(input.bottom(), middle.top());
     EXPECT_LE(middle.bottom(), busy.top());
-    EXPECT_EQ(busy.bottom(), window.centralWidget()->height() - 1);
+    EXPECT_EQ(in_central(&tabs), middle.marginsRemoved(MainWindow::kResultsMargins));
+    EXPECT_EQ(MainWindow::kResultsMargins, QMargins(16, 4, 16, 8));
+    EXPECT_EQ(busy.bottom(), central->height() - 1);
     EXPECT_EQ(busy.height(), window.busy_panel()->metrics().height);
-    EXPECT_EQ(busy.width(), window.centralWidget()->width());
+    EXPECT_EQ(busy.width(), central->width());
     EXPECT_EQ(window.menuWidget(), nullptr) << "no menus or toolbar (01 \u00A73.3)";
+}
+
+/// The 03 §11 searches (outbound and return), so every page has content.
+void run_section11_searches(WindowRig& rig)
+{
+    rig.input().set_from_radius_km(200);
+    rig.input().set_to_radius_km(30);
+    rig.input().apply_autotest_dates(
+        wizz::ui::DateWindow{.start = wizz::Date::from_ymd(2026, 11, 10), .end = wizz::Date::from_ymd(2026, 11, 20)},
+        wizz::ui::DateWindow{.start = wizz::Date::from_ymd(2026, 11, 12), .end = wizz::Date::from_ymd(2026, 11, 20)});
+    rig.run(rig.controller().search_outbound());
+    rig.run(rig.controller().search_return());
+    ASSERT_GT(rig.trips().table()->model()->rowCount(), 14) << "enough round trips to fill the table";
+}
+
+/// Gives the window the client area `client` (the minimal platform has no frame).
+void set_client_size(MainWindow& window, QSize client)
+{
+    window.setMinimumSize(client.boundedTo(window.minimumSize()));
+    window.resize(client);
+    gui::settle();
+}
+
+[[nodiscard]] int round_trips_in_view(const WindowRig& rig)
+{
+    const wizz::app::GridTableView& table = *const_cast<WindowRig&>(rig).trips().table();
+    return table.viewport()->height() / table.row_height();
+}
+
+TEST(MainWindowLayout, The_minimum_window_shows_every_page_without_clipping)
+{
+    // D-53: the cards, the results card and the status bar fit the client area of the
+    // 980 x 600 window: no clipped, overlapping or cut widget and Cancel fully visible on
+    // any page, and 5 round trips stay in view.
+    WindowRig rig;
+    rig.start();
+    run_section11_searches(rig);
+    MainWindow& window = rig.window();
+    const QSize client = gui::minimum_client_size();
+    set_client_size(window, client);
+    ASSERT_EQ(window.size(), client);
+    for (const MainWindow::Page page : {MainWindow::Page::outbound, MainWindow::Page::inbound,
+                                        MainWindow::Page::round_trips, MainWindow::Page::log}) {
+        window.select_page(page);
+        gui::settle();
+        EXPECT_EQ(wizz::app::layout_problems(window), std::vector<std::string>{}) << "page " << static_cast<int>(page);
+    }
+    window.select_page(MainWindow::Page::round_trips);
+    gui::settle();
+    EXPECT_GE(round_trips_in_view(rig), 5) << "round trips in view at the minimum window (the prototype showed 3-4)";
+}
+
+TEST(MainWindowLayout, Fourteen_round_trips_are_in_view_at_the_default_window)
+{
+    // D-53: the cards, tabs, grid bar and header are tight enough that 14 round trips show at
+    // the default 1320 x 820 window (the prototype showed 12); 9 px of slack are left, so any
+    // growth of the cards or the header shows here.
+    WindowRig rig;
+    rig.start();
+    run_section11_searches(rig);
+    MainWindow& window = rig.window();
+    set_client_size(window, gui::default_client_size());
+    window.select_page(MainWindow::Page::round_trips);
+    gui::settle();
+    const wizz::app::GridTableView& table = *rig.trips().table();
+    EXPECT_GE(round_trips_in_view(rig), 14) << "viewport " << table.viewport()->height() << " px, rows "
+                                            << table.row_height() << " px, header "
+                                            << table.horizontalHeader()->height() << " px";
+    EXPECT_EQ(wizz::app::layout_problems(window), std::vector<std::string>{});
+}
+
+TEST(MainWindowLayout, The_request_cap_refusal_is_shown_whole_at_the_default_window)
+{
+    // 01 §10.1: the status line is cut only when it must be. The longest status a search ends
+    // with, the refusal of a search over 500 requests, ends with the advice how to fix it; at
+    // the default window it is shown whole (1 pt smaller), as the 9 pt windowsvista look did.
+    WindowRig rig;
+    rig.start();
+    MainWindow& window = rig.window();
+    set_client_size(window, gui::default_client_size());
+    gui::settle();
+    wizz::app::BusyPanel& busy = *window.busy_panel();
+    busy.begin("Outbound: planning…");
+    busy.end(strings::request_cap(6794, 148), false);
+    gui::settle();
+    const wizz::app::ElidedLabel* status = busy.status_label();
+    EXPECT_FALSE(status->is_elided()) << status->contentsRect().width() << " px for "
+                                      << QFontMetrics(status->painted_font()).horizontalAdvance(status->text())
+                                      << " px of text";
 }
 
 TEST(MainWindow, Tab_headers_have_the_12_4_padding)
@@ -172,7 +277,7 @@ TEST(MainWindow, Start_up_logs_its_line_loads_the_map_and_focuses_From)
     EXPECT_EQ(log[1], "Route map: 11 airports, API https://be.wizzair.com/29.23.1/Api.");
     EXPECT_EQ(rig.busy().status_text(),
               "Ready \u2014 11 Wizz Air airports loaded. Choose your trip and press \u201CSearch outbound\u201D.");
-    EXPECT_EQ(rig.busy().status_colour(), wizz::app::BusyPanel::kSuccessColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().success);
     EXPECT_FALSE(rig.controller().is_working());
     EXPECT_EQ(rig.wizz_requests(), 2) << "homepage + route map";
     EXPECT_GT(rig.input().from_box()->count(), 0) << "suggestions after the map loaded";
@@ -535,7 +640,7 @@ TEST(MainWindow, Esc_while_working_cancels_once_like_the_Cancel_button)
     ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
     EXPECT_TRUE(rig.busy().status_text().starts_with("Outbound Cancelled: 0 fares from 0 of 3 requests in "))
         << rig.busy().status_text();
-    EXPECT_EQ(rig.busy().status_colour(), wizz::app::BusyPanel::kFailureColour);
+    EXPECT_EQ(rig.busy().status_colour(), wizz::app::style::theme().failure);
     EXPECT_EQ(rig.outbound().summary_text(), "Cancelled before any fares arrived.");
     for (QWidget* control : rig.input().working_controls()) {
         EXPECT_TRUE(control->isEnabled());

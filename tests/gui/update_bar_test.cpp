@@ -124,12 +124,19 @@ TEST(UpdateBar, Never_takes_the_focus_and_reports_its_clicks)
     EXPECT_EQ(later, 1);
 }
 
-TEST(UpdateBar, Paints_a_light_magenta_tint)
+TEST(UpdateBar, Paints_a_magenta_tint_its_text_reads_on)
 {
+    // D-46 / D-53: the theme's update tint, a tint of the Wizz magenta (nearly white in light,
+    // nearly black in dark), under the theme's text colour at 4.5:1 or more.
+    const wizz::app::style::Theme& theme = wizz::app::style::theme();
     const QColor tint = UpdateBar::background_colour();
-    EXPECT_GT(tint.lightness(), 220) << "a light background keeps the text readable";
+    EXPECT_EQ(tint, theme.update_tint);
     EXPECT_GT(tint.red(), tint.green()) << "a tint of the Wizz magenta";
     EXPECT_GT(tint.blue(), tint.green());
+    EXPECT_EQ(tint.lightness() > 128, !theme.dark) << "light in the light look, dark in the dark one";
+    EXPECT_GE(wizz::app::style::contrast_ratio(theme.text, tint), 4.5) << "the message stays readable";
+    UpdateBar bar;
+    EXPECT_EQ(bar.message_label()->palette().color(QPalette::WindowText), theme.text);
 }
 
 TEST(UpdateBar, Follows_the_input_panel_in_the_tab_order_while_visible)

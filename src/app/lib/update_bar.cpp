@@ -1,8 +1,8 @@
 #include "update_bar.hpp"
 
+#include "modern_style.hpp"
 #include "qt_strings.hpp"
 #include "search_button.hpp"
-#include "system_colours.hpp"
 #include "ui_style.hpp"
 
 #include <QEvent>
@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 
 #include <algorithm>
@@ -18,8 +19,6 @@ namespace wizz::app {
 
 namespace {
 
-/// Share of the magenta in the background tint (over white).
-constexpr double kTintStrength = 0.08;
 /// Horizontal padding of the "Later" text inside its flat button.
 constexpr int kLaterPadding = 10;
 
@@ -46,10 +45,6 @@ public:
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }
 };
 
-[[nodiscard]] int blend(int base, int accent) noexcept
-{
-    return static_cast<int>(base + ((accent - base) * kTintStrength) + 0.5);
-}
 
 } // namespace
 
@@ -57,7 +52,8 @@ UpdateBar::UpdateBar(QWidget* parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("updateBar"));
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(kAccentWidth + kPadding.left(), kPadding.top(), kPadding.right(), kPadding.bottom());
+    layout->setContentsMargins(kOuterMargins.left() + kAccentWidth + kPadding.left(), kOuterMargins.top() + kPadding.top(),
+                               kOuterMargins.right() + kPadding.right(), kOuterMargins.bottom() + kPadding.bottom());
     layout->setSpacing(kSpacing);
 
     message_ = new QLabel(this);
@@ -81,6 +77,7 @@ UpdateBar::UpdateBar(QWidget* parent) : QWidget(parent)
     connect(action_, &QPushButton::clicked, this, &UpdateBar::action_clicked);
     connect(later_, &QPushButton::clicked, this, &UpdateBar::later_clicked);
     apply_text_colour();
+    style::on_theme_change(this, [this] { apply_text_colour(); });
     hide();  // until an update is offered
 }
 
@@ -102,15 +99,23 @@ void UpdateBar::show_view(const ui::UpdateBarView& view)
 
 QColor UpdateBar::background_colour()
 {
-    const QColor magenta = style::wizz_magenta();
-    return QColor{blend(255, magenta.red()), blend(255, magenta.green()), blend(255, magenta.blue())};
+    return style::theme().update_tint;
 }
 
 void UpdateBar::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter{this};
-    painter.fillRect(rect(), background_colour());
-    painter.fillRect(QRect{0, 0, kAccentWidth, height()}, style::wizz_magenta());
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF card = QRectF(rect().marginsRemoved(kOuterMargins)).adjusted(0.5, 0.5, -0.5, -0.5);
+    QPainterPath shape;
+    shape.addRoundedRect(card, ModernStyle::kCardRadius, ModernStyle::kCardRadius);
+    painter.fillPath(shape, background_colour());
+    painter.save();
+    painter.setClipPath(shape);
+    painter.fillRect(QRectF(card.left(), card.top(), kAccentWidth, card.height()), style::theme().accent_line);
+    painter.restore();
+    painter.setPen(QPen(style::theme().border, 1.0));
+    painter.drawPath(shape);
 }
 
 void UpdateBar::changeEvent(QEvent* event)
@@ -123,8 +128,8 @@ void UpdateBar::changeEvent(QEvent* event)
 
 void UpdateBar::apply_text_colour()
 {
-    // ControlText on the tint, whatever the style paints (system_colours.hpp).
-    const QColor text = system_colour(SystemColour::control_text);
+    // The theme's text on the tint, whatever the style paints.
+    const QColor text = style::theme().text;
     for (QWidget* widget : {static_cast<QWidget*>(message_), static_cast<QWidget*>(later_)}) {
         QPalette palette = widget->palette();
         if (palette.color(QPalette::WindowText) != text || palette.color(QPalette::ButtonText) != text) {

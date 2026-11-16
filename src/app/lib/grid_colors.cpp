@@ -1,32 +1,32 @@
 #include "grid_colors.hpp"
 
-#include <windows.h>
+#include "ui_style.hpp"
 
 namespace wizz::app::grid_colors {
 
-namespace {
-
-[[nodiscard]] QColor system_color(int index)
-{
-    const DWORD rgb = GetSysColor(index);
-    return QColor{GetRValue(rgb), GetGValue(rgb), GetBValue(rgb)};
-}
-
-} // namespace
-
 QColor gray_text()
 {
-    return system_color(COLOR_GRAYTEXT);
+    return style::theme().text_muted;
 }
 
 QColor highlight()
 {
-    return system_color(COLOR_HIGHLIGHT);
+    return style::theme().selection;
 }
 
 QColor highlight_text()
 {
-    return system_color(COLOR_HIGHLIGHTTEXT);
+    return style::theme().selection_text;
+}
+
+QColor cheapest_back()
+{
+    return style::theme().cheapest;
+}
+
+QColor cheapest_selection_back()
+{
+    return style::theme().cheapest_selection;
 }
 
 } // namespace wizz::app::grid_colors

@@ -2,7 +2,7 @@
 
 #include "elided_label.hpp"
 #include "spinner_widget.hpp"
-#include "system_colours.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
@@ -20,6 +20,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace wizz::app {
@@ -31,8 +32,8 @@ constexpr int kMinBarRow = 22;
 constexpr int kElapsedRowExtra = 4;
 constexpr int kStatusRowExtra = 6;
 constexpr int kSpinnerRightMargin = 6;
-constexpr QMargins kBarMargins{0, 2, 8, 2};
-constexpr int kAutoColumnRightMargin = 8;  // _elapsed and _wait
+constexpr QMargins kBarMargins{0, 2, 14, 2};
+constexpr int kAutoColumnRightMargin = 12;  // _elapsed and _wait
 constexpr QMargins kButtonMargins{3, 3, 3, 3};  // WinForms default Control.Margin
 
 [[nodiscard]] QString to_qstring(std::string_view text)
@@ -45,6 +46,19 @@ constexpr QMargins kButtonMargins{3, 3, 3, 3};  // WinForms default Control.Marg
 {
     const QFontMetrics metrics = device != nullptr ? QFontMetrics(font, device) : QFontMetrics(font);
     return metrics.size(Qt::TextSingleLine, text).height();
+}
+
+/// The bar's fill at rest: the outcome's colour, softened halfway towards the track (High
+/// Contrast: the system highlight, nothing mixed).
+[[nodiscard]] QColor resting_fill(const QColor& outcome)
+{
+    const style::Theme& theme = style::theme();
+    if (theme.high_contrast) {
+        return theme.accent;
+    }
+    const QColor track = theme.track;
+    return QColor((outcome.red() + track.red()) / 2, (outcome.green() + track.green()) / 2,
+                  (outcome.blue() + track.blue()) / 2);
 }
 
 /// A plain container that gives `child` the WinForms cell margins.
@@ -65,8 +79,8 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
                      const TaskbarProgress::Factory& taskbar_factory, QWidget* parent)
     : QWidget(parent), model_(clock, std::move(locale)), taskbar_(this, taskbar_factory)
 {
-    // The background is SystemColors.ControlLight, painted in paintEvent (not a palette
-    // role: styles repaint those, and the children keep the style's palette).
+    // The background is the theme's surface, painted in paintEvent (not a palette role:
+    // styles repaint those, and the children keep the style's palette).
     setAttribute(Qt::WA_OpaquePaintEvent);
 
     spinner_ = new SpinnerWidget(this);
@@ -93,12 +107,8 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
 
     wait_ = new QLabel(this);
     wait_->setTextFormat(Qt::PlainText);
-    QFont bold;  // only the weight is set: family and size follow the panel (form) font
-    bold.setBold(true);
-    wait_->setFont(bold);
-    QPalette wait_palette = wait_->palette();
-    wait_palette.setColor(QPalette::WindowText, kWaitColour);
-    wait_->setPalette(wait_palette);
+    // Only the semibold families are set: the size follows the panel (form) font.
+    wait_->setFont(style::semibold_face());
     wait_->setContentsMargins(0, 0, kAutoColumnRightMargin, 0);
 
     cancel_ = new QPushButton(to_qstring(ui::strings::kCancel));
@@ -129,9 +139,13 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
     error_reset_timer_->setInterval(ui::BusyPanelModel::kErrorResetDelay);
     connect(error_reset_timer_, &QTimer::timeout, this, &BusyPanel::error_reset_elapsed);
 
-    refresh_system_colours();
+    refresh_theme_colours();
     apply_metrics();
     render();
+    style::on_theme_change(this, [this] {
+        refresh_theme_colours();
+        render();  // the bar's fill
+    });
 }
 
 BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale, QWidget* parent)
@@ -205,9 +219,9 @@ QColor BusyPanel::status_colour() const
 {
     switch (model_.view().status_tone) {
     case ui::StatusTone::success:
-        return kSuccessColour;
+        return style::theme().success;
     case ui::StatusTone::failure:
-        return kFailureColour;
+        return style::theme().failure;
     case ui::StatusTone::normal:
         break;
     }
@@ -229,12 +243,7 @@ BusyPanelMetrics BusyPanel::compute_metrics(const QFont& panel_font, const QFont
 
 QFont BusyPanel::elapsed_font()
 {
-    QFont font(QStringLiteral("Courier New"));
-    font.setPointSizeF(9.5);
-    font.setBold(true);
-    font.setStyleHint(QFont::TypeWriter);
-    font.setFixedPitch(true);
-    return font;
+    return style::mono_font(10.0, true);  // Cascadia Mono, Consolas on Windows 10
 }
 
 void BusyPanel::changeEvent(QEvent* event)
@@ -246,7 +255,7 @@ void BusyPanel::changeEvent(QEvent* event)
         apply_metrics();
         break;
     case QEvent::PaletteChange:
-        refresh_system_colours();  // a colour scheme change re-resolves the palettes
+        refresh_theme_colours();  // a colour scheme change re-resolves the palettes
         break;
     default:
         break;
@@ -263,7 +272,7 @@ bool BusyPanel::event(QEvent* event)
         apply_metrics();  // OnDpiChangedAfterParent: fonts may measure differently on the new screen
         break;
     case QEvent::ThemeChange:
-        refresh_system_colours();
+        refresh_theme_colours();
         break;
     default:
         break;
@@ -275,6 +284,7 @@ void BusyPanel::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter(this);
     painter.fillRect(rect(), control_light_);
+    painter.fillRect(QRect(0, 0, width(), 1), style::theme().border);  // the status bar's top edge
 }
 
 void BusyPanel::animate()
@@ -313,8 +323,14 @@ void BusyPanel::render()
         set_bar_value(view.bar_value);
     }
 
-    // The bar may show the style's moving glow only while something is being processed.
+    // The bar moves only while something is being processed (D-34); at rest its fill takes
+    // the colour of the outcome.
     bar_->set_live(is_busy());
+    // Busy: the accent (the lighter accent line in dark, 3:1 on the track there too).
+    bar_->set_fill(is_busy() ? style::theme().accent_line : resting_fill(status_colour()));
+    if (view.bar_style == ui::BarStyle::marquee) {
+        bar_->update();  // the marquee segment advances with the 40 ms timer
+    }
     spinner_->set_spinning(view.spinning);
     spinner_->set_angle(view.spinner_angle);
 
@@ -342,6 +358,14 @@ void BusyPanel::apply_metrics()
     if (grid_ == nullptr) {
         return;  // change events sent while the constructor builds the controls
     }
+    // A status too long for the line (the request-cap refusal with its advice) is drawn 1 pt
+    // smaller before it is cut.
+    std::optional<QFont> compact;
+    if (const qreal size = font().pointSizeF(); size > 2.0) {
+        compact = font();
+        compact->setPointSizeF(size - 1.0);
+    }
+    status_->set_compact_font(compact);
     const BusyPanelMetrics metrics = compute_metrics(font(), wait_->font(), elapsed_->font(), this);
     if (metrics == metrics_ && maximumHeight() == metrics.height) {
         return;
@@ -356,31 +380,37 @@ void BusyPanel::apply_metrics()
     setFixedHeight(metrics_.height);
 }
 
-void BusyPanel::refresh_system_colours()
+void BusyPanel::refresh_theme_colours()
 {
-    if (status_ == nullptr) {
+    if (status_ == nullptr || wait_ == nullptr) {
         return;  // change events sent while the constructor builds the controls
     }
-    const QColor control_light = system_colour(SystemColour::control_light);
-    const QColor control_text = system_colour(SystemColour::control_text);
-    if (control_light != control_light_) {
-        control_light_ = control_light;
+    const style::Theme& theme = style::theme();
+    if (theme.surface != control_light_) {
+        control_light_ = theme.surface;
         update();
     }
-    if (control_text != control_text_) {
-        control_text_ = control_text;
-        QPalette elapsed_palette = elapsed_->palette();
-        elapsed_palette.setColor(QPalette::WindowText, control_text_);
-        elapsed_->setPalette(elapsed_palette);
-        apply_status_colour();
-    }
+    control_text_ = theme.text;
+    const auto set_text = [](QWidget& widget, const QColor& colour) {
+        if (widget.palette().color(QPalette::WindowText) != colour) {
+            QPalette palette = widget.palette();
+            palette.setColor(QPalette::WindowText, colour);
+            widget.setPalette(palette);
+        }
+    };
+    set_text(*elapsed_, theme.text_secondary);
+    set_text(*wait_, theme.warning);
+    apply_status_colour();
 }
 
 void BusyPanel::apply_status_colour()
 {
-    QPalette status_palette = status_->palette();
-    status_palette.setColor(QPalette::WindowText, status_colour());
-    status_->setPalette(status_palette);
+    const QColor colour = status_colour();
+    if (status_->palette().color(QPalette::WindowText) != colour) {
+        QPalette status_palette = status_->palette();
+        status_palette.setColor(QPalette::WindowText, colour);
+        status_->setPalette(status_palette);
+    }
 }
 
 void BusyPanel::set_bar_value(int value)

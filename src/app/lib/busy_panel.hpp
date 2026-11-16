@@ -8,15 +8,16 @@
 // de-duplicated taskbar calls to TaskbarProgress and runs the 4 s one-shot that
 // clears the taskbar Error state.
 //
-// Layout (01 §10.1): background SystemColors.ControlLight (COLOR_3DLIGHT, read
-// from Windows like the status line's ControlText, see system_colours.hpp),
-// padding (8, 5, 8, 5), a 4 × 2 grid:
+// Layout (01 §10.1) in the look of DECISIONS D-53: the theme's surface colour with
+// a 1 px top border (a status bar), padding (14, 5, 14, 5), a 4 × 2 grid:
 //   col 0: 36 px  spinner (both rows, 6 px right margin)
-//   col 1: 100 %  progress bar (margin 0, 2, 8, 2) / status line (elided)
-//   col 2: auto   elapsed (Courier New 9.5 pt bold) / wait note (DarkOrange, bold)
+//   col 1: 100 %  progress bar (margin 0, 2, 14, 2) / status line (1 pt smaller when
+//                 it does not fit, cut with "…" when it does not fit then either)
+//   col 2: auto   elapsed (Cascadia Mono 10 pt semibold) / wait note (warning, semibold face)
 //   col 3: auto   Cancel (both rows, right, default 3 px button margin)
 // Row heights come from font metrics and are recomputed on font, style and
-// device-pixel-ratio changes (UI-6).
+// device-pixel-ratio changes (UI-6). Every colour (background, status, wait note,
+// elapsed time, the bar's fill) is taken from the theme again when the look changes.
 //
 // Cancel and Esc share request_cancel (D-11, 07 §4): it disables Cancel, shows
 // "Cancelling… (finishing the current request)" and emits cancel_requested()
@@ -61,7 +62,7 @@ struct BusyPanelMetrics {
     int bar_row = 0;           ///< max(22, textHeight("0:00", elapsed font) + 4)
     int status_row = 0;        ///< line + 6
     int spinner_column = 36;   ///< absolute column 0
-    QMargins padding{8, 5, 8, 5};
+    QMargins padding{14, 5, 14, 5};
     int height = 0;            ///< bar_row + status_row + padding.top + padding.bottom
 
     friend bool operator==(const BusyPanelMetrics&, const BusyPanelMetrics&) = default;
@@ -73,10 +74,6 @@ class BusyPanel final : public QWidget {
 public:
     /// Range of the progress bar: 0..BarMax + 1 (01 §10.1, §10.6).
     static constexpr int kBarRangeMax = ui::BusyPanelModel::kBarMax + 1;
-    /// Status colours (01 §10.3) and the wait note colour (01 §10.1).
-    static constexpr QColor kSuccessColour{0, 100, 0};    // DarkGreen
-    static constexpr QColor kFailureColour{178, 34, 34};  // Firebrick
-    static constexpr QColor kWaitColour{255, 140, 0};     // DarkOrange
 
     /// `clock` must outlive the panel (elapsed time, ETA and wait notes use utc_now).
     /// `locale` supplies the decimal separator of the wait notes. `taskbar_factory`
@@ -115,7 +112,7 @@ public:
     /// 01 §10.1 metrics for the given fonts, measured on `device` (screen when null).
     [[nodiscard]] static BusyPanelMetrics compute_metrics(const QFont& panel_font, const QFont& wait_font,
                                                           const QFont& elapsed_font, const QPaintDevice* device = nullptr);
-    /// Courier New 9.5 pt bold (monospace fallback).
+    /// Cascadia Mono 10 pt semibold, else Consolas.
     [[nodiscard]] static QFont elapsed_font();
 
     // The controls, for the window (focus, Esc) and for tests.
@@ -128,9 +125,9 @@ public:
     /// The 40 ms animation timer (runs exactly while busy).
     [[nodiscard]] QTimer* animation_timer() const noexcept { return timer_; }
     [[nodiscard]] TaskbarProgress& taskbar() noexcept { return taskbar_; }
-    /// The status colour for the current tone: ControlText, DarkGreen or Firebrick.
+    /// The status colour for the current tone: the theme's text, success or failure colour.
     [[nodiscard]] QColor status_colour() const;
-    /// SystemColors.ControlLight, the panel background.
+    /// The theme's surface colour, the panel background.
     [[nodiscard]] QColor background_colour() const { return control_light_; }
 
 public Q_SLOTS:
@@ -157,7 +154,7 @@ private:
     void error_reset_elapsed();
     void render();
     void apply_metrics();
-    void refresh_system_colours();
+    void refresh_theme_colours();
     void apply_status_colour();
     void set_bar_value(int value);
 

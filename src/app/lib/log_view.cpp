@@ -1,11 +1,13 @@
 #include "log_view.hpp"
 
-#include "system_colours.hpp"
+#include "modern_style.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/leg_text.hpp"
 
 #include <QEvent>
 #include <QFont>
+#include <QPainter>
 #include <QPalette>
 #include <QScrollBar>
 #include <QString>
@@ -29,16 +31,18 @@ LogView::LogView(const Clock& clock, std::shared_ptr<const Locale> locale, QWidg
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);  // ScrollBars.Both
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     setFont(log_font());
-    apply_system_colours();
+    setFrameShape(QFrame::NoFrame);  // the results card is the frame
+    setCornerWidget(ModernStyle::make_surface_corner(this));  // where the scroll bars meet
+    // Room for the focus bar left of the text; the document margin keeps the text clear of it.
+    setViewportMargins(ModernStyle::kSelectionBarWidth, 0, 0, 0);
+    document()->setDocumentMargin(8);
+    apply_theme_colours();
+    style::on_theme_change(this, [this] { apply_theme_colours(); });
 }
 
 QFont LogView::log_font()
 {
-    QFont font(QStringLiteral("Courier New"));
-    font.setPointSizeF(9.0);
-    font.setStyleHint(QFont::TypeWriter);
-    font.setFixedPitch(true);
-    return font;
+    return style::mono_font(9.5);  // Cascadia Mono, Consolas on Windows 10
 }
 
 void LogView::append_line(std::string_view line)
@@ -59,12 +63,18 @@ void LogView::append_line(std::string_view line)
 bool LogView::event(QEvent* event)
 {
     const bool handled = QPlainTextEdit::event(event);
+    if (event->type() == QEvent::Paint) {
+        // The view's own area outside the viewport: the focus bar, or the surface.
+        QPainter painter(this);
+        const QRect bar(0, 0, ModernStyle::kSelectionBarWidth, viewport()->geometry().bottom() + 1);
+        painter.fillRect(bar, hasFocus() ? style::theme().accent_line : style::theme().surface);
+    }
     switch (event->type()) {
     case QEvent::Polish:
     case QEvent::StyleChange:
     case QEvent::PaletteChange:
     case QEvent::ThemeChange:
-        apply_system_colours();  // after the style has polished the viewport
+        apply_theme_colours();  // after the style has polished the viewport
         break;
     default:
         break;
@@ -72,13 +82,25 @@ bool LogView::event(QEvent* event)
     return handled;
 }
 
-void LogView::apply_system_colours()
+void LogView::focusInEvent(QFocusEvent* event)
+{
+    QPlainTextEdit::focusInEvent(event);
+    update();  // the focus bar
+}
+
+void LogView::focusOutEvent(QFocusEvent* event)
+{
+    QPlainTextEdit::focusOutEvent(event);
+    update();
+}
+
+void LogView::apply_theme_colours()
 {
     // BackColor = SystemColors.Window, also while read-only, and its WindowText. Styles
     // may leave the viewport unfilled (the "windows11" style draws a grey panel behind it).
     QPalette colours = palette();
-    const QColor window = system_colour(SystemColour::window);
-    const QColor window_text = system_colour(SystemColour::window_text);
+    const QColor window = style::theme().surface;
+    const QColor window_text = style::theme().text;
     if (colours.color(QPalette::Base) != window || colours.color(QPalette::Text) != window_text) {
         colours.setColor(QPalette::Base, window);
         colours.setColor(QPalette::Text, window_text);

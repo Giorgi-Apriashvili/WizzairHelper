@@ -13,7 +13,15 @@ checked by the UI thread's own CPU time always and by their wall-clock length
 unless other processes held the CPUs during them (DECISIONS D-50), so a busy
 machine does not fail a run. Run with `python -I` (no site or user
 paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
-QT_SCALE_FACTOR (01 §15, 05 §5).
+QT_SCALE_FACTOR (01 §15, 05 §5). `--window 980x600` starts the window at that size (the whole
+window in logical pixels, like 01 §4.1) through the profile's settings.json, which the app then
+must leave unchanged. `--color-scheme light|dark`, `--high-contrast` and `--fonts windows10` set
+the look's diagnostic switches WIZZ_COLOR_SCHEME, WIZZ_HIGH_CONTRAST and WIZZ_FONTS (DECISIONS
+D-56); without them the run inherits the caller's environment. Every run checks that the app shows
+the look it was asked for (DECISIONS D-53..D-56): High Contrast when Windows (or WIZZ_HIGH_CONTRAST)
+says so, else WIZZ_COLOR_SCHEME, else the Windows app mode (AppsUseLightTheme) - in diagnostics.json
+(the look, its palette's window colour, ModernStyle) and in the first screenshot, whose most common
+colour must be the look's window or surface colour.
 
 The replay directory is tests/replay/<scenario>, except for the heavy cached
 replays (heavy_cached, cancel_cached), whose timetables are generated into
@@ -40,6 +48,9 @@ import struct
 import subprocess
 import sys
 import time
+import winreg
+import zlib
+from collections import Counter
 from ctypes import wintypes
 
 FIXED_NOW = '2026-11-02T10:00:00Z'
@@ -49,6 +60,8 @@ ROUTE_MAP_LOG = '[10:00:00] Route map: {} airports, API https://be.wizzair.com/2
 KEY_ORDER = ['startedAt', 'apiUrl', 'airports', 'outbound', 'return', 'roundTrips', 'afterCurrencySwitch',
              'exception', 'progressScreenshots', 'finalStatus', 'requestsToWizz', 'log']
 DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'cancel', 'searches', 'grids', 'display', 'layout', 'environment']
+# The window and surface colours of the light and dark looks (style::Theme, DECISIONS D-53).
+LOOK_COLOURS = {'light': ('#f3f2f6', '#ffffff'), 'dark': ('#131217', '#1d1c22')}
 CANCELLING = 'Cancelling… (finishing the current request)'
 PRESSES = ['Esc', 'Cancel button', 'Esc', 'Cancel handler']
 
@@ -190,6 +203,29 @@ class Checker:
                         'display: the work area %r is smaller than the minimum window %r on %s, so the window '
                         '%r (client %r) must start inside it, not above or left of it, with its title bar on '
                         'screen' % (work, minimum, name, frame, client))
+
+    def look(self, expected):
+        """D-53..D-56: the run shows `expected` ('light', 'dark' or 'high_contrast')."""
+        self.diag_equal('environment.look', expected)
+        if expected not in LOOK_COLOURS:
+            self.expect(self.diag('environment.style') in ('windowsvista', 'windows'),
+                        'High Contrast: the plain native style, got %r' % self.diag('environment.style'))
+            return
+        window, surface = LOOK_COLOURS[expected]
+        self.diag_equal('environment.style', 'modern/fusion')
+        self.diag_equal('environment.windowColour', window)
+        # What was drawn: the most common colour of the first screenshot is the look's window
+        # (behind the cards) or surface (cards, tables) colour.
+        path = os.path.join(self.out_dir, '1-outbound.png')
+        if not os.path.isfile(path):
+            return  # reported by screenshots()
+        try:
+            colour = dominant_colour(path)
+        except (ValueError, zlib.error) as error:
+            self.failures.append('1-outbound.png: cannot read its pixels: %s' % error)
+            return
+        self.expect(colour in (window, surface), '1-outbound.png: most common colour %s is neither the %s window %s '
+                    'nor its surface %s' % (colour, expected, window, surface))
 
     def diagnostics_common(self, max_gap_ms, scale):
         d = self.diagnostics
@@ -611,6 +647,105 @@ CRASH_SCENARIOS = {
 }
 
 
+def png_rows(path):
+    """Width, channels and the unfiltered pixel rows of an 8-bit RGB or RGBA, non-interlaced PNG
+    (what Qt writes for the screenshots); standard library only."""
+    with open(path, 'rb') as f:
+        data = f.read()
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('not a PNG')
+    pos, idat, header = 8, [], None
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b'IHDR':
+            header = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            idat.append(body)
+        elif kind == b'IEND':
+            break
+    if header is None:
+        raise ValueError('no IHDR')
+    width, height, depth, colour_type, _, _, interlace = header
+    if depth != 8 or colour_type not in (2, 6) or interlace:
+        raise ValueError('unsupported PNG: depth %d, colour type %d, interlace %d' % (depth, colour_type, interlace))
+    channels = 3 if colour_type == 2 else 4
+    stride = width * channels
+    raw = zlib.decompress(b''.join(idat))
+    rows, previous, at = [], bytearray(stride), 0
+    for _ in range(height):
+        kind, line = raw[at], bytearray(raw[at + 1:at + 1 + stride])
+        at += 1 + stride
+        if kind == 1:  # Sub
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif kind == 2:  # Up
+            line = bytearray((a + b) & 0xFF for a, b in zip(line, previous))
+        elif kind == 3:  # Average
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + previous[i]) >> 1)) & 0xFF
+        elif kind == 4:  # Paeth
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = previous[i]
+                c = previous[i - channels] if i >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
+        elif kind != 0:
+            raise ValueError('unknown PNG filter %d' % kind)
+        rows.append(line)
+        previous = line
+    return width, channels, rows
+
+
+def dominant_colour(path):
+    """The most common colour of the PNG at `path` as '#rrggbb' (every 3rd pixel of every 3rd row)."""
+    width, channels, rows = png_rows(path)
+    counts = Counter()
+    for line in rows[::3]:
+        for x in range(0, width, 3):
+            i = x * channels
+            counts[bytes(line[i:i + 3])] += 1
+    return '#' + counts.most_common(1)[0][0].hex()
+
+
+class HIGHCONTRASTW(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.UINT), ('dwFlags', wintypes.DWORD), ('lpszDefaultScheme', wintypes.LPWSTR)]
+
+
+def parse_switch(value):
+    """A WIZZ_HIGH_CONTRAST value as the app reads it (ui_style.cpp): True, False or None."""
+    text = (value or '').strip().lower()
+    return True if text in ('1', 'on', 'true', 'yes') else False if text in ('0', 'off', 'false', 'no') else None
+
+
+def expected_look(env):
+    """The look D-55 / D-56 promise for a run with `env`: High Contrast wins, then WIZZ_COLOR_SCHEME,
+    then the Windows app mode (the registry value Qt reads)."""
+    contrast = parse_switch(env.get('WIZZ_HIGH_CONTRAST'))
+    if contrast is None:
+        info = HIGHCONTRASTW(cbSize=ctypes.sizeof(HIGHCONTRASTW))
+        spi_gethighcontrast, hcf_highcontraston = 0x0042, 0x1
+        contrast = bool(ctypes.windll.user32.SystemParametersInfoW(spi_gethighcontrast, info.cbSize,
+                                                                     ctypes.byref(info), 0)) and \
+            bool(info.dwFlags & hcf_highcontraston)
+    if contrast:
+        return 'high_contrast'
+    scheme = (env.get('WIZZ_COLOR_SCHEME') or '').strip().lower()
+    if scheme in ('light', 'dark'):
+        return scheme
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+            light, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
+    except OSError:
+        return 'light'  # no app mode set: Qt reports none, the app is light
+    return 'light' if light else 'dark'
+
+
 ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -783,7 +918,17 @@ def main():
     parser.add_argument('--scale', help='QT_SCALE_FACTOR for the run, e.g. 1.5 or 2')
     parser.add_argument('--max-gap-ms', type=float, default=100.0,
                         help='limit for the longest gap of the 40 ms progress timer (05 §5: 100 ms)')
+    parser.add_argument('--window', help='start size of the whole window in logical pixels, e.g. 980x600')
+    parser.add_argument('--color-scheme', choices=['light', 'dark'], help='WIZZ_COLOR_SCHEME for the run')
+    parser.add_argument('--high-contrast', action='store_true', help='WIZZ_HIGH_CONTRAST=1 for the run')
+    parser.add_argument('--fonts', choices=['windows10'], help='WIZZ_FONTS for the run')
     args = parser.parse_args()
+    window = None
+    if args.window:
+        match = re.fullmatch(r'(\d+)x(\d+)', args.window)
+        if not match:
+            parser.error('--window must be WIDTHxHEIGHT, e.g. 980x600')
+        window = (int(match.group(1)), int(match.group(2)))
 
     work_dir = os.path.abspath(args.work_dir)
     replay_root = os.path.abspath(args.replay_root)
@@ -796,6 +941,12 @@ def main():
         env['QT_SCALE_FACTOR'] = args.scale
     else:
         env.pop('QT_SCALE_FACTOR', None)
+    if args.color_scheme:
+        env['WIZZ_COLOR_SCHEME'] = args.color_scheme
+    if args.high_contrast:
+        env['WIZZ_HIGH_CONTRAST'] = '1'
+    if args.fonts:
+        env['WIZZ_FONTS'] = args.fonts
     if args.scenario in CRASH_SCENARIOS:
         return run_crash(args, env, work_dir, replay_root)
 
@@ -803,6 +954,16 @@ def main():
     out_dir = os.path.join(work_dir, 'out')
     data_root = os.path.join(work_dir, 'data')
     replay = prepare(replay_root, work_dir) if prepare else os.path.join(replay_root, args.scenario)
+    settings_path = os.path.join(data_root, 'settings.json')
+    settings_text = None
+    if window:
+        # settings.json holds the window size in device pixels (01 §13); the autotest run loads it
+        # like a normal start and must not write it back.
+        ratio = float(args.scale or 1)
+        os.makedirs(data_root)
+        settings_text = json.dumps({'WindowWidth': round(window[0] * ratio), 'WindowHeight': round(window[1] * ratio)})
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            f.write(settings_text)
     command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root, '--replay', replay,
                '--fixed-now', FIXED_NOW, '--diagnostics'] + flags
     print('running:', subprocess.list2cmdline(command), '(QT_SCALE_FACTOR=%s)' % (args.scale or 'unset'))
@@ -828,20 +989,40 @@ def main():
     checker = Checker(summary, diagnostics, out_dir)
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
-    checker.expect(not os.path.exists(os.path.join(data_root, 'settings.json')), 'settings.json written in autotest')
+    checker.look(expected_look(env))
+    if window is None and not args.scale:
+        # At the default window every status a search ends with is shown in full (01 §10.1; the
+        # request-cap refusal of over_500 ends with the advice how to fix the search).
+        for index, search in enumerate(diagnostics.get('searches') or []):
+            checker.expect(search.get('finalStatusCut') is False,
+                           'searches.%d: the status line is cut at the default window: %r' %
+                           (index, search.get('finalStatus')))
+    if settings_text is None:
+        checker.expect(not os.path.exists(settings_path), 'settings.json written in autotest')
+    else:
+        with open(settings_path, encoding='utf-8') as f:
+            checker.expect(f.read() == settings_text, 'settings.json changed in autotest')
+        # The window gets the size it asked for where the work area holds it. Under QT_SCALE_FACTOR
+        # the frame margins convert inexactly and the window comes out 1-4 % smaller (D-52), so
+        # the exact size is checked at the real scale only.
+        work = diagnostics.get('display', {}).get('screenAvailable') or [0, 0, 0, 0]  # logical pixels
+        if not args.scale and work[2] >= window[0] and work[3] >= window[1]:
+            checker.diag_equal('display.outerDeviceSize', [window[0], window[1]])
     checker.expect(not os.path.exists(os.path.join(data_root, 'errors.log')), 'errors.log written: the app crashed')
     timer = diagnostics.get('timer', {})
     events = diagnostics.get('uiEvents') or {}
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
           'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
-          'work area %s; %s' %
+          'work area %s; look %s (%s, %s); %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
            events.get('longestBusyCpuMs'), events.get('longestBusyOwnMs'),
            diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('display', {}).get('windowFrame'),
-           diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('os')))
+           diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('look'),
+           diagnostics.get('environment', {}).get('style'), diagnostics.get('environment', {}).get('fontFamily'),
+           diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:
             print('FAILED:', failure)

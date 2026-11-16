@@ -13,6 +13,7 @@
 #include "round_trip_grid.hpp"
 #include "search_button.hpp"
 #include "update_bar.hpp"
+#include "ui_style.hpp"
 #include "window_placement.hpp"
 
 #include "wizz/ui/strings.hpp"
@@ -161,7 +162,16 @@ void MainWindow::build()
     // (D-46) takes its height for the width between the input panel and the tabs.
     layout->addWidget(input_);
     layout->addWidget(update_bar_);
-    layout->addWidget(tabs_, 1);
+    // The results sit in a rounded card (the tab pane) with the same side margins as the
+    // input cards above them.
+    auto* results = new QWidget(central);
+    results->setObjectName(QStringLiteral("resultsArea"));
+    auto* results_layout = new QVBoxLayout(results);
+    results_layout->setContentsMargins(kResultsMargins);
+    results_layout->setSpacing(0);
+    tabs_->setParent(results);
+    results_layout->addWidget(tabs_);
+    layout->addWidget(results, 1);
     layout->addWidget(busy_);
     setCentralWidget(central);
 
@@ -321,6 +331,14 @@ ui::AppSettings MainWindow::current_settings() const
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
+
+bool MainWindow::event(QEvent* event)
+{
+    if (event->type() == QEvent::ThemeChange) {
+        style::schedule_appearance_refresh();  // e.g. High Contrast switched on or off
+    }
+    return QMainWindow::event(event);
+}
 
 void MainWindow::showEvent(QShowEvent* event)
 {

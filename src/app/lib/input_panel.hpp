@@ -1,17 +1,24 @@
 #pragma once
-// The input panel at the top of the main window (01 §4.2-§4.5, §6.1-§6.4):
+// The input panel at the top of the main window (01 §4.2-§4.5, §6.1-§6.4) in the
+// look of DECISIONS D-53: the inputs are grouped into four titled cards
+// (SectionCard) in a 2 x 2 grid, read left to right, top to bottom:
 //
-//   padding (10, 8, 10, 4), three wrapping rows (FlowLayout, margin (0, 1, 0, 1)):
-//   Row 1: From [_from] within [_fromRadius] km  Gap(24)  To [_to] within [_toRadius] km  (empty “To” = anywhere)
-//   Row 2: Outbound between [_outFrom] and [_outTo]  Gap(24)  Adults [_adults]  Gap(8)  [_fare]  Gap(8)
-//          Prices in [_currency]  Gap(16)  [Search outbound]
-//   Row 3: Return between [_retFrom] and [_retTo]  Gap(24)  Round trips: stay [_minNights] to [_maxNights]
-//          nights  Gap(16)  [Search return]  Return flights go from the destination area back to …
-//   then the grey, wrapping `_resolved` line (margin (3, 4, 3, 2)).
+//   ┌ WHERE  (empty “To” = anywhere) ──────────┐  ┌ TRAVELLERS & PRICES ───────────────┐
+//   │ From [_from        ] within [_fromRadius] km│  │ Adults [_adults]  [_fare          ] │
+//   │ To   [_to          ] within [_toRadius  ] km│  │ Prices in [_currency]              │
+//   └──────────────────────────────────────────────┘  └────────────────────────────────────┘
+//   ┌ OUTBOUND ────────────────────────────────────┐  ┌ RETURN  Return flights go from … ──┐
+//   │ between [_outFrom] and [_outTo]              │  │ between [_retFrom] and [_retTo]    │
+//   │                           [Search outbound]  │  │ Round trips: stay [_minNights] to  │
+//   └──────────────────────────────────────────────┘  │ [_maxNights] nights [Search return]│
+//                                                      └────────────────────────────────────┘
+//   then the muted, wrapping `_resolved` line.
 //
-// Labels have margin (3, 7, 3, 0), hints are GrayText with margin (10, 7, 3, 0),
-// inputs keep the WinForms default margin 3. Widths, defaults, ranges and steps
-// are those of the 01 §4.4 table.
+// The place boxes stretch with the window; the other inputs keep their width.
+// At narrow widths the Search return button moves under the night limits
+// (TrailingRowLayout), so the minimum window (980 x 600) clips nothing. Both
+// search buttons sit at the bottom right of their cards, on one line: the second
+// row of cards is as tall as the Return card's two rows anyway (D-53).
 //
 // The date and nights coupling (01 §6.1, §6.2) is ui::DateRules: the panel
 // forwards every picker / nights change (user or code) to the model and shows the
@@ -23,9 +30,9 @@
 // Enter (the window's AcceptButton) presses: Search outbound for the place,
 // radius, outbound date, adults, fare and currency boxes; Search return for the
 // return dates; nothing for the night boxes; other controls keep the last
-// mapping. The tab order is origin, radius, destination, radius, outbound dates,
-// adults, fare, currency, Search outbound, return dates, night limits, Search
-// return.
+// mapping. The tab order follows the cards: origin, radius, destination, radius,
+// adults, fare, currency, outbound dates, Search outbound, return dates, night
+// limits, Search return (01 §6.3 had the outbound dates before adults; D-54).
 
 #include "wizz/core/domain.hpp"
 #include "wizz/core/locale.hpp"
@@ -50,7 +57,6 @@ class QLabel;
 namespace wizz::app {
 
 class DatePicker;
-class FlowLayout;
 class FractionalSpinBox;
 class PlaceCombo;
 class SearchButton;
@@ -177,12 +183,11 @@ public:
     [[nodiscard]] SearchButton* search_outbound_button() const noexcept { return search_out_; }
     [[nodiscard]] SearchButton* search_return_button() const noexcept { return search_ret_; }
     [[nodiscard]] QLabel* resolved_label() const noexcept { return resolved_; }
-    /// Row 0..2 (the three wrapping rows) and their layouts.
+    /// The section cards 0..3: Where, Travellers & prices, Outbound, Return (null otherwise).
     [[nodiscard]] QWidget* row(int index) const;
-    [[nodiscard]] FlowLayout* row_layout(int index) const;
     /// The controls SetWorking disables, in the 01 §6.4 order.
     [[nodiscard]] std::vector<QWidget*> working_controls() const;
-    /// The tab order of 01 §6.3.
+    /// The Tab order of D-54 (the cards as they are read).
     [[nodiscard]] std::vector<QWidget*> tab_order() const;
 
 Q_SIGNALS:
@@ -217,8 +222,7 @@ private:
     bool working_ = false;
     AcceptTarget accept_target_ = AcceptTarget::search_outbound;
 
-    QWidget* rows_[3]{};
-    FlowLayout* row_layouts_[3]{};
+    QWidget* rows_[4]{};
     PlaceCombo* from_ = nullptr;
     FractionalSpinBox* from_radius_ = nullptr;
     PlaceCombo* to_ = nullptr;

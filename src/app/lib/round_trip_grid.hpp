@@ -28,11 +28,11 @@
 
 class QAction;
 class QCheckBox;
-class QLabel;
 class QMenu;
 
 namespace wizz::app {
 
+class ElidedLabel;
 class GridTableView;
 
 class RoundTripGrid final : public QWidget {
@@ -80,7 +80,7 @@ public:
     [[nodiscard]] GridTableView* table() const noexcept { return table_; }
     [[nodiscard]] QCheckBox* same_home_box() const noexcept { return same_home_; }
     [[nodiscard]] QCheckBox* same_away_box() const noexcept { return same_away_; }
-    [[nodiscard]] QLabel* summary_label() const noexcept { return summary_; }
+    [[nodiscard]] ElidedLabel* summary_label() const noexcept { return summary_; }
 
 Q_SIGNALS:
     /// Either checkbox changed (`FiltersChanged` → MainForm.RecomputeTrips).
@@ -99,7 +99,7 @@ private:
     GridTableView* table_ = nullptr;
     QCheckBox* same_home_ = nullptr;
     QCheckBox* same_away_ = nullptr;
-    QLabel* summary_ = nullptr;
+    ElidedLabel* summary_ = nullptr;
     QMenu* menu_ = nullptr;
     GridActions actions_;
     bool syncing_ = false;  ///< model-driven view changes are not user navigation

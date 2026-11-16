@@ -5,11 +5,13 @@
 //
 //   [▌] WizzairHelper 1.2.0 is ready to install. It will be …   [Restart and update]  Later
 //
-// Look: the window's form font (Segoe UI 9 pt) in ControlText on a light tint of
-// the Wizz magenta, a 4 px magenta accent at the left edge, the action as a
-// magenta search-style button (01 §4.5) and "Later" as a small flat button.
-// Padding (10 + accent, 4, 8, 4). The message wraps when the window is too narrow,
-// so nothing is clipped at 100–200 %.
+// Look (DECISIONS D-53): a rounded card inset like the input cards (16 px at the
+// sides, 6 px below them), the window's UI font in the theme's text colour on a
+// tint of the Wizz magenta, a 4 px accent at the card's left edge, the action as
+// a magenta search-style button (01 §4.5) and "Later" as a small flat button.
+// Padding (10 + accent, 4, 8, 4) inside the card. The message wraps when the
+// window is too narrow, so nothing is clipped at 100–200 %. The colours follow
+// changes of the look.
 //
 // Showing the bar never moves the keyboard focus; its two buttons follow the input
 // panel in the Tab order while it is visible. It renders ui::UpdateBarView and
@@ -34,6 +36,8 @@ class UpdateBar final : public QWidget {
 public:
     /// Width of the magenta accent at the left edge.
     static constexpr int kAccentWidth = 4;
+    /// Between the widget's edges and the card it paints.
+    static constexpr QMargins kOuterMargins{16, 6, 16, 0};
     /// Padding around the contents, the accent not included.
     static constexpr QMargins kPadding{10, 4, 8, 4};
     /// Space between the message, the action and "Later".
