@@ -181,12 +181,27 @@ entry, the optional desktop shortcut, *Settings > Apps* and the uninstaller show
 the generic program icon, and that the title bar and taskbar button do at 100 %, 150 % and 200 %
 display scaling. Windows caches icons: if an old one shows, sign out and in before judging.
 
+**The look where only Windows can switch it** (DECISIONS D-53..D-57). The tests switch light,
+dark and High Contrast through the app's own switches, in-process and end to end, but nobody
+toggles Windows itself in CI. For a release that changes the look, start the installed app and,
+while it shows results:
+
+- switch *Settings > Personalization > Colors > Choose your app mode* between Light and Dark: the
+  window, its title bar, the grids, the open calendar and a tooltip follow at once, without a
+  restart;
+- turn on a contrast theme (*Settings > Accessibility > Contrast themes*, e.g. Night sky): the app
+  shows the theme's colours with the plain Windows controls and stays readable; turn it off again
+  and the look comes back;
+- if a Windows 10 machine or real 150 % / 200 % monitors are at hand, check the window at the
+  default and the minimum size there (both are simulated otherwise, RELEASE_CHECKS.md).
+
 ## Checklist
 
 ```
 [ ] owner said "release"; patch or minor decided
 [ ] CI green on HEAD (msvc-release, msvc-debug and clang-cl-release)
 [ ] icon or installer changed: installed by hand, icons checked (Checking the installer locally)
+[ ] look changed: live light/dark switch and a contrast theme checked by hand (Checking the installer locally)
 [ ] notes written in release-notes-X.Y.Z.md
 [ ] version bumped in CMakeLists.txt only; commit "Release X.Y.Z"
 [ ] git tag vX.Y.Z; git push origin main; git push origin vX.Y.Z

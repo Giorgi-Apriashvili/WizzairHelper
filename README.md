@@ -13,6 +13,9 @@ wizzair.com.
 WizzairHelper is an independent project. It is not affiliated with, endorsed by or connected to
 Wizz Air; its icon is original artwork, not an airline logo.
 
+It follows Windows' light or dark app mode, also when you switch it while the app runs, and
+Windows' High Contrast themes.
+
 Native C++23 / Qt 6 Widgets / libcurl, built with CMake and vcpkg (MSVC x64).
 
 ## Download / install

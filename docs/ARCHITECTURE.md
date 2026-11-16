@@ -58,6 +58,28 @@ Header layout: public headers under `src/<target>/include/wizz/<target>/…`, in
 
 The build needs no image tools: it compiles the committed `.ico` and PNGs as they are.
 
+## The look (DECISIONS D-53..D-57)
+
+The app draws its own look instead of the WinForms one of 01; these files hold it:
+
+| File | What |
+|---|---|
+| `src/app/lib/ui_style.hpp/.cpp` | `style::Theme`: the light, dark and High Contrast colour tokens; the fonts with their Windows 10 fallbacks; icon glyphs painted from their outlines; choosing the look (High Contrast, `WIZZ_COLOR_SCHEME`, the Windows app mode), installing it, following Windows' changes (`refresh_appearance`, `ThemeNotifier`) |
+| `src/app/lib/modern_style.hpp/.cpp` | `ModernStyle`, the `QProxyStyle` over Fusion that paints inputs, buttons, check boxes, tabs, headers, scroll bars, list and menu items, popups, tooltips and focus rings from the tokens; `control_height` |
+| `src/app/lib/section_card.hpp/.cpp` | `SectionCard` (a titled input card) and `GlyphLabel` (one icon glyph) |
+| `src/app/lib/trailing_row_layout.hpp/.cpp` | The card row that keeps a search button at its right end and moves it under the row when it does not fit |
+| `src/app/lib/panel_progress_bar.hpp/.cpp` | The busy panel's self-painted bar, still while idle (D-34) |
+
+Widgets that copy a token into a palette, brush or text format connect to `style::theme_notifier()`
+(`style::on_theme_change`, `style::set_text_tone`); custom-painted widgets read `style::theme()` when
+they paint. No style sheets.
+
+Their tests in `tests/gui`: `look_test.cpp` (choice of the look, live switch, High Contrast, fonts,
+WCAG contrast), `modern_style_test.cpp`, `trailing_row_layout_test.cpp`, the widget tests of each
+control, and `look_snapshot_test.cpp` (renders every surface for a review; manual). Test support:
+`look_test_support.hpp` (the suite's look and `LookGuard`) and `minimum_window.hpp` (the client areas
+of the minimum and default windows).
+
 ## Code conventions
 
 - Namespace `wizz` (sub-namespaces only where they add clarity, e.g. `wizz::http`).
@@ -95,6 +117,9 @@ The build needs no image tools: it compiles the committed `.ico` and PNGs as the
 - Tests never touch live hosts or the user profile; caches use temporary directories.
 - The suite runs under en-US with a fixed clock (2026-11-02T10:00:00Z, local zone UTC) unless a case
   says SYSTEM.
+- GUI tests run under the app's own look (light, High Contrast off) on the minimal Qt platform
+  with real fonts (`QT_QPA_PLATFORM=minimal:enable_fonts`), so layout tests measure what Windows
+  shows; tests that change the look use `LookGuard` (DECISIONS D-57).
 - Tests hold on a busy CI runner (4 shared vCPUs, 8 test processes at once, Windows Server):
   wait for the condition itself (`wizz::test::pump_until`, `gui::wait_until`, capped at
   `kWaitCap`; a cap costs nothing when the condition holds), never a fixed sleep as a

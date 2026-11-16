@@ -65,8 +65,7 @@ without a window.
 | `Controller` (QObject) | 01 §5, §6.4, §11, §12.2 | The MainForm flows as coroutines (see below): LoadCatalogAsync, PrepareAsync / ResolveAsync (+ chooser), SearchOutbound/Return, PlanReturnFromAsync, RunLegAsync (plan, 0-request path, budget gate, streaming, final status), OnCurrencyChanged, RecomputeTrips, UpdateTabTitles, Log, SetWorking. Modal boxes through injectable `ControllerDialogs`. |
 | `AutoTestRunner` (QObject) | 01 §17.2 | The self-test script as a coroutine; screenshots through an injectable `Screenshotter` (default `save_window_png`). |
 | `InputPanel` (QWidget) | 01 §4.2–4.5, §6.1–6.2, D-53, D-54 | Four `SectionCard`s in a 2 x 2 grid (Where, Travellers & prices, Outbound, Return; `TrailingRowLayout` rows move a search button under its row when it does not fit) + the `_resolved` label with an info icon; the Tab order follows the cards (D-54); `PlaceCombo` ×2 (editable, completer, tooltips), `FractionalSpinBox` ×6, `DatePicker` ×4 (`ddd dd MMM yyyy`, clamped to [today, today+2y]), fare/currency combos, two styled magenta search buttons. Applies `ui::DateRules` for coupling. Emits `search_outbound_requested`, `search_return_requested`, `currency_changed`, `nights_changed`. |
-| `FlowLayout` (QLayout) | 01 §4.3 | Wrapping row layout (Qt "Flow Layout" example semantics, heightForWidth); the input panel no longer uses it (D-53). |
-| `SectionCard`, `GlyphLabel`, `TrailingRowLayout` | D-53 | A titled input card (rounded surface, accent icon, upper-case caption, optional muted hint); one icon-font glyph painted from its outline; a row of leading widgets with a trailing one at the right that wraps under the row when the width is short (heightForWidth). |
+| `SectionCard`, `GlyphLabel`, `TrailingRowLayout` | D-53 (replace 01 §4.3's FlowLayout rows) | A titled input card (rounded surface, accent icon, upper-case caption, optional muted hint); one icon-font glyph painted from its outline; a row of leading widgets with a trailing one at the right that wraps under the row when the width is short (heightForWidth). |
 | `ModernStyle` (QProxyStyle over Fusion), `style::` (`ui_style.hpp`) | D-53..D-56 | Paints the look from `style::theme()`: inputs, buttons, check boxes, tabs, headers, scroll bars, list items, menus, popup frames, tooltips, focus rings; the calendar's arrows as chevron icons. `ui_style` holds the light, dark and High Contrast tokens, the fonts, the icon drawing, the choice of the look (High Contrast, WIZZ_COLOR_SCHEME, the Windows app mode), `refresh_appearance()` and the `ThemeNotifier` the widgets listen to. |
 | `FractionalSpinBox` (QAbstractSpinBox) | 01 §4.4 notes | Displays whole numbers (half away from zero), accepts typed fractions with the locale separator, keeps the fractional value; `int_value()` truncates toward zero. |
 | `FlightGrid` (QWidget: top bar + QTableView) | 01 §8 | `FlightTableModel` (`KeyedTableModel` over `ui::FlightGridModel`, which owns the index vector, sorts, view lists, pick and RestoreSelection): a rebuild is one model reset; a streamed "All fares" batch lands at scattered sorted positions, so it is one `layoutAboutToBeChanged`/`layoutChanged` with persistent indexes following each row's `Idx` (a batch into an empty grid is one `beginInsertRows`); a header sort is one layout change. View combo (`activated` = user choice), summary label, row colouring, context menu, copy with a timer-driven clipboard retry, open URL, Enter/double-click open, self-test accessors. Side effects go through injectable `GridActions` (browser, clipboard, MessageBox). |
@@ -96,7 +95,7 @@ stretch (minimum 180). The resolved line follows 4 px below in 9 pt muted text. 
 has padding (12, 4, 12, 4). Inputs and buttons are `ModernStyle::control_height` = max(26, font
 height + 10) tall; grid rows are the 9 pt data font's height + 12 (28 px at 100 %); header cells
 have 9 / 5 px padding. With these, 14 round trips are in view at the default 1320 x 820 window
-(`LookSnapshots` checks it); the prototype had 12 and the windowsvista look 19.
+(`MainWindowLayout.*` checks it in CTest, `LookSnapshots` on the real platform); the prototype had 12 and the windowsvista look 19.
 
 **Fonts.** UI: Segoe UI Variable Text 10 pt; grid cells: Segoe UI Variable Text 9 pt with
 semibold 10 pt headers; captions: Segoe UI Variable Small Semibold 8 pt, upper case, +0.8 px;
@@ -145,6 +144,32 @@ schedule `refresh_appearance()`, which installs the new theme, style and palette
 connects to it (`style::on_theme_change`, `style::set_text_tone`); custom-painted widgets read
 `style::theme()` when they paint. High Contrast (D-55) switches to windowsvista and the system
 palette, and back.
+
+**High Contrast** (D-55). When Windows reports a contrast theme (`SPI_GETHIGHCONTRAST`), the app
+switches to the plain native style (windowsvista, else Windows) and the system palette, and takes
+every token from that palette: Window, WindowText, Base, Highlight, HighlightedText, Button and
+GrayText. Nothing is tinted or mixed: muted text is the text colour, the status colours are the
+text colour (the status texts say what happened), cheapest rows are not tinted, the calendar has
+no weekend colour, a search button is Highlight with HighlightedText (a disabled one a GrayText
+outline), the spinner and the bar use opaque system colours. The app font stays. High Contrast
+wins over `WIZZ_COLOR_SCHEME`.
+
+**Switches** (D-56, BUILDING.md): `WIZZ_COLOR_SCHEME=light|dark` forces a scheme (the title bar
+follows), `WIZZ_HIGH_CONTRAST=1|0` overrides the contrast check, `WIZZ_FONTS=windows10` leaves out
+the Windows 11 families. They are read at every evaluation of the look, so tests switch a running
+window by changing them and calling `style::refresh_appearance()`.
+
+**Tests** (D-57). The GUI tests run under this look (light, High Contrast pinned off; the test main
+installs it like `main()`), on the minimal platform with its Windows font database
+(`minimal:enable_fonts`), so their metrics are Windows' own. `Look.*` covers the choice of the
+look, a live switch of a running window (palettes, cached brushes, labels, calendars, the busy bar,
+the update bar), the High Contrast fallback, the Windows 10 families and the WCAG contrast of
+every token pair; `ModernStyle.*` the control, header, tab, scroll bar and item metrics the layout
+relies on; `InputPanel.*` the cards, the Tab order of D-54 and the minimum window;
+`MainWindowLayout.*` the whole window at the client area of 980 x 600 (no clipping, 5 round trips
+in view) and of 1320 x 820 (14 round trips); `BusyPanelTest.An_idle_bar_is_completely_still_D_34`
+the still bar. End to end, `named_destination`, `cancel_retrying` and `heavy_cached` also run in
+dark, and `named_destination` at the minimum window, and every run checks the look it showed.
 
 **Review.** `wizzairhelper_gui_tests --gtest_filter=LookSnapshots.*` with
 `WIZZ_GUI_SNAPSHOT_DIR=<dir>` on the real windows platform renders the window at the default and
@@ -206,7 +231,8 @@ closes unless `--keep-open`. Hidden companions `--data-root`, `--replay` and `--
   `TimerGapProbe` (gaps of the 40 ms timer: start→tick, tick→tick, last tick→stop; the runner's
   screenshots excluded), `EventWatchdog` (exclusive time of every UI-thread dispatch via
   `Application::notify`), the cancel record, per-search requests and durations, the final grids
-  against the stored results (rows not in the result, duplicate keys), display/DPI data and
+  against the stored results (rows not in the result, duplicate keys), display/DPI data, the
+  look in use (`environment.look`, the palette's window colour, the style, the UI font's family) and
   `layout_problems()` (`layout_check.hpp`: clipped, cut-off, overlapping widgets, cut texts, tabs
   that do not fit, Cancel fully visible) at every screenshot.
 
@@ -224,7 +250,9 @@ after 1.5 s), `cancel_retrying` (503, cancelled in the 5 s back-off). `heavy_cac
 per day over 105 days (≈ 6500 fares, 186 requests), `--warm-cache --no-pacing` (cancelled at 0 ms
 for `cancel_cached`). CTest runs the real exe on each (label `autotest`,
 `tests/gui/check_autotest.py`, Python `-I`, serial, always `--diagnostics`), plus
-`named_destination`, `cancel_retrying` and `heavy_cached` at 150 % and 200 % (`QT_SCALE_FACTOR`),
+`named_destination`, `cancel_retrying` and `heavy_cached` at 150 % and 200 % (`QT_SCALE_FACTOR`) and
+in the dark look (`.dark`; `named_destination.dark.scale200` too), `named_destination` at the
+980 x 600 minimum window in light and dark (`.minimum`),
 and checks summary.json, diagnostics.json (timer gap below 100 ms, 250 ms in Debug) and the PNGs;
 the in-process tests (`ControllerFlows.*`, `AutoTestRunner.*`) use the same rules without their
 delays. summary.json carries no URLs (C-07), so booking links are asserted in-process. Results:

@@ -59,9 +59,12 @@ the configure step after adding files.
 
 - `wizzairhelper_tests`: the 05 conformance catalogue and the ui_logic tests (fixtures only, fixed
   clock, en-US).
-- `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, run by CTest with
-  `QT_QPA_PLATFORM=minimal` (no window appears). Run the binary directly without that variable to
-  use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots, and
+- `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, under the app's own look
+  (light, High Contrast off; `WIZZ_COLOR_SCHEME=dark` runs them all in the dark look), run by CTest
+  with `QT_QPA_PLATFORM=minimal:enable_fonts` (no window appears; the minimal platform with Windows'
+  fonts, so the layout tests measure real text — plain `minimal` draws every glyph as a box, and the
+  layout tests then fail). Run the binary directly without that variable to use the real `windows`
+  platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots, and
   `LookSnapshots.*` then renders the whole look for a review: the window at the default and the
   minimum size and every popup, dialog, hover and focus state in light and dark, the Windows 10
   fonts and the High Contrast fallback (DECISIONS D-53..D-56), checking their layout and that 14
@@ -75,7 +78,10 @@ the configure step after adding files.
   PowerShell, and its version resource (D-35, D-37). No window opens.
 - `autotest.*` (label `autotest`): the real `WizzairHelper.exe` in its hidden self-test mode on
   replayed scenarios, checked by `tests/gui/check_autotest.py`. They open real windows one at a
-  time and need an interactive desktop session. `ctest --preset debug -L autotest` runs only these,
+  time and need an interactive desktop session. A name's suffixes are its variants: `.scale150` /
+  `.scale200` (QT_SCALE_FACTOR), `.dark` (the dark look) and `.minimum` (the 980 x 600 window), e.g.
+  `autotest.named_destination.dark.scale200`. Every run also checks that the app showed the look it
+  was asked for: High Contrast, else `WIZZ_COLOR_SCHEME`, else the Windows app mode. `ctest --preset debug -L autotest` runs only these,
   `-LE autotest` everything else.
 
 ## Release artefacts
@@ -210,3 +216,7 @@ screenshots and diagnosis these environment variables override what Windows says
 | `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
 | `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
 | `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
+
+The GUI test binary reads them too: `WIZZ_COLOR_SCHEME=dark` runs the whole suite in the dark look
+(its tests compare with the theme's tokens, not with fixed colours), `WIZZ_FONTS=windows10` with the
+Windows 10 families. Tests that change the look restore these variables afterwards.
