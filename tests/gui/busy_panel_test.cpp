@@ -1,7 +1,7 @@
-// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11, D-34):
-// texts, colours, enabled states, bar, spinner, timers, taskbar forwarding, Cancel/Esc
-// idempotence, the still idle bar and the font-driven layout of §10.1. Time comes from a
-// FixedClock.
+// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11, D-34) in
+// the look of D-53: texts, the theme's colours, enabled states, bar, spinner, timers,
+// taskbar forwarding, Cancel/Esc idempotence, the completely still idle bar and the
+// font-driven layout of §10.1. Time comes from a FixedClock.
 
 #include "busy_panel.hpp"
 #include "diagnostics_test_support.hpp"
