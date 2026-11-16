@@ -31,6 +31,12 @@ jobs:
             configure: msvc-x64
             build: debug
             test: debug
+          # A second compiler catches what MSVC lets through (e.g. attributes on friend
+          # declarations, implicit lambda captures, templates instantiated too early).
+          - name: clang-cl-release
+            configure: clang-cl-x64
+            build: clang-cl-release
+            test: clang-cl-release
     steps:
       # vcpkg is the pinned external/vcpkg submodule. Shallow is enough: its commit is the
       # manifest's builtin-baseline and every override names the version at that commit.
@@ -75,6 +81,26 @@ jobs:
             vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}-
             vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-
             vcpkg-${{ runner.os }}-
+
+      # clang-cl builds with Ninja: the developer environment provides the Windows SDK and MSVC
+      # library paths, and the image's LLVM goes first on PATH (the MSVC STL needs clang 20+).
+      - name: MSVC developer environment
+        if: matrix.name == 'clang-cl-release'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Put LLVM on PATH
+        if: matrix.name == 'clang-cl-release'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
+
+      - name: Show the clang-cl in use
+        if: matrix.name == 'clang-cl-release'
+        shell: pwsh
+        run: |
+          (Get-Command clang-cl).Source
+          clang-cl --version
+          (Get-Command ninja).Source
 
       - name: Configure
         run: cmake --preset ${{ matrix.configure }}

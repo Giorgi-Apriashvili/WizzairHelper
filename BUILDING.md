@@ -32,6 +32,7 @@ ctest --preset debug               # or: --preset release
 |---|---|
 | `msvc-x64` | App, core/services/ui_logic libraries, conformance tests and GUI tests; build presets `debug`, `release` and `dist` (the release artefacts) |
 | `msvc-x64-core` | Core, services, ui_logic and their tests, no Qt (`core-debug` / `core-release`) |
+| `clang-cl-x64` | Same targets built with clang-cl 20+ and Ninja Multi-Config (build/test preset `clang-cl-release`); CI's second compiler. Needs `clang-cl` and `ninja` on `PATH` |
 | `msvc-x64-release` | App only, no tests; build preset `package` = the `dist` target in this tree |
 | workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full`; `release-package` = configure `msvc-x64` + build `dist` |
 

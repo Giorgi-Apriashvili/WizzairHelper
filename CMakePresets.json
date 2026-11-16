@@ -1,96 +1,212 @@
 {
   "version": 8,
-  "cmakeMinimumRequired": { "major": 3, "minor": 30, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 30,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "windows-base",
       "hidden": true,
       "generator": "Visual Studio 18 2026",
-      "architecture": { "value": "x64", "strategy": "set" },
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/external/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "VCPKG_HOST_TRIPLET": "x64-windows"
       },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     },
     {
       "name": "msvc-x64",
       "displayName": "MSVC x64 — app + tests",
       "inherits": "windows-base",
-      "cacheVariables": { "WIZZ_BUILD_GUI": "ON", "WIZZ_BUILD_TESTS": "ON" }
+      "cacheVariables": {
+        "WIZZ_BUILD_GUI": "ON",
+        "WIZZ_BUILD_TESTS": "ON"
+      }
     },
     {
       "name": "msvc-x64-core",
       "displayName": "MSVC x64 — core, services and tests (no Qt)",
       "inherits": "windows-base",
-      "cacheVariables": { "WIZZ_BUILD_GUI": "OFF", "WIZZ_BUILD_TESTS": "ON" }
+      "cacheVariables": {
+        "WIZZ_BUILD_GUI": "OFF",
+        "WIZZ_BUILD_TESTS": "ON"
+      }
     },
     {
       "name": "msvc-x64-release",
       "displayName": "MSVC x64 — app only, no tests (release artefacts: build preset package)",
       "inherits": "windows-base",
-      "cacheVariables": { "WIZZ_BUILD_GUI": "ON", "WIZZ_BUILD_TESTS": "OFF" }
+      "cacheVariables": {
+        "WIZZ_BUILD_GUI": "ON",
+        "WIZZ_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "clang-cl-x64",
+      "displayName": "clang-cl x64 — app + tests (Ninja Multi-Config; needs clang-cl 20+ and Ninja on PATH)",
+      "inherits": "windows-base",
+      "generator": "Ninja Multi-Config",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "WIZZ_BUILD_GUI": "ON",
+        "WIZZ_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "debug", "configurePreset": "msvc-x64", "configuration": "Debug" },
-    { "name": "release", "configurePreset": "msvc-x64", "configuration": "Release" },
-    { "name": "core-debug", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
-    { "name": "core-release", "configurePreset": "msvc-x64-core", "configuration": "Release" },
+    {
+      "name": "debug",
+      "configurePreset": "msvc-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "core-debug",
+      "configurePreset": "msvc-x64-core",
+      "configuration": "Debug"
+    },
+    {
+      "name": "core-release",
+      "configurePreset": "msvc-x64-core",
+      "configuration": "Release"
+    },
+    {
+      "name": "clang-cl-release",
+      "configurePreset": "clang-cl-x64",
+      "configuration": "Release"
+    },
     {
       "name": "dist",
       "displayName": "Release artefacts: portable ZIP + Inno Setup installer in build/msvc-x64/dist",
       "configurePreset": "msvc-x64",
       "configuration": "Release",
-      "targets": [ "dist" ]
+      "targets": [
+        "dist"
+      ]
     },
     {
       "name": "package",
       "displayName": "The dist target in the app-only tree: build/msvc-x64-release/dist",
       "configurePreset": "msvc-x64-release",
       "configuration": "Release",
-      "targets": [ "dist" ]
+      "targets": [
+        "dist"
+      ]
     }
   ],
   "testPresets": [
     {
       "name": "test-base",
       "hidden": true,
-      "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error", "jobs": 8 }
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 8
+      }
     },
-    { "name": "debug", "inherits": "test-base", "configurePreset": "msvc-x64", "configuration": "Debug" },
-    { "name": "release", "inherits": "test-base", "configurePreset": "msvc-x64", "configuration": "Release" },
-    { "name": "core-debug", "inherits": "test-base", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
-    { "name": "core-release", "inherits": "test-base", "configurePreset": "msvc-x64-core", "configuration": "Release" }
+    {
+      "name": "debug",
+      "inherits": "test-base",
+      "configurePreset": "msvc-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release",
+      "inherits": "test-base",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "core-debug",
+      "inherits": "test-base",
+      "configurePreset": "msvc-x64-core",
+      "configuration": "Debug"
+    },
+    {
+      "name": "core-release",
+      "inherits": "test-base",
+      "configurePreset": "msvc-x64-core",
+      "configuration": "Release"
+    },
+    {
+      "name": "clang-cl-release",
+      "inherits": "test-base",
+      "configurePreset": "clang-cl-x64",
+      "configuration": "Release"
+    }
   ],
   "workflowPresets": [
     {
       "name": "core",
       "displayName": "Configure, build and test core/services (no Qt)",
       "steps": [
-        { "type": "configure", "name": "msvc-x64-core" },
-        { "type": "build", "name": "core-debug" },
-        { "type": "test", "name": "core-debug" }
+        {
+          "type": "configure",
+          "name": "msvc-x64-core"
+        },
+        {
+          "type": "build",
+          "name": "core-debug"
+        },
+        {
+          "type": "test",
+          "name": "core-debug"
+        }
       ]
     },
     {
       "name": "release-package",
       "displayName": "Configure and build the release artefacts (ZIP + installer), as CI does",
       "steps": [
-        { "type": "configure", "name": "msvc-x64" },
-        { "type": "build", "name": "dist" }
+        {
+          "type": "configure",
+          "name": "msvc-x64"
+        },
+        {
+          "type": "build",
+          "name": "dist"
+        }
       ]
     },
     {
       "name": "full",
       "displayName": "Configure, build and test everything",
       "steps": [
-        { "type": "configure", "name": "msvc-x64" },
-        { "type": "build", "name": "debug" },
-        { "type": "test", "name": "debug" }
+        {
+          "type": "configure",
+          "name": "msvc-x64"
+        },
+        {
+          "type": "build",
+          "name": "debug"
+        },
+        {
+          "type": "test",
+          "name": "debug"
+        }
       ]
     }
   ]
