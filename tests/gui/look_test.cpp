@@ -8,12 +8,14 @@
 #include "date_picker.hpp"
 #include "elided_label.hpp"
 #include "flight_table_model.hpp"
+#include "grid_row_delegate.hpp"
 #include "grid_table_view.hpp"
 #include "log_view.hpp"
 #include "look_test_support.hpp"
 #include "modern_style.hpp"
 #include "section_card.hpp"
 #include "ui_style.hpp"
+#include "update_bar.hpp"
 
 #include <QAccessibilityHints>
 #include <QApplication>
@@ -22,8 +24,10 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include <QStyleHints>
+#include <QStyleOptionViewItem>
 #include <QTextCharFormat>
 #include <QToolTip>
+#include <QImage>
 
 #include <gtest/gtest.h>
 
@@ -95,6 +99,31 @@ void expect_window_follows(WindowRig& rig, const style::Theme& expected)
     EXPECT_EQ(calendar->weekdayTextFormat(Qt::Sunday).foreground().color(), expected.accent_text);
     EXPECT_EQ(calendar->palette().color(QPalette::Disabled, QPalette::Text), expected.text_muted);
     EXPECT_EQ(cheapest_background(rig), expected.cheapest);
+    // The grid delegate's kept selection brush (a selected row that is not a cheapest one).
+    const wizz::app::GridTableView* table = rig.outbound().table();
+    const auto* delegate = dynamic_cast<const wizz::app::GridRowDelegate*>(table->itemDelegate());
+    ASSERT_NE(delegate, nullptr);
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        const QModelIndex index = table->model()->index(row, 2);
+        if (index.data(wizz::app::FlightTableModel::RowToneRole).toInt() !=
+            static_cast<int>(wizz::ui::RowTone::cheapest)) {
+            QStyleOptionViewItem option;
+            option.initFrom(table->viewport());
+            option.state.setFlag(QStyle::State_Selected, true);
+            delegate->initStyleOption(&option, index);
+            EXPECT_EQ(option.backgroundBrush.color(), expected.selection) << "the delegate's selection brush";
+            EXPECT_EQ(option.palette.color(QPalette::Text), expected.selection_text);
+            break;
+        }
+    }
+    // The update bar's text, and the busy bar's resting fill (the search ended well: full, in
+    // the success colour softened towards the track).
+    EXPECT_EQ(text_colour(rig.window().update_bar()->message_label()), expected.text);
+    const QImage bar = rig.busy().progress_bar()->grab().toImage();
+    const QColor resting((expected.success.red() + expected.track.red()) / 2,
+                         (expected.success.green() + expected.track.green()) / 2,
+                         (expected.success.blue() + expected.track.blue()) / 2);
+    EXPECT_EQ(bar.pixelColor(bar.width() / 2, bar.height() / 2), resting) << "the busy bar's fill";
 }
 
 TEST(Look, Override_values_parse)
@@ -268,6 +297,20 @@ TEST(Look, Selections_use_the_tint_with_text_colour)
         EXPECT_EQ(palette.color(QPalette::Inactive, QPalette::Highlight), theme.selection);
         EXPECT_EQ(palette.color(QPalette::ToolTipText), theme.text);
     }
+}
+
+TEST(Look, The_contrast_ratio_is_WCAG_2s)
+{
+    // The ratio the token test relies on, against WCAG 2's reference values: black on
+    // white 21:1, a colour on itself 1:1, #767676 the lightest grey with 4.5:1 on white,
+    // #777777 just below, and the ratio does not depend on the order.
+    EXPECT_DOUBLE_EQ(style::contrast_ratio(QColor(Qt::black), QColor(Qt::white)), 21.0);
+    EXPECT_DOUBLE_EQ(style::contrast_ratio(QColor(0x12, 0x34, 0x56), QColor(0x12, 0x34, 0x56)), 1.0);
+    EXPECT_NEAR(style::contrast_ratio(QColor(0x76, 0x76, 0x76), QColor(Qt::white)), 4.54, 0.01);
+    EXPECT_LT(style::contrast_ratio(QColor(0x77, 0x77, 0x77), QColor(Qt::white)), 4.5);
+    EXPECT_NEAR(style::contrast_ratio(QColor(0xC5, 0x00, 0x6E), QColor(Qt::white)), 5.83, 0.01) << "the brand magenta";
+    EXPECT_DOUBLE_EQ(style::contrast_ratio(QColor(Qt::white), QColor(0x76, 0x76, 0x76)),
+                     style::contrast_ratio(QColor(0x76, 0x76, 0x76), QColor(Qt::white)));
 }
 
 TEST(Look, Token_pairs_meet_WCAG_AA)
