@@ -204,6 +204,32 @@ class Checker:
                         '%r (client %r) must start inside it, not above or left of it, with its title bar on '
                         'screen' % (work, minimum, name, frame, client))
 
+    def on_screen_region(self):
+        """The part of the window screenshots that was on the screen, in screenshot pixels, or None
+        when the whole window was. A window larger than a small screen (GitHub's runners have
+        1024 x 768; at 200 % that is 512 x 384 logical pixels) is captured whole by PrintWindow, but
+        what it returns for the off-screen part depends on the machine: white on the runners."""
+        frame = self.diag('display.windowFrame')
+        screen = self.diag('display.screenGeometry')
+        ratio = self.diag('display.devicePixelRatio') or 1
+        if not (isinstance(frame, list) and isinstance(screen, list)):
+            return None
+        left, top = max(frame[0], screen[0]), max(frame[1], screen[1])
+        right = min(frame[0] + frame[2], screen[0] + screen[2])
+        bottom = min(frame[1] + frame[3], screen[1] + screen[3])
+        if (left, top, right, bottom) == (frame[0], frame[1], frame[0] + frame[2], frame[1] + frame[3]):
+            return None
+        return (round((left - frame[0]) * ratio), round((top - frame[1]) * ratio),
+                round((right - left) * ratio), round((bottom - top) * ratio))
+
+    def window_at_default_size(self):
+        """Whether the window opened at its default size (01 §4.1), i.e. the screen was big enough."""
+        outer = self.diag('display.outerDeviceSize')
+        default = self.diag('display.defaultWindow')
+        ratio = self.diag('display.devicePixelRatio') or 1
+        return (isinstance(outer, list) and isinstance(default, list)
+                and outer == [round(default[0] * ratio), round(default[1] * ratio)])
+
     def look(self, expected):
         """D-53..D-56: the run shows `expected` ('light', 'dark' or 'high_contrast')."""
         self.diag_equal('environment.look', expected)
@@ -220,7 +246,7 @@ class Checker:
         if not os.path.isfile(path):
             return  # reported by screenshots()
         try:
-            colour = dominant_colour(path)
+            colour = dominant_colour(path, self.on_screen_region())
         except (ValueError, zlib.error) as error:
             self.failures.append('1-outbound.png: cannot read its pixels: %s' % error)
             return
@@ -701,12 +727,19 @@ def png_rows(path):
     return width, channels, rows
 
 
-def dominant_colour(path):
-    """The most common colour of the PNG at `path` as '#rrggbb' (every 3rd pixel of every 3rd row)."""
+def dominant_colour(path, region=None):
+    """The most common colour of the PNG at `path` as '#rrggbb' (every 3rd pixel of every 3rd row),
+    within `region` = (x, y, width, height) in pixels when given."""
     width, channels, rows = png_rows(path)
+    left, top, right, bottom = 0, 0, width, len(rows)
+    if region is not None:
+        left, top = max(0, region[0]), max(0, region[1])
+        right, bottom = min(width, region[0] + region[2]), min(len(rows), region[1] + region[3])
+        if right <= left or bottom <= top:
+            raise ValueError('no part of the screenshot was on screen')
     counts = Counter()
-    for line in rows[::3]:
-        for x in range(0, width, 3):
+    for line in rows[top:bottom:3]:
+        for x in range(left, right, 3):
             i = x * channels
             counts[bytes(line[i:i + 3])] += 1
     return '#' + counts.most_common(1)[0][0].hex()
@@ -990,7 +1023,13 @@ def main():
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
     checker.look(expected_look(env))
-    if window is None and not args.scale:
+    if window is None and not args.scale and not checker.window_at_default_size():
+        # A screen smaller than the default window (GitHub's runners: 1024 x 768) gives a smaller
+        # window, where a long status may be cut. MainWindowLayout.The_request_cap_refusal_is_
+        # shown_whole_at_the_default_window checks the default size on every machine.
+        print('status lines: not checked, the window is %r device px, not its default %r' %
+              (diagnostics.get('display', {}).get('outerDeviceSize'), diagnostics.get('display', {}).get('defaultWindow')))
+    elif window is None and not args.scale:
         # At the default window every status a search ends with is shown in full (01 §10.1; the
         # request-cap refusal of over_500 ends with the advice how to fix the search).
         for index, search in enumerate(diagnostics.get('searches') or []):

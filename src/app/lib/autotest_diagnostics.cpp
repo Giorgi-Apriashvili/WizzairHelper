@@ -205,6 +205,7 @@ DisplayDiagnostics describe_display(const MainWindow& window)
     display.window_client = window.geometry();
     display.outer_device_size = window.normal_outer_device_size();
     display.minimum_window = MainWindow::kMinimumSize;
+    display.default_window = MainWindow::kDefaultSize;
     display.window_on_screen = screen != nullptr && display.screen_available.contains(display.window_frame);
     return display;
 }
@@ -309,6 +310,8 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     write_size(writer, display.outer_device_size);
     writer.key("minimumWindow");
     write_size(writer, display.minimum_window);
+    writer.key("defaultWindow");
+    write_size(writer, display.default_window);
     writer.key("windowOnScreen").boolean(display.window_on_screen);
     writer.end_object();
 
