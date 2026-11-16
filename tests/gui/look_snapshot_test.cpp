@@ -53,6 +53,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -195,7 +196,11 @@ void render_windows(const QString& prefix, bool count_rows)
         std::printf("%s: %dx%d client, %d round-trip rows in view (viewport %d, row %d, header %d, font %s)\n",
                     qPrintable(prefix), rig.window().width(), rig.window().height(), rows, trips.viewport()->height(),
                     trips.row_height(), trips.horizontalHeader()->height(), qPrintable(trips.font().toString()));
-        if (count_rows) {
+        // The default 1320 x 820 window, unless a small screen (or a large scale) clamped it.
+        const QSize outer = rig.window().normal_outer_device_size();
+        const QSize wanted = wizz::app::MainWindow::kDefaultSize * rig.window().devicePixelRatioF();
+        const bool full_size = std::abs(outer.width() - wanted.width()) <= 3 && std::abs(outer.height() - wanted.height()) <= 3;
+        if (count_rows && full_size) {
             EXPECT_GE(rows, 14) << "round trips in view at the default size";
         }
         save(compose(rig.window(), {}), prefix + QStringLiteral("-window"));
