@@ -153,10 +153,13 @@ public:
     /// std::overflow_error when the magnitude exceeds max_value(); division by
     /// zero throws std::domain_error. Exact quotients keep the natural scale
     /// (1.00 / 2 = 0.50); inexact ones drop trailing zeros (1 / 4 = 0.25).
-    [[nodiscard]] friend Decimal operator+(Decimal a, Decimal b);
-    [[nodiscard]] friend Decimal operator-(Decimal a, Decimal b);
-    [[nodiscard]] friend Decimal operator*(Decimal a, Decimal b);
-    [[nodiscard]] friend Decimal operator/(Decimal a, Decimal b);
+    /// [[nodiscard]] is on the namespace-scope redeclarations below the class:
+    /// an attribute on a friend declaration is only allowed when that declaration
+    /// is a definition ([dcl.attr.grammar]/5), and these are defined in decimal.cpp.
+    friend Decimal operator+(Decimal a, Decimal b);
+    friend Decimal operator-(Decimal a, Decimal b);
+    friend Decimal operator*(Decimal a, Decimal b);
+    friend Decimal operator/(Decimal a, Decimal b);
     [[nodiscard]] friend constexpr Decimal operator-(Decimal a) noexcept
     {
         return Decimal{a.lo_, a.mid_, a.hi_, a.scale_, !a.negative_};
@@ -168,8 +171,8 @@ public:
     Decimal& operator/=(Decimal other) { return *this = *this / other; }
 
     /// Numeric comparison; the scale is ignored (30790 == 30790.0).
-    [[nodiscard]] friend bool operator==(Decimal a, Decimal b) noexcept;
-    [[nodiscard]] friend std::weak_ordering operator<=>(Decimal a, Decimal b) noexcept;
+    friend bool operator==(Decimal a, Decimal b) noexcept;
+    friend std::weak_ordering operator<=>(Decimal a, Decimal b) noexcept;
 
 private:
     constexpr Decimal(std::uint32_t lo, std::uint32_t mid, std::uint32_t hi, int scale, bool negative) noexcept
@@ -184,6 +187,14 @@ private:
     std::uint8_t scale_ = 0;
     bool negative_ = false;
 };
+
+// Redeclarations that carry [[nodiscard]] for the friends declared in the class.
+[[nodiscard]] Decimal operator+(Decimal a, Decimal b);
+[[nodiscard]] Decimal operator-(Decimal a, Decimal b);
+[[nodiscard]] Decimal operator*(Decimal a, Decimal b);
+[[nodiscard]] Decimal operator/(Decimal a, Decimal b);
+[[nodiscard]] bool operator==(Decimal a, Decimal b) noexcept;
+[[nodiscard]] std::weak_ordering operator<=>(Decimal a, Decimal b) noexcept;
 
 /// Writes `value.to_string()` (invariant); lets test frameworks and logs print decimals.
 std::ostream& operator<<(std::ostream& out, const Decimal& value);
