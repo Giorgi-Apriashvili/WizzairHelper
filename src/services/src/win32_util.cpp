@@ -1,10 +1,14 @@
 #include "win32_util.hpp"
 
+#include <algorithm>
 #include <climits>
+#include <format>
 #include <stdexcept>
 
 namespace wizz::win32 {
 namespace {
+
+constexpr DWORD kIoChunk = 1u << 20;
 
 [[nodiscard]] int checked_length(std::size_t size)
 {
@@ -14,7 +18,48 @@ namespace {
     return static_cast<int>(size);
 }
 
+struct LocalFreer {
+    void operator()(wchar_t* memory) const noexcept { ::LocalFree(memory); }
+};
+
 } // namespace
+
+DWORD write_new_file(const std::filesystem::path& path, std::string_view content)
+{
+    const HANDLE raw =
+        ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (raw == INVALID_HANDLE_VALUE) {
+        return ::GetLastError();
+    }
+    const UniqueHandle file{raw};
+    while (!content.empty()) {
+        const auto chunk = static_cast<DWORD>(std::min<std::size_t>(content.size(), kIoChunk));
+        DWORD written = 0;
+        if (::WriteFile(raw, content.data(), chunk, &written, nullptr) == FALSE) {
+            return ::GetLastError();
+        }
+        if (written == 0) {
+            return ERROR_WRITE_FAULT;
+        }
+        content.remove_prefix(written);
+    }
+    // Make the data durable before a rename publishes it.
+    return ::FlushFileBuffers(raw) != FALSE ? ERROR_SUCCESS : ::GetLastError();
+}
+
+std::string error_text(DWORD code)
+{
+    wchar_t* raw = nullptr;
+    const DWORD length = ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0,
+        reinterpret_cast<wchar_t*>(&raw), 0, nullptr); // ALLOCATE_BUFFER: the argument receives the buffer
+    const std::unique_ptr<wchar_t, LocalFreer> owner{raw};
+    std::wstring_view text{raw, raw == nullptr ? 0 : length};
+    while (!text.empty() && (text.back() == L'.' || text.back() == L' ' || text.back() == L'\r' || text.back() == L'\n')) {
+        text.remove_suffix(1);
+    }
+    return text.empty() ? std::format("Windows error {}", code) : to_utf8(text);
+}
 
 std::wstring to_wide(std::string_view utf8)
 {
