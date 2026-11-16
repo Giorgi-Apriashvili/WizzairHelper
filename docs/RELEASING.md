@@ -35,9 +35,11 @@ Python 3).
 
 1. Checkout with the `external/vcpkg` submodule.
 2. **Tag guard** (tags only): the tag must be `v` + the project version.
-3. **vcpkg binary cache** (`VCPKG_DEFAULT_BINARY_CACHE` + `actions/cache`, keyed by the submodule
-   commit, `vcpkg.json` and the runner image). The first run builds Qt from source (Debug and
-   Release) and takes well over an hour; later runs restore it.
+3. **vcpkg binary cache** (`VCPKG_DEFAULT_BINARY_CACHE` + `actions/cache/restore` and `/save`,
+   keyed by the submodule commit, `vcpkg.json` and the runner image). The first run builds Qt from
+   source (Debug and Release) and takes well over an hour; later runs restore it. The save runs
+   right after Configure, even when a later step fails: the plain `actions/cache` saves only on
+   success, and the first run lost its Qt build to failing tests that way.
 4. Configure, build and test through the same presets as local work:
    `ctest --preset <p> --output-on-failure -LE autotest --parallel <CPUs of the runner>`. The
    timing tests (label `timing`) run alone and hold on a busy runner (DECISIONS D-50).

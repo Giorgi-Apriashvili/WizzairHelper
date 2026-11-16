@@ -72,8 +72,12 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "commit=$(git rev-parse HEAD:external/vcpkg)"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "image=$env:ImageOS-$env:ImageVersion"
 
-      - name: vcpkg cache
-        uses: actions/cache@v4
+      # Restore and save are separate steps: actions/cache saves only when the whole job succeeds,
+      # so a failing test would throw away a fresh Qt build. The save below runs right after
+      # Configure (where vcpkg installs), whatever the later steps do.
+      - name: vcpkg cache (restore)
+        id: vcpkg-restore
+        uses: actions/cache/restore@v4
         with:
           path: vcpkg-cache
           key: vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.image }}
@@ -103,7 +107,17 @@ jobs:
           (Get-Command ninja).Source
 
       - name: Configure
+        id: configure
         run: cmake --preset ${{ matrix.configure }}
+
+      # Every leg uses the same key; the first to get here saves and the others skip with a
+      # "cache already exists" notice. An exact hit has nothing new to save.
+      - name: vcpkg cache (save)
+        if: always() && steps.configure.outcome == 'success' && steps.vcpkg-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.image }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.build }}
