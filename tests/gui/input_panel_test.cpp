@@ -1,15 +1,17 @@
-// InputPanel: 01 §4.2-§4.5 layout and defaults, §6.1/§6.2 coupling through the
-// real widgets (05 U-03), §6.3 keyboard mapping and tab order, §6.4 enable list,
-// §13 settings. TODAY = 2026-11-02 (a Monday).
+// InputPanel: the 01 §4.4 controls and defaults in the cards of DECISIONS D-53,
+// §6.1/§6.2 coupling through the real widgets (05 U-03), §6.3 keyboard mapping and
+// the Tab order of D-54, §6.4 enable list, §13 settings. TODAY = 2026-11-02 (a Monday).
 
 #include "input_panel.hpp"
 
 #include "date_picker.hpp"
-#include "flow_layout.hpp"
 #include "fractional_spin_box.hpp"
 #include "input_test_support.hpp"
+#include "minimum_window.hpp"
+#include "modern_style.hpp"
 #include "place_combo.hpp"
 #include "search_button.hpp"
+#include "section_card.hpp"
 #include "ui_style.hpp"
 
 #include "wizz/core/locale.hpp"
@@ -19,13 +21,19 @@
 #include <QComboBox>
 #include <QFontInfo>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -70,27 +78,65 @@ void expect_dates(const InputPanel& panel, Date out_from, Date out_to, Date ret_
     EXPECT_EQ(panel.ret_to_picker()->value(), ret_to);
 }
 
-/// The texts of a row's labels / the object names of its inputs, left to right ("|gap 24|" for gaps).
-[[nodiscard]] std::vector<std::string> row_items(const InputPanel& panel, int row)
+/// A card's caption row and body in layout order: label texts, "(icon)" for the accent
+/// glyph and "[class]" for the inputs (spacing and stretch left out).
+[[nodiscard]] std::vector<std::string> card_items(const QWidget* card)
 {
     std::vector<std::string> items;
-    const wizz::app::FlowLayout* layout = panel.row_layout(row);
-    for (int i = 0; i < layout->count(); ++i) {
-        QLayoutItem* item = layout->itemAt(i);
-        if (item->spacerItem() != nullptr) {
-            items.push_back("|gap " + std::to_string(item->sizeHint().width()) + "|");
-        } else if (const auto* label = qobject_cast<const QLabel*>(item->widget())) {
-            items.push_back(label->text().toStdString());
-        } else if (item->widget() != nullptr) {
-            items.push_back("[" + std::string(item->widget()->metaObject()->className()) + "]");
+    const std::function<void(const QLayout*)> walk = [&](const QLayout* layout) {
+        for (int i = 0; i < layout->count(); ++i) {
+            QLayoutItem* item = layout->itemAt(i);
+            if (const QLayout* inner = item->layout()) {
+                walk(inner);
+            } else if (const auto* label = qobject_cast<const QLabel*>(item->widget())) {
+                items.push_back(label->text().toStdString());
+            } else if (qobject_cast<const wizz::app::GlyphLabel*>(item->widget()) != nullptr) {
+                items.emplace_back("(icon)");
+            } else if (item->widget() != nullptr) {
+                items.push_back("[" + std::string(item->widget()->metaObject()->className()) + "]");
+            }
         }
-    }
+    };
+    walk(card->layout());
     return items;
 }
 
-[[nodiscard]] QLabel* row_label(const InputPanel& panel, int row, int index)
+[[nodiscard]] const wizz::app::SectionCard* card(const InputPanel& panel, int index)
 {
-    return qobject_cast<QLabel*>(panel.row_layout(row)->itemAt(index)->widget());
+    return qobject_cast<const wizz::app::SectionCard*>(panel.row(index));
+}
+
+/// The panel as a child of a shown host window of `width` (like in the main window: a
+/// top-level panel would get its layout's minimum width enforced), laid out.
+class HostedPanel {
+public:
+    explicit HostedPanel(int width)
+    {
+        host_.setAttribute(Qt::WA_DontShowOnScreen);
+        panel_ = new InputPanel(wizz::Locale::en_us(), kToday, {}, &host_);
+        host_.show();
+        place(width);
+    }
+    void place(int width)
+    {
+        host_.resize(width, 600);
+        panel_->setGeometry(0, 0, width, panel_->heightForWidth(width));
+        panel_->layout()->activate();
+        for (int i = 0; i < 4; ++i) {
+            panel_->row(i)->layout()->activate();
+        }
+    }
+    [[nodiscard]] InputPanel& panel() const { return *panel_; }
+
+private:
+    QWidget host_;
+    InputPanel* panel_ = nullptr;
+};
+
+/// `widget`'s rectangle in `ancestor` coordinates.
+[[nodiscard]] QRect rect_in(const QWidget* widget, const QWidget* ancestor)
+{
+    return {widget->mapTo(ancestor, QPoint(0, 0)), widget->size()};
 }
 
 /// A user edit of a picker: the widget changes, its dateChanged runs the rules.
@@ -107,99 +153,170 @@ void user_types(FractionalSpinBox* box, const QString& text)
     send_key(box, Qt::Key_Return);
 }
 
-// --- Layout and texts (01 §4.3, §4.4) -----------------------------------------------------
+// --- Layout and texts (01 §4.4 controls in the cards of D-53) ------------------------------
 
-TEST(InputPanel, Rows_contain_the_controls_of_01_4_4_in_order)
+TEST(InputPanel, Cards_hold_the_controls_of_01_4_4_in_reading_order)
 {
+    // 01 §4.3's three wrapping rows became four titled cards in a 2 x 2 grid (D-53): Where,
+    // Travellers & prices, Outbound, Return; "Outbound between" / "Return between" became
+    // the card caption plus "between" (D-54).
     const auto panel = make_panel();
     using V = std::vector<std::string>;
-    EXPECT_EQ(row_items(*panel, 0),
-              (V{"From", "[wizz::app::PlaceCombo]", "within", "[wizz::app::FractionalSpinBox]", "km", "|gap 24|", "To",
-                 "[wizz::app::PlaceCombo]", "within", "[wizz::app::FractionalSpinBox]", "km",
-                 "(empty “To” = anywhere)"}));
-    EXPECT_EQ(row_items(*panel, 1),
-              (V{"Outbound between", "[wizz::app::DatePicker]", "and", "[wizz::app::DatePicker]", "|gap 24|", "Adults",
-                 "[wizz::app::FractionalSpinBox]", "|gap 8|", "[QComboBox]", "|gap 8|", "Prices in", "[QComboBox]",
-                 "|gap 16|", "[wizz::app::SearchButton]"}));
-    EXPECT_EQ(row_items(*panel, 2),
-              (V{"Return between", "[wizz::app::DatePicker]", "and", "[wizz::app::DatePicker]", "|gap 24|",
-                 "Round trips: stay", "[wizz::app::FractionalSpinBox]", "to", "[wizz::app::FractionalSpinBox]",
-                 "nights", "|gap 16|", "[wizz::app::SearchButton]",
-                 "Return flights go from the destination area back to any airport near home."}));
-    EXPECT_EQ(panel->row_layout(0)->itemAt(1)->widget(), panel->from_box());
-    EXPECT_EQ(panel->row_layout(0)->itemAt(7)->widget(), panel->to_box());
-    EXPECT_EQ(panel->row_layout(1)->itemAt(13)->widget(), panel->search_outbound_button());
-    EXPECT_EQ(panel->row_layout(2)->itemAt(11)->widget(), panel->search_return_button());
-    EXPECT_EQ(panel->row(3), nullptr);
+    const std::array<const char*, 4> names{"whereCard", "travellersCard", "outboundCard", "returnCard"};
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_NE(card(*panel, i), nullptr) << i;
+        EXPECT_EQ(card(*panel, i)->objectName(), QString::fromLatin1(names[static_cast<std::size_t>(i)]));
+    }
+    EXPECT_EQ(card(*panel, 0)->title_label()->text(), QStringLiteral("Where"));
+    EXPECT_EQ(card(*panel, 1)->title_label()->text(), QStringLiteral("Travellers & prices"));
+    EXPECT_EQ(card(*panel, 2)->title_label()->text(), QStringLiteral("Outbound"));
+    EXPECT_EQ(card(*panel, 3)->title_label()->text(), QStringLiteral("Return"));
+    EXPECT_EQ(panel->row(4), nullptr);
+
+    EXPECT_EQ(card_items(card(*panel, 0)),
+              (V{"(icon)", "Where", "(empty “To” = anywhere)", "From", "[wizz::app::PlaceCombo]", "within",
+                 "[wizz::app::FractionalSpinBox]", "km", "To", "[wizz::app::PlaceCombo]", "within",
+                 "[wizz::app::FractionalSpinBox]", "km"}));
+    EXPECT_EQ(card_items(card(*panel, 1)), (V{"(icon)", "Travellers & prices", "Adults",
+                                              "[wizz::app::FractionalSpinBox]", "[QComboBox]", "Prices in", "[QComboBox]"}));
+    EXPECT_EQ(card_items(card(*panel, 2)), (V{"(icon)", "Outbound", "between", "[wizz::app::DatePicker]", "and",
+                                              "[wizz::app::DatePicker]", "[wizz::app::SearchButton]"}));
+    EXPECT_EQ(card_items(card(*panel, 3)),
+              (V{"(icon)", "Return", "Return flights go from the destination area back to any airport near home.",
+                 "between", "[wizz::app::DatePicker]", "and", "[wizz::app::DatePicker]", "Round trips: stay",
+                 "[wizz::app::FractionalSpinBox]", "to", "[wizz::app::FractionalSpinBox]", "nights",
+                 "[wizz::app::SearchButton]"}));
+
+    // The controls live in the card they are listed in.
+    const auto in_card = [&panel](int index, const QWidget* widget) { return card(*panel, index)->isAncestorOf(widget); };
+    EXPECT_TRUE(in_card(0, panel->from_box()));
+    EXPECT_TRUE(in_card(0, panel->to_radius_box()));
+    EXPECT_TRUE(in_card(1, panel->adults_box()));
+    EXPECT_TRUE(in_card(1, panel->fare_box()));
+    EXPECT_TRUE(in_card(1, panel->currency_box()));
+    EXPECT_TRUE(in_card(2, panel->out_to_picker()));
+    EXPECT_TRUE(in_card(2, panel->search_outbound_button()));
+    EXPECT_TRUE(in_card(3, panel->ret_from_picker()));
+    EXPECT_TRUE(in_card(3, panel->max_nights_box()));
+    EXPECT_TRUE(in_card(3, panel->search_return_button()));
+    EXPECT_FALSE(card(*panel, 0)->isAncestorOf(panel->resolved_label())) << "the resolved line is under the cards";
 }
 
-TEST(InputPanel, Labels_hints_gaps_and_paddings_use_the_01_4_3_margins)
+TEST(InputPanel, Cards_sit_in_a_2_by_2_grid_with_the_card_paddings)
 {
-    const auto panel = make_panel();
-    const wizz::app::FlowLayout* row1 = panel->row_layout(0);
-    EXPECT_EQ(row1->item_margins(0), QMargins(3, 7, 3, 0));    // Lbl("From")
-    EXPECT_EQ(row1->item_margins(1), QMargins(3, 3, 3, 3));    // _from: WinForms default margin
-    EXPECT_EQ(row1->item_margins(5), QMargins());              // Gap(24)
-    EXPECT_EQ(row1->item_margins(11), QMargins(10, 7, 3, 0));  // Hint(...)
-    EXPECT_EQ(row1->contentsMargins(), QMargins(0, 1, 0, 1));
-    EXPECT_EQ(panel->layout()->contentsMargins(), QMargins(10, 8, 10, 4));
+    const HostedPanel hosted{1288};
+    InputPanel& panel = hosted.panel();
+    EXPECT_EQ(panel.layout()->contentsMargins(), QMargins(16, 6, 16, 0));
+    const QRect where = panel.row(0)->geometry();
+    const QRect travellers = panel.row(1)->geometry();
+    const QRect outbound = panel.row(2)->geometry();
+    const QRect inbound = panel.row(3)->geometry();
+    EXPECT_EQ(where.topLeft(), QPoint(16, 6));
+    EXPECT_EQ(travellers.top(), where.top());
+    EXPECT_EQ(outbound.left(), where.left());
+    EXPECT_EQ(inbound.left(), travellers.left());
+    EXPECT_EQ(travellers.left() - where.right() - 1, 8) << "8 px between the columns";
+    EXPECT_EQ(outbound.top() - where.bottom() - 1, 8) << "8 px between the rows";
+    EXPECT_EQ(inbound.top(), outbound.top());
+    EXPECT_EQ(travellers.right(), 1288 - 16 - 1);
+    EXPECT_EQ(where.height(), travellers.height()) << "a grid row is as tall as its taller card";
+    EXPECT_EQ(outbound.height(), inbound.height());
+    EXPECT_GT(where.width(), travellers.width()) << "the place boxes' column takes the extra width (3:2)";
 
-    const QColor gray = wizz::app::style::gray_text();
-    EXPECT_EQ(row_label(*panel, 0, 11)->palette().color(QPalette::WindowText), gray);
-    EXPECT_EQ(row_label(*panel, 2, 12)->palette().color(QPalette::WindowText), gray);
-    EXPECT_NE(row_label(*panel, 0, 0)->palette().color(QPalette::WindowText), gray);
+    for (int i = 0; i < 4; ++i) {
+        const auto* section = card(panel, i);
+        EXPECT_EQ(section->layout()->contentsMargins(), wizz::app::SectionCard::kPadding) << i;
+        // Caption: the 8 pt upper-case semibold font in the secondary text colour; hints muted, 9 pt.
+        EXPECT_EQ(section->title_label()->font(), wizz::app::style::caption_font()) << i;
+        EXPECT_EQ(section->title_label()->palette().color(QPalette::WindowText),
+                  wizz::app::style::theme().text_secondary);
+        if (const QLabel* hint = section->hint_label()) {
+            EXPECT_EQ(hint->font(), wizz::app::style::hint_font());
+            EXPECT_EQ(hint->palette().color(QPalette::WindowText), wizz::app::style::theme().text_muted);
+        }
+    }
+    EXPECT_EQ(wizz::app::SectionCard::kPadding, QMargins(14, 6, 14, 8));
+    EXPECT_EQ(card(panel, 0)->hint_label()->text(), QStringLiteral("(empty “To” = anywhere)"));
+    EXPECT_EQ(card(panel, 3)->hint_label()->text().toStdString(),
+              "Return flights go from the destination area back to any airport near home.");
+    EXPECT_EQ(card(panel, 1)->hint_label(), nullptr);
 
-    QLabel* resolved = panel->resolved_label();
+    // Field labels in the secondary text colour, never focusable.
+    for (const QLabel* label : panel.findChildren<QLabel*>()) {
+        EXPECT_EQ(label->focusPolicy(), Qt::NoFocus) << label->text().toStdString();
+    }
+    const auto* from_label = panel.row(0)->findChildren<QLabel*>().value(2);  // caption, hint, then "From"
+    ASSERT_NE(from_label, nullptr);
+    EXPECT_EQ(from_label->text(), QStringLiteral("From"));
+    EXPECT_EQ(from_label->palette().color(QPalette::WindowText), wizz::app::style::theme().text_secondary);
+
+    // The resolved line: 4 px under the cards, muted 9 pt, wrapping, plain text.
+    QLabel* resolved = panel.resolved_label();
     EXPECT_EQ(resolved->text(),
               QStringLiteral("Fares come from Wizz Air's website. Double-click a result to open it on wizzair.com."));
     EXPECT_TRUE(resolved->wordWrap());
-    EXPECT_EQ(resolved->contentsMargins(), QMargins(3, 4, 3, 2));
-    EXPECT_EQ(resolved->palette().color(QPalette::WindowText), gray);
     EXPECT_EQ(resolved->textFormat(), Qt::PlainText);
-    panel->set_resolved_text("Outbound: from Budapest (BUD), Hungary → airports within 250 km: BUD 0 km.   To: anywhere.");
-    EXPECT_EQ(panel->resolved_text().toStdString(),
+    EXPECT_EQ(resolved->font(), wizz::app::style::hint_font());
+    EXPECT_EQ(resolved->contentsMargins(), QMargins(0, 0, 4, 0));
+    EXPECT_EQ(resolved->palette().color(QPalette::WindowText), wizz::app::style::gray_text());
+    EXPECT_EQ(rect_in(resolved, &panel).top(), outbound.bottom() + 1 + 4);
+    panel.set_resolved_text("Outbound: from Budapest (BUD), Hungary → airports within 250 km: BUD 0 km.   To: anywhere.");
+    EXPECT_EQ(panel.resolved_text().toStdString(),
               "Outbound: from Budapest (BUD), Hungary → airports within 250 km: BUD 0 km.   To: anywhere.");
 }
 
-TEST(InputPanel, Widths_ranges_steps_and_tooltips_follow_the_table)
+TEST(InputPanel, Widths_heights_ranges_steps_and_tooltips_follow_the_table)
 {
-    const auto panel = make_panel();
-    EXPECT_EQ(panel->from_box()->width(), 210);
-    EXPECT_EQ(panel->to_box()->width(), 210);
-    EXPECT_EQ(panel->from_radius_box()->width(), 64);
-    EXPECT_EQ(panel->to_radius_box()->width(), 64);
+    const HostedPanel hosted{1288};
+    InputPanel& panel = hosted.panel();
+    // The fixed widths of the look (D-53; 01 §4.4: 64, 130, 48, 175, 70, 52).
+    EXPECT_EQ(panel.from_radius_box()->width(), 76);
+    EXPECT_EQ(panel.to_radius_box()->width(), 76);
     for (DatePicker* picker :
-         {panel->out_from_picker(), panel->out_to_picker(), panel->ret_from_picker(), panel->ret_to_picker()}) {
-        EXPECT_EQ(picker->width(), 130);
+         {panel.out_from_picker(), panel.out_to_picker(), panel.ret_from_picker(), panel.ret_to_picker()}) {
+        EXPECT_EQ(picker->width(), 142);
         EXPECT_EQ(picker->bounds().min, kToday);
         EXPECT_EQ(picker->bounds().max, Date::from_ymd(2028, 11, 2));
         EXPECT_EQ(picker->displayFormat(), QStringLiteral("ddd dd MMM yyyy"));
     }
-    EXPECT_EQ(panel->adults_box()->width(), 48);
-    EXPECT_EQ(panel->fare_box()->width(), 175);
-    EXPECT_EQ(panel->currency_box()->width(), 70);
-    EXPECT_EQ(panel->min_nights_box()->width(), 52);
-    EXPECT_EQ(panel->max_nights_box()->width(), 52);
+    EXPECT_EQ(panel.adults_box()->width(), 64);
+    EXPECT_EQ(panel.fare_box()->width(), 206);
+    EXPECT_EQ(panel.currency_box()->width(), 88);
+    EXPECT_EQ(panel.min_nights_box()->width(), 64);
+    EXPECT_EQ(panel.max_nights_box()->width(), 64);
+    // The place boxes stretch with the window (01: 210 fixed), never below 180.
+    EXPECT_EQ(panel.from_box()->minimumWidth(), 180);
+    EXPECT_EQ(panel.from_box()->sizePolicy().horizontalPolicy(), QSizePolicy::Expanding);
+    EXPECT_EQ(panel.to_box()->width(), panel.from_box()->width());
+    EXPECT_GT(panel.from_box()->width(), 180);
+
+    // Every input and both search buttons are ModernStyle::control_height tall, so a row of
+    // fields and its button line up.
+    const int control = wizz::app::ModernStyle::control_height(QFontMetrics(wizz::app::style::form_font()));
+    for (const QWidget* input : panel.tab_order()) {
+        EXPECT_EQ(input->height(), control) << input->metaObject()->className();
+    }
+    EXPECT_EQ(rect_in(panel.out_from_picker(), &panel).center().y(), rect_in(panel.out_to_picker(), &panel).center().y());
 
     const auto expect_numeric = [](const FractionalSpinBox* box, double minimum, double maximum, double step) {
         EXPECT_EQ(box->minimum(), minimum);
         EXPECT_EQ(box->maximum(), maximum);
         EXPECT_EQ(box->single_step(), step);
     };
-    expect_numeric(panel->from_radius_box(), 0, 1500, 25);
-    expect_numeric(panel->to_radius_box(), 0, 1500, 25);
-    expect_numeric(panel->adults_box(), 1, 9, 1);
-    expect_numeric(panel->min_nights_box(), 0, 60, 1);
-    expect_numeric(panel->max_nights_box(), 0, 120, 1);
+    expect_numeric(panel.from_radius_box(), 0, 1500, 25);
+    expect_numeric(panel.to_radius_box(), 0, 1500, 25);
+    expect_numeric(panel.adults_box(), 1, 9, 1);
+    expect_numeric(panel.min_nights_box(), 0, 60, 1);
+    expect_numeric(panel.max_nights_box(), 0, 120, 1);
 
-    EXPECT_EQ(panel->from_box()->toolTip().toStdString(),
+    EXPECT_EQ(panel.from_box()->toolTip().toStdString(),
               "City or airport you start from (any city works — nearby Wizz Air airports are found automatically)");
-    EXPECT_EQ(panel->to_box()->toolTip().toStdString(),
+    EXPECT_EQ(panel.to_box()->toolTip().toStdString(),
               "Destination city or airport. Leave empty to search ANYWHERE Wizz Air flies.");
-    EXPECT_EQ(panel->search_outbound_button()->text(), QStringLiteral("Search outbound"));
-    EXPECT_EQ(panel->search_return_button()->text(), QStringLiteral("Search return"));
-    EXPECT_FALSE(panel->fare_box()->isEditable());
-    EXPECT_FALSE(panel->currency_box()->isEditable());
+    EXPECT_EQ(panel.search_outbound_button()->text(), QStringLiteral("Search outbound"));
+    EXPECT_EQ(panel.search_return_button()->text(), QStringLiteral("Search return"));
+    EXPECT_FALSE(panel.fare_box()->isEditable());
+    EXPECT_FALSE(panel.currency_box()->isEditable());
 }
 
 TEST(InputPanel, Currency_list_has_the_21_codes_in_order_and_fare_items)
@@ -677,18 +794,26 @@ TEST(InputPanel, Enter_in_an_input_commits_and_is_left_for_the_accept_button)
     EXPECT_FALSE(send_key(panel->from_box(), Qt::Key_Return));
 }
 
-TEST(InputPanel, Tab_order_follows_01_6_3)
+TEST(InputPanel, Tab_order_follows_the_cards_D_54)
 {
-    const auto panel = make_panel();
-    const std::vector<QWidget*> expected = panel->tab_order();
-    ASSERT_EQ(expected.size(), 15u);
-    EXPECT_EQ(expected.front(), panel->from_box());
-    EXPECT_EQ(expected[9], panel->search_outbound_button());
-    EXPECT_EQ(expected.back(), panel->search_return_button());
+    // D-54: Tab walks the cards as they are read — Where, Travellers & prices, Outbound,
+    // Return — each left to right, top to bottom. (01 §6.3 had the outbound dates before
+    // adults, fare and currency.)
+    const HostedPanel hosted{1288};
+    InputPanel& panel = hosted.panel();
+    const std::vector<QWidget*> expected{panel.from_box(),        panel.from_radius_box(),
+                                         panel.to_box(),          panel.to_radius_box(),
+                                         panel.adults_box(),      panel.fare_box(),
+                                         panel.currency_box(),    panel.out_from_picker(),
+                                         panel.out_to_picker(),   panel.search_outbound_button(),
+                                         panel.ret_from_picker(), panel.ret_to_picker(),
+                                         panel.min_nights_box(),  panel.max_nights_box(),
+                                         panel.search_return_button()};
+    EXPECT_EQ(panel.tab_order(), expected);
 
     // Walk the focus chain from "From" and keep the listed widgets in visiting order.
     std::vector<QWidget*> visited;
-    QWidget* widget = panel->from_box();
+    QWidget* widget = panel.from_box();
     for (int guard = 0; guard < 500 && visited.size() < expected.size(); ++guard) {
         if (std::ranges::find(expected, widget) != expected.end() &&
             std::ranges::find(visited, widget) == visited.end()) {
@@ -698,85 +823,78 @@ TEST(InputPanel, Tab_order_follows_01_6_3)
     }
     EXPECT_EQ(visited, expected);
 
-    // Labels and gaps never take focus.
-    for (int row = 0; row < 3; ++row) {
-        const wizz::app::FlowLayout* layout = panel->row_layout(row);
-        for (int i = 0; i < layout->count(); ++i) {
-            if (const auto* label = qobject_cast<const QLabel*>(layout->itemAt(i)->widget())) {
-                EXPECT_EQ(label->focusPolicy(), Qt::NoFocus);
+    // The order is the reading order of the laid-out cards: card by card, and inside a
+    // card row by row, left to right.
+    const auto reading_key = [&panel](const QWidget* control) {
+        int index = 0;
+        while (index < 4 && !panel.row(index)->isAncestorOf(control)) {
+            ++index;
+        }
+        const QRect rect = rect_in(control, panel.row(std::min(index, 3)));
+        return std::tuple{index, rect.center().y(), rect.left()};
+    };
+    for (std::size_t i = 1; i < expected.size(); ++i) {
+        const auto before = reading_key(expected[i - 1]);
+        const auto after = reading_key(expected[i]);
+        EXPECT_LT(before, after) << expected[i - 1]->metaObject()->className() << " before "
+                                 << expected[i]->metaObject()->className() << " (" << i << ")";
+        EXPECT_LT(std::get<0>(after), 4) << "in a card";
+    }
+}
+
+// --- The cards at narrow widths (the 980 x 600 minimum window) ------------------------------
+
+TEST(InputPanel, The_cards_fit_the_minimum_window)
+{
+    // D-53: at the client width of the 980 x 600 window every card keeps its controls, at
+    // their size, inside its padding (nothing clipped, no label cut), the 2 x 2 grid
+    // stays, and both search buttons sit at the right end of their cards' last row.
+    const int minimum = minimum_client_size().width();
+    ASSERT_EQ(minimum, 964) << "980 minus the 8 px borders";
+    HostedPanel hosted{1288};
+    InputPanel& panel = hosted.panel();
+    EXPECT_LE(panel.minimumSizeHint().width(), minimum) << "the cards' minimum fits the minimum window";
+    const auto expect_inside_its_card = [&panel](const char* where) {
+        for (int i = 0; i < 4; ++i) {
+            const QWidget* section = panel.row(i);
+            const QRect inner = section->rect().marginsRemoved(wizz::app::SectionCard::kPadding);
+            for (const QWidget* child : section->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+                if (!child->isVisible()) {
+                    continue;
+                }
+                const auto* label = qobject_cast<const QLabel*>(child);
+                EXPECT_TRUE(inner.contains(child->geometry()))
+                    << where << ": " << child->metaObject()->className() << " "
+                    << (label != nullptr ? label->text().toStdString() : std::string{}) << " outside card " << i;
+                if (label != nullptr && !label->wordWrap()) {
+                    EXPECT_GE(label->width(), label->sizeHint().width())
+                        << where << ": cut text " << label->text().toStdString();
+                }
             }
         }
-    }
-}
-
-// --- Wrapping rows (01 §4.3) ------------------------------------------------------------------
-
-TEST(InputPanel, Rows_wrap_in_narrow_windows)
-{
-    // A child of a host window, like in the main window (a top-level panel would get
-    // its layout's minimum width enforced).
-    QWidget host;
-    host.setAttribute(Qt::WA_DontShowOnScreen);
-    host.resize(1500, 600);
-    auto* panel = new InputPanel(wizz::Locale::en_us(), kToday, {}, &host);
-    panel->setFont(wizz::app::style::form_font());
-    host.show();
-    // Real Segoe UI metrics (a manual run on the windows platform) or the minimal
-    // platform's box glyphs.
-    const bool real_fonts = QFontInfo(panel->font()).family() == QStringLiteral("Segoe UI");
-
-    const auto place = [&](int width) {
-        panel->setGeometry(0, 0, width, panel->heightForWidth(width));
-        panel->layout()->activate();
     };
-    const auto expect_wrapping_matches_the_width = [&] {
-        for (int row = 0; row < 3; ++row) {
-            const wizz::app::FlowLayout* layout = panel->row_layout(row);
-            const int width = panel->row(row)->width();
-            EXPECT_EQ(layout->line_count(width) == 1, layout->sizeHint().width() <= width) << row;
-            EXPECT_EQ(panel->row(row)->height(), layout->heightForWidth(width)) << row;
+    const auto expect_search_buttons_at_the_right_end = [&panel](const char* where) {
+        for (const auto& [index, button] : {std::pair{2, static_cast<QWidget*>(panel.search_outbound_button())},
+                                            std::pair{3, static_cast<QWidget*>(panel.search_return_button())}}) {
+            const QWidget* section = panel.row(index);
+            const QRect rect = rect_in(button, section);
+            EXPECT_EQ(rect.right(), section->width() - wizz::app::SectionCard::kPadding.right() - 1) << where;
+            EXPECT_NEAR(rect.bottom(), section->height() - wizz::app::SectionCard::kPadding.bottom() - 1, 1)
+                << where << ": on the card's last row";
+            EXPECT_EQ(button->size(), button->sizeHint()) << where << ": never squeezed";
         }
     };
 
-    const int wide_height = panel->heightForWidth(1400);
-    const int narrow_height = panel->heightForWidth(600);
-    EXPECT_GT(narrow_height, wide_height);
+    expect_inside_its_card("default window");
+    expect_search_buttons_at_the_right_end("default window");
 
-    place(1400);
-    EXPECT_EQ(panel->row(0)->width(), 1400 - 20);  // padding 10 left and right
-    expect_wrapping_matches_the_width();
-    if (real_fonts) {
-        for (int row = 0; row < 3; ++row) {
-            EXPECT_EQ(panel->row_layout(row)->line_count(panel->row(row)->width()), 1) << row;
-        }
-    }
-    // Rows 1 and 2 fit on one line: every input shares the line top (+ its 3 px margin).
-    EXPECT_EQ(panel->from_box()->y(), panel->to_radius_box()->y());
-    EXPECT_EQ(panel->from_box()->y(), 1 + 3);
-    EXPECT_EQ(row_label(*panel, 0, 0)->y(), 1 + 7);
-    EXPECT_EQ(panel->out_from_picker()->y(), panel->currency_box()->y());
-    EXPECT_EQ(panel->out_from_picker()->y(), panel->search_outbound_button()->y());
-    EXPECT_EQ(panel->row(0)->y(), 8);  // padding top
-    save_render(*panel, QStringLiteral("input-panel-1400"));
-
-    place(600);
-    expect_wrapping_matches_the_width();
-    EXPECT_GT(panel->row_layout(0)->line_count(panel->row(0)->width()), 1);
-    EXPECT_GT(panel->row_layout(1)->line_count(panel->row(1)->width()), 1);
-    EXPECT_GT(panel->to_box()->y(), panel->from_box()->y());  // "To" moved to a second line
-    EXPECT_GT(panel->search_outbound_button()->y(), panel->out_from_picker()->y());
-    for (int row = 0; row < 3; ++row) {
-        const QRect row_rect = panel->row(row)->rect();
-        for (QWidget* child : panel->row(row)->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
-            EXPECT_TRUE(row_rect.contains(child->geometry()) || child->width() > row_rect.width())
-                << child->metaObject()->className();
-        }
-    }
-    EXPECT_GT(panel->resolved_label()->y(), panel->row(2)->geometry().bottom());
-    save_render(*panel, QStringLiteral("input-panel-600"));
-
-    panel->set_working(true);
-    place(1400);
-    save_render(*panel, QStringLiteral("input-panel-1400-working"));
+    hosted.place(minimum);
+    expect_inside_its_card("minimum window");
+    expect_search_buttons_at_the_right_end("minimum window");
+    EXPECT_GE(panel.from_box()->width(), 180);
+    EXPECT_EQ(panel.row(1)->geometry().top(), panel.row(0)->geometry().top()) << "still 2 x 2";
+    EXPECT_GT(panel.row(2)->geometry().top(), panel.row(0)->geometry().bottom());
+    save_render(panel, QStringLiteral("input-panel-minimum"));
 }
+
 } // namespace

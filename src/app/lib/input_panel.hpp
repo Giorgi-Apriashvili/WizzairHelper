@@ -57,7 +57,6 @@ class QLabel;
 namespace wizz::app {
 
 class DatePicker;
-class FlowLayout;
 class FractionalSpinBox;
 class PlaceCombo;
 class SearchButton;
@@ -184,14 +183,11 @@ public:
     [[nodiscard]] SearchButton* search_outbound_button() const noexcept { return search_out_; }
     [[nodiscard]] SearchButton* search_return_button() const noexcept { return search_ret_; }
     [[nodiscard]] QLabel* resolved_label() const noexcept { return resolved_; }
-    /// The section cards 0..3: Where, Travellers & prices, Outbound, Return.
+    /// The section cards 0..3: Where, Travellers & prices, Outbound, Return (null otherwise).
     [[nodiscard]] QWidget* row(int index) const;
-    /// The grouped layout has no wrapping FlowLayout rows: always null (kept for the GUI
-    /// tests of the old three-row layout until they move to the cards).
-    [[nodiscard]] FlowLayout* row_layout(int index) const;
     /// The controls SetWorking disables, in the 01 §6.4 order.
     [[nodiscard]] std::vector<QWidget*> working_controls() const;
-    /// The tab order of 01 §6.3.
+    /// The Tab order of D-54 (the cards as they are read).
     [[nodiscard]] std::vector<QWidget*> tab_order() const;
 
 Q_SIGNALS:

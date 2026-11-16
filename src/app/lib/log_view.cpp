@@ -36,8 +36,8 @@ LogView::LogView(const Clock& clock, std::shared_ptr<const Locale> locale, QWidg
     // Room for the focus bar left of the text; the document margin keeps the text clear of it.
     setViewportMargins(ModernStyle::kSelectionBarWidth, 0, 0, 0);
     document()->setDocumentMargin(8);
-    apply_system_colours();
-    style::on_theme_change(this, [this] { apply_system_colours(); });
+    apply_theme_colours();
+    style::on_theme_change(this, [this] { apply_theme_colours(); });
 }
 
 QFont LogView::log_font()
@@ -74,7 +74,7 @@ bool LogView::event(QEvent* event)
     case QEvent::StyleChange:
     case QEvent::PaletteChange:
     case QEvent::ThemeChange:
-        apply_system_colours();  // after the style has polished the viewport
+        apply_theme_colours();  // after the style has polished the viewport
         break;
     default:
         break;
@@ -94,7 +94,7 @@ void LogView::focusOutEvent(QFocusEvent* event)
     update();
 }
 
-void LogView::apply_system_colours()
+void LogView::apply_theme_colours()
 {
     // BackColor = SystemColors.Window, also while read-only, and its WindowText. Styles
     // may leave the viewport unfilled (the "windows11" style draws a grey panel behind it).

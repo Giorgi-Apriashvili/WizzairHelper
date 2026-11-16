@@ -47,7 +47,7 @@ protected:
     void focusOutEvent(QFocusEvent* event) override;
 
 private:
-    void apply_system_colours();
+    void apply_theme_colours();
 
     const Clock& clock_;
     std::shared_ptr<const Locale> locale_;

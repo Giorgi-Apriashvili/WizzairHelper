@@ -7,6 +7,7 @@
 #include "grid_colors.hpp"
 #include "grid_row_delegate.hpp"
 #include "grid_test_support.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/core/pricing.hpp"
 #include "wizz/core/result_views.hpp"
@@ -70,16 +71,22 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     EXPECT_TRUE(table.isColumnHidden(col(FlightColumn::idx)));
     EXPECT_TRUE(table.isColumnHidden(col(FlightColumn::price_sort)));
     EXPECT_FALSE(table.isColumnHidden(col(FlightColumn::km_from_dest)));
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::date)), 120);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::departs)), 58);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::from)), 170);
+    // The widths of 01 §8.2, adjusted for the look's fonts and cell padding (D-53): Date,
+    // Departs and All departures wider, From and To narrower.
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::date)), 124);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::departs)), 64);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::from)), 160);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::km_from_start)), 70);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::to)), 190);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::to)), 180);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::km_from_dest)), 70);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::total)), 92);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::per_person)), 84);
     EXPECT_EQ(table.columnWidth(col(FlightColumn::fare_local)), 110);
-    EXPECT_EQ(table.columnWidth(col(FlightColumn::all_departures)), 150);
+    EXPECT_EQ(table.columnWidth(col(FlightColumn::all_departures)), 170);
+    // The cells use the 9 pt data font, the headers the semibold UI font (D-53).
+    EXPECT_EQ(table.font(), app::style::data_font());
+    EXPECT_EQ(table.horizontalHeader()->font(), app::style::bold_form_font());
+    EXPECT_FALSE(table.showGrid()) << "rows are separated by the delegate's line";
 
     // Read-only, full-row single selection, no row headers, no border, fixed columns order.
     EXPECT_EQ(table.editTriggers(), QAbstractItemView::NoEditTriggers);
@@ -111,7 +118,8 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     EXPECT_FALSE(f.grid.model()->index(0, col(FlightColumn::per_person)).data(Qt::FontRole).isValid());
     EXPECT_EQ(total.data(Qt::TextAlignmentRole).value<Qt::Alignment>(), Qt::AlignRight | Qt::AlignVCenter);
     EXPECT_EQ(f.grid.model()->flags(total), Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemNeverHasChildren);
-    EXPECT_EQ(table.rowHeight(0), table.fontMetrics().height() + 9);
+    EXPECT_EQ(table.rowHeight(0), table.fontMetrics().height() + 12) << "D-53: font height + 12 (WinForms + 9)";
+    EXPECT_EQ(table.row_height(), table.rowHeight(0));
 }
 
 TEST(FlightGridWidget, Headers_follow_the_currency_and_km_from_dest_hides_for_anywhere)
@@ -194,7 +202,7 @@ TEST(FlightGridWidget, UI_5_User_resized_widths_survive_rebuilds)
     f.grid.clear("EUR", false, "");
     f.grid.set_results(fss01(), "GBP", "");
     EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::from)), 250);
-    EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::date)), 120);
+    EXPECT_EQ(f.grid.table()->columnWidth(col(FlightColumn::date)), 124);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +305,10 @@ TEST(FlightGridWidget, Cheapest_rows_are_green_including_ties)
         return f.grid.model()->index(row, col(FlightColumn::from)).data(Qt::BackgroundRole);
     };
     ASSERT_TRUE(background(0).isValid());
-    EXPECT_EQ(background(0).value<QBrush>().color(), QColor(220, 245, 220));
+    // 01 §8.3's light green became the theme's cheapest tint (D-53); text stays readable on it
+    // (Look.Token_pairs_meet_WCAG_AA).
+    EXPECT_EQ(background(0).value<QBrush>().color(), app::style::theme().cheapest);
+    EXPECT_EQ(app::grid_colors::cheapest_back(), app::style::theme().cheapest);
     for (int row = 1; row < 12; ++row) {
         EXPECT_FALSE(background(row).isValid()) << row;
     }
@@ -313,7 +324,7 @@ TEST(FlightGridWidget, Cheapest_rows_are_green_including_ties)
     EXPECT_EQ(f.grid.model()->fare_at(1), b);
 }
 
-TEST(FlightGridWidget, Selected_rows_use_the_system_highlight_and_the_cheapest_the_dark_green)
+TEST(FlightGridWidget, Selected_rows_use_the_selection_tint_and_the_cheapest_a_deeper_green)
 {
     Fixture f;
     f.grid.set_results(fss01(), "EUR", "");
@@ -326,14 +337,20 @@ TEST(FlightGridWidget, Selected_rows_use_the_system_highlight_and_the_cheapest_t
         delegate.initStyleOption(&option, f.grid.model()->index(row, col(FlightColumn::date)));
         return option;
     };
+    // Every selection is the theme's soft tint with the normal text colour; a selected
+    // cheapest row a deeper green (01 §8.3's dark green / SystemColors.Highlight, D-53).
+    const app::style::Theme& theme = app::style::theme();
+    EXPECT_EQ(app::grid_colors::highlight(), theme.selection);
+    EXPECT_EQ(app::grid_colors::highlight_text(), theme.selection_text);
+    EXPECT_EQ(app::grid_colors::cheapest_selection_back(), theme.cheapest_selection);
     const QStyleOptionViewItem cheapest = option_for(0, true);
     EXPECT_FALSE(cheapest.state.testFlag(QStyle::State_Selected));
-    EXPECT_EQ(cheapest.backgroundBrush.color(), QColor(40, 140, 70));
-    EXPECT_EQ(cheapest.palette.color(QPalette::Text), app::grid_colors::highlight_text());
-    EXPECT_EQ(option_for(0, false).backgroundBrush.color(), QColor(220, 245, 220));
+    EXPECT_EQ(cheapest.backgroundBrush.color(), theme.cheapest_selection);
+    EXPECT_EQ(cheapest.palette.color(QPalette::Text), theme.selection_text);
+    EXPECT_EQ(option_for(0, false).backgroundBrush.color(), theme.cheapest);
     EXPECT_EQ(f.grid.model()->index(0, 2).data(app::GridRowDelegate::SelectionBackgroundRole).value<QBrush>().color(),
-              QColor(40, 140, 70));
-    const QStyleOptionViewItem other = option_for(1, true);  // the system highlight applies
+              theme.cheapest_selection);
+    const QStyleOptionViewItem other = option_for(1, true);  // the selection tint applies
     EXPECT_FALSE(other.state.testFlag(QStyle::State_Selected));
     EXPECT_EQ(other.backgroundBrush.color(), app::grid_colors::highlight());
     EXPECT_EQ(other.palette.color(QPalette::Text), app::grid_colors::highlight_text());

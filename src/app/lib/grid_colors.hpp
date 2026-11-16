@@ -17,9 +17,4 @@ namespace wizz::app::grid_colors {
 [[nodiscard]] QColor cheapest_back();
 [[nodiscard]] QColor cheapest_selection_back();
 
-/// The WinForms colours of 01 §8.3; the theme replaces them (kept for the GUI tests that
-/// still compare against them).
-inline constexpr QColor kCheapestBack{220, 245, 220};
-inline constexpr QColor kCheapestSelectionBack{40, 140, 70};
-
 } // namespace wizz::app::grid_colors

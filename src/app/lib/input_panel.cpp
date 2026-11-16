@@ -301,11 +301,6 @@ QWidget* InputPanel::row(int index) const
     return index >= 0 && index < 4 ? rows_[index] : nullptr;
 }
 
-FlowLayout* InputPanel::row_layout(int /*index*/) const
-{
-    return nullptr;
-}
-
 // --- Settings ------------------------------------------------------------------------------
 
 void InputPanel::load_from(const ui::AppSettings& settings)

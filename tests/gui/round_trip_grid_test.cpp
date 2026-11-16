@@ -9,6 +9,7 @@
 #include "round_trip_table_model.hpp"
 #include "grid_colors.hpp"
 #include "grid_table_view.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/round_trip_rows.hpp"
 
@@ -129,6 +130,28 @@ TEST(RoundTripGridWidget, Checkboxes_raise_filters_changed)
     EXPECT_FALSE(f.grid.require_same_home());
 }
 
+TEST(RoundTripGridWidget, Booking_notes_fill_the_rest_but_keep_120_and_the_header_stays_one_line)
+{
+    // D-53: at WinForms' 5 px minimum the "Booking / notes" header wrapped into three
+    // lines in a narrow window, and an 85 px "Return price" wrapped into two: every line
+    // of header cost a round trip in view.
+    TripFixture f;
+    f.grid.set_trips(rt01_trips(), "EUR", "");
+    f.grid.resize(1288, 400);  // the round-trip table of the default 1320 x 820 window
+    f.grid.show();
+    test::gui::settle();
+    app::GridTableView& table = *f.grid.table();
+    QHeaderView& header = *table.horizontalHeader();
+    EXPECT_EQ(header.minimumHeight(), 0) << "every header text on one line at the default width";
+    const int one_line = header.height();
+    EXPECT_EQ(one_line, QFontMetrics(header.font()).height() + 2 * 5) << "one line and the 5 px padding";
+
+    f.grid.resize(700, 400);
+    test::gui::settle();
+    EXPECT_EQ(header.sectionSize(col(TripColumn::booking_notes)), 120) << "min L(120), then horizontal scrolling";
+    EXPECT_EQ(header.height(), one_line);
+}
+
 TEST(RoundTripGridWidget, Columns_headers_widths_and_formats)
 {
     TripFixture f;
@@ -149,7 +172,11 @@ TEST(RoundTripGridWidget, Columns_headers_widths_and_formats)
     EXPECT_EQ(table.columnWidth(col(TripColumn::out_price)), 80);
     EXPECT_EQ(table.columnWidth(col(TripColumn::return_date)), 95);
     EXPECT_EQ(table.columnWidth(col(TripColumn::return_leg)), 300);
-    EXPECT_EQ(table.columnWidth(col(TripColumn::return_price)), 85);
+    // "Return price" is 100 wide (01: 85) so its semibold header stays on one line, and
+    // "Booking / notes" fills the rest but keeps 120 (01: WinForms' 5 px, which wrapped its
+    // header into three lines): one header line, one more round trip in view (D-53).
+    EXPECT_EQ(table.columnWidth(col(TripColumn::return_price)), 100);
+    EXPECT_EQ(table.horizontalHeader()->font(), wizz::app::style::bold_form_font());
     EXPECT_EQ(table.selectionBehavior(), QAbstractItemView::SelectRows);
     EXPECT_EQ(table.selectionMode(), QAbstractItemView::SingleSelection);
     EXPECT_EQ(table.editTriggers(), QAbstractItemView::NoEditTriggers);
