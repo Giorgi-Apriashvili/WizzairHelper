@@ -19,8 +19,9 @@ passed 1446 / 1446 tests in Release, 1429 / 1429 in Debug and 1429 / 1429 with c
 `tools/release_check.ps1 -Tag v1.0.0`: three assets (installer 10,124,738 bytes, ZIP 11,663,110
 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
 `WizzairHelper 1.0.0`, and `releases/latest` is v1.0.0. The measurements below were taken on
-2026-11-16 before the CI hardening (DECISIONS D-50 to D-52), which changed tests, not the
-behaviour measured.
+2026-11-16 before the CI hardening (DECISIONS D-50 to D-52). That work changed the tests and also
+made the grids cheaper (a final rebuild reuses the rows already shown; grouped views no longer
+sort every fare per batch), so 1.0.0's timer gaps are at most the ones below.
 
 ## Environment
 
