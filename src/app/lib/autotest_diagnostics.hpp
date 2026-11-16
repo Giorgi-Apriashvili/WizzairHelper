@@ -91,6 +91,7 @@ struct DisplayDiagnostics {
     QRect window_frame;                       ///< logical, title bar included (Qt frame)
     QRect window_client;                      ///< logical
     QSize outer_device_size;                  ///< MainWindow::normal_outer_device_size()
+    QSize minimum_window;                     ///< logical, whole window (MainWindow::kMinimumSize, 01 §4.1)
     bool window_on_screen = false;            ///< the frame lies inside the work area
 };
 

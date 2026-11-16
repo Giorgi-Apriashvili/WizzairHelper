@@ -157,6 +157,40 @@ class Checker:
 
     # --- diagnostics.json (D-30 --diagnostics) ----------------------------------------------
 
+    def window_placement(self):
+        """01 §4.1 start position and UX-15 clamp, W = clamp(w, MinW, max(MinW, work.W)), per axis.
+
+        On an axis where the work area holds the minimum window, the window lies inside the work area.
+        On a smaller one (a 1024 x 768 screen at 150 % is 683 x 512 logical pixels) the spec makes the
+        window larger than the screen; the app then starts it at the work area's edge, never above or
+        left of it, so its title bar stays on screen and can be grabbed (D-52): the frame starts inside
+        the work area, the title bar ends above its bottom, and at least half of its width is visible.
+        """
+        work = self.diag('display.screenAvailable')
+        frame = self.diag('display.windowFrame')
+        client = self.diag('display.windowClient')
+        minimum = self.diag('display.minimumWindow')
+        if not all(isinstance(r, list) for r in (work, frame, client, minimum)):
+            self.expect(False, 'display: screenAvailable %r, windowFrame %r, windowClient %r, minimumWindow %r' %
+                        (work, frame, client, minimum))
+            return
+        if all(work[2 + axis] >= minimum[axis] for axis in (0, 1)):
+            self.diag_equal('display.windowOnScreen', True)
+        for axis, name in ((0, 'x'), (1, 'y')):
+            start, extent = work[axis], work[2 + axis]
+            begin, end = frame[axis], frame[axis] + frame[2 + axis]
+            if extent >= minimum[axis]:
+                self.expect(start <= begin and end <= start + extent,
+                            'display: the window %r leaves the work area %r on %s, which holds the minimum %r' %
+                            (frame, work, name, minimum))
+                continue
+            # The title bar is the strip between the frame's top and the client area's top.
+            reach = client[1] if axis == 1 else begin + extent // 2
+            self.expect(start <= begin and reach <= start + extent,
+                        'display: the work area %r is smaller than the minimum window %r on %s, so the window '
+                        '%r (client %r) must start inside it, not above or left of it, with its title bar on '
+                        'screen' % (work, minimum, name, frame, client))
+
     def diagnostics_common(self, max_gap_ms, scale):
         d = self.diagnostics
         self.expect(list(d.keys()) == DIAGNOSTICS_KEYS, 'diagnostics keys: %r' % list(d.keys()))
@@ -189,7 +223,7 @@ class Checker:
         self.diag_equal('layout.problems', [])
         self.diag_equal('layout.cancelVisible', True)
         self.expect((self.diag('layout.statesChecked') or 0) >= 2, 'layout: fewer than 2 states checked')
-        self.diag_equal('display.windowOnScreen', True)
+        self.window_placement()
         self.diag_equal('display.qtScaleFactor', scale)
         if scale is not None:
             self.expect(abs((self.diag('display.devicePixelRatio') or 0) - float(scale)) < 1e-9,
@@ -800,12 +834,14 @@ def main():
     events = diagnostics.get('uiEvents') or {}
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
-          'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; %s' %
+          'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
+          'work area %s; %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
            events.get('longestBusyCpuMs'), events.get('longestBusyOwnMs'),
-           diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('environment', {}).get('os')))
+           diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('display', {}).get('windowFrame'),
+           diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:
             print('FAILED:', failure)

@@ -16,3 +16,6 @@ CMakeUserPresets.json
 /.claude/
 # The specification is kept locally in spec/ and is not published with the code.
 /spec/
+
+# Python bytecode (tools and test scripts run with python -I)
+__pycache__/

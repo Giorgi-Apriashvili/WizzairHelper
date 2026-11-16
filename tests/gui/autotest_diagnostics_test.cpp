@@ -123,6 +123,7 @@ TEST(AutoTestDiagnostics, Display_layout_and_environment_of_the_main_window)
     EXPECT_GT(display.device_pixel_ratio, 0.0);
     EXPECT_FALSE(display.window_client.isEmpty());
     EXPECT_GT(display.outer_device_size.width(), 0);
+    EXPECT_EQ(display.minimum_window, wizz::app::MainWindow::kMinimumSize);
     const LayoutDiagnostics layout = wizz::app::describe_layout(rig.window());
     EXPECT_EQ(layout.checks, 1);
     EXPECT_TRUE(layout.cancel_visible);
