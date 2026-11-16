@@ -29,7 +29,7 @@
     },
     {
       "name": "msvc-x64-release",
-      "displayName": "MSVC x64 — release package (app only)",
+      "displayName": "MSVC x64 — app only, no tests (release artefacts: build preset package)",
       "inherits": "windows-base",
       "cacheVariables": { "WIZZ_BUILD_GUI": "ON", "WIZZ_BUILD_TESTS": "OFF" }
     }
@@ -40,11 +40,18 @@
     { "name": "core-debug", "configurePreset": "msvc-x64-core", "configuration": "Debug" },
     { "name": "core-release", "configurePreset": "msvc-x64-core", "configuration": "Release" },
     {
+      "name": "dist",
+      "displayName": "Release artefacts: portable ZIP + Inno Setup installer in build/msvc-x64/dist",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release",
+      "targets": [ "dist" ]
+    },
+    {
       "name": "package",
-      "displayName": "Release build + ZIP package (CPack, windeployqt)",
+      "displayName": "The dist target in the app-only tree: build/msvc-x64-release/dist",
       "configurePreset": "msvc-x64-release",
       "configuration": "Release",
-      "targets": [ "PACKAGE" ]
+      "targets": [ "dist" ]
     }
   ],
   "testPresets": [
@@ -71,10 +78,10 @@
     },
     {
       "name": "release-package",
-      "displayName": "Configure the release preset and build the ZIP package",
+      "displayName": "Configure and build the release artefacts (ZIP + installer), as CI does",
       "steps": [
-        { "type": "configure", "name": "msvc-x64-release" },
-        { "type": "build", "name": "package" }
+        { "type": "configure", "name": "msvc-x64" },
+        { "type": "build", "name": "dist" }
       ]
     },
     {

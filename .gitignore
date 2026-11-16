@@ -10,6 +10,8 @@ CMakeUserPresets.json
 /.vs/
 /.vscode/
 *.user
+# Downloads of tools/release_check.ps1
+/tools/rel-*/
 # Agent worktrees and local tool state
 /.claude/
 # The specification is kept locally in spec/ and is not published with the code.

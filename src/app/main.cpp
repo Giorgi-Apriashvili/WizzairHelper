@@ -1,17 +1,21 @@
 // WizzairHelper.exe (01 §3): one GUI process per invocation.
 //
 // Start-up order: per-monitor-v2 DPI awareness comes with the process (application
-// manifest, resources/WizzairHelper.manifest), then crash reporting (01 §3.2), then
-// the optional --autotest command line (01 §17.1, D-30) before the QApplication — a
-// bad --out / --ret / --fixed-now value crashes before the window opens, logged in
-// the --data-root profile — then the event loop, the font warm-up (font_warmup.hpp),
-// the services, settings.json, and the main window.
+// manifest, resources/WizzairHelper.manifest). `--version` (D-35) prints the version
+// and ends the process before anything else. Then the AppMutex the installer looks
+// for (D-36), crash reporting (01 §3.2), the optional --autotest command line
+// (01 §17.1, D-30) before the QApplication — a bad --out / --ret / --fixed-now value
+// crashes before the window opens, logged in the --data-root profile — then the event
+// loop, the font warm-up (font_warmup.hpp), the services, settings.json, and the main
+// window.
+#include "app_mutex.hpp"
 #include "app_services.hpp"
 #include "application.hpp"
 #include "crash_reporter.hpp"
 #include "font_warmup.hpp"
 #include "main_window.hpp"
 #include "ui_style.hpp"
+#include "version_option.hpp"
 
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/locale.hpp"
@@ -67,13 +71,22 @@ int main(int argc, char* argv[])
     using namespace wizz;
     using wizz::app::CrashReporter;
 
+    const std::vector<std::string> arguments = command_line_arguments();
+    if (app::asks_for_version(arguments)) {
+        // No window, settings, network or AppMutex: an updater may ask a new copy for its
+        // version while the installed one is still running (D-35).
+        app::write_standard_output(app::version_text());
+        return 0;
+    }
+    // Held until the process ends, so the installer can tell that the app is running (D-36).
+    const app::AppMutex app_mutex;
+
     const SystemClock crash_clock;
     CrashReporter crash_reporter(crash_clock);
     crash_reporter.install();
 
     std::optional<ui::AutoTestOptions> autotest;
     try {
-        const std::vector<std::string> arguments = command_line_arguments();
         const std::filesystem::path current_dir = std::filesystem::current_path();
         // errors.log of the isolated profile (D-30), read first so that a bad value
         // below is logged there too.

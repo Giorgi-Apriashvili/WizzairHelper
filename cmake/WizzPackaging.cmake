@@ -1,4 +1,5 @@
-# Release package of WizzairHelper.exe (06 §4): `cmake --install` / CPack ZIP.
+# Release package of WizzairHelper.exe (06 §4): install rules, and the `dist` target that
+# turns them into the release artefacts (D-38).
 #
 #   <prefix>/WizzairHelper.exe
 #           /Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll         (windeployqt)
@@ -8,7 +9,8 @@
 #            double-conversion.dll, libpng16.dll, md4c.dll    (runtime dependency scan)
 #           /msvcp140*.dll, vcruntime140*.dll, concrt140.dll  (app-local MSVC runtime;
 #                                                              the UCRT ships with Windows 10/11)
-#           /THIRD-PARTY-NOTICES.txt, README.txt, licenses/<port>.txt
+#           /LICENSE.txt (WizzairHelper, MIT), THIRD-PARTY-NOTICES.txt, README.txt,
+#            licenses/<port>.txt
 #
 # windeployqt is vcpkg's tools/Qt6/bin/windeployqt.exe. Qt's network-only plugin
 # types (generic = TUIO touch over UDP, networkinformation, tls) are skipped: the app
@@ -17,8 +19,13 @@
 # OpenGL: a Widgets app paints with the raster engine. ICU is the Windows system
 # icu.dll (02 §4.3) and is not packaged.
 #
-# `cmake --build --preset package` builds the ZIP through CPack (build preset target
-# PACKAGE): build/msvc-x64-release/package/WizzairHelper-<version>-win64.zip.
+# `cmake --build --preset dist` (target `dist`, Release only) stages these files with
+# `cmake --install` and writes, to <build>/dist (cmake/WizzDist.cmake):
+#   WizzairHelper-<version>-win64.zip        portable: the staged files under a top-level
+#                                            WizzairHelper-<version>-win64 folder
+#   WizzairHelper-<version>-win64-setup.exe  Inno Setup per-user installer of exactly those
+#                                            files (packaging/WizzairHelper.iss)
+# The installer needs Inno Setup 6's ISCC.exe (WIZZ_ISCC); without it `dist` fails and says so.
 
 function(wizz_add_release_package target)
     if(NOT DEFINED VCPKG_INSTALLED_DIR OR NOT DEFINED VCPKG_TARGET_TRIPLET)
@@ -104,7 +111,9 @@ function(wizz_add_release_package target)
         message(WARNING "InstallRequiredSystemLibraries found no MSVC runtime; the package needs the VC++ redistributable")
     endif()
 
-    # 4. Notices: the summary plus each bundled component's license as vcpkg ships it.
+    # 4. Notices: the app's own license, the summary, and each bundled component's license
+    #    as vcpkg ships it.
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION . RENAME LICENSE.txt)
     install(FILES
         "${PROJECT_SOURCE_DIR}/packaging/THIRD-PARTY-NOTICES.txt"
         "${PROJECT_SOURCE_DIR}/packaging/README.txt"
@@ -117,14 +126,26 @@ function(wizz_add_release_package target)
         endif()
     endforeach()
 
-    # 5. CPack: one ZIP with a top-level WizzairHelper-<version>-win64 folder.
-    set(CPACK_GENERATOR ZIP PARENT_SCOPE)
-    set(CPACK_PACKAGE_NAME "WizzairHelper" PARENT_SCOPE)
-    set(CPACK_PACKAGE_VENDOR "WizzairHelper" PARENT_SCOPE)
-    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}" PARENT_SCOPE)
-    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}" PARENT_SCOPE)
-    set(CPACK_PACKAGE_FILE_NAME "WizzairHelper-${PROJECT_VERSION}-win64" PARENT_SCOPE)
-    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON PARENT_SCOPE)
-    set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/package" PARENT_SCOPE)
-    set(CPACK_STRIP_FILES OFF PARENT_SCOPE)
+    # 5. `dist`: the portable ZIP and the installer, built from the rules above at build time.
+    find_program(WIZZ_ISCC NAMES ISCC iscc
+        HINTS "C:/Program Files (x86)/Inno Setup 6"
+              "$ENV{ProgramFiles}/Inno Setup 6"
+              "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6"
+        DOC "Inno Setup 6 command-line compiler (ISCC.exe) for the installer of the dist target")
+    if(NOT WIZZ_ISCC)
+        message(STATUS "Inno Setup 6 (ISCC.exe) not found: the dist target will fail until it is installed")
+    endif()
+    add_custom_target(dist
+        COMMAND "${CMAKE_COMMAND}"
+                "-DWIZZ_CONFIG=$<CONFIG>"
+                "-DWIZZ_BUILD_DIR=${CMAKE_BINARY_DIR}"
+                "-DWIZZ_VERSION=${PROJECT_VERSION}"
+                "-DWIZZ_ISCC=${WIZZ_ISCC}"
+                "-DWIZZ_ISS=${PROJECT_SOURCE_DIR}/packaging/WizzairHelper.iss"
+                "-DWIZZ_STAGE_DIR=${CMAKE_BINARY_DIR}/dist-stage"
+                "-DWIZZ_DIST_DIR=${CMAKE_BINARY_DIR}/dist"
+                -P "${PROJECT_SOURCE_DIR}/cmake/WizzDist.cmake"
+        COMMENT "Release artefacts: portable ZIP and installer in ${CMAKE_BINARY_DIR}/dist"
+        VERBATIM)
+    add_dependencies(dist ${target})
 endfunction()

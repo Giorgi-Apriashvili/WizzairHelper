@@ -1,9 +1,9 @@
 // Version resource: product name and file description are WizzairHelper (06 §4).
+// The numbers come from project(VERSION) in CMakeLists.txt, the single source of the
+// version (D-37): src/app/CMakeLists.txt generates wizz_version.h.
 #include <winver.h>
 
-#define WIZZ_VER_MAJOR 1
-#define WIZZ_VER_MINOR 0
-#define WIZZ_VER_PATCH 0
+#include "wizz_version.h"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    WIZZ_VER_MAJOR, WIZZ_VER_MINOR, WIZZ_VER_PATCH, 0
@@ -24,11 +24,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "WizzairHelper"
             VALUE "FileDescription",  "WizzairHelper"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      WIZZ_VER_FILE_STRING
             VALUE "InternalName",     "WizzairHelper"
             VALUE "OriginalFilename", "WizzairHelper.exe"
             VALUE "ProductName",      "WizzairHelper"
-            VALUE "ProductVersion",   "1.0.0"
+            VALUE "ProductVersion",   WIZZ_VER_STRING
         END
     END
     BLOCK "VarFileInfo"
