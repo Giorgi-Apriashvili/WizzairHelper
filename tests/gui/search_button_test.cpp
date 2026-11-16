@@ -118,7 +118,11 @@ TEST(SearchButton, Paints_a_rounded_accent_face_without_border)
     EXPECT_EQ(image.pixelColor(image.width() - 3, middle), theme.accent);
     EXPECT_EQ(image.pixelColor(image.width() / 2, 1), theme.accent);
     EXPECT_EQ(image.pixelColor(image.width() / 2, image.height() - 2), theme.accent);
-    EXPECT_NE(image.pixelColor(0, 0), theme.accent) << "rounded corners";
+    // Rounded corners (radius 5): the pixel one in from each corner lies outside the arc, which
+    // an antialiased square face would cover.
+    EXPECT_NE(image.pixelColor(1, 1), theme.accent) << "rounded corners";
+    EXPECT_NE(image.pixelColor(image.width() - 2, image.height() - 2), theme.accent) << "rounded corners";
+    EXPECT_EQ(image.pixelColor(5, 1), theme.accent) << "the straight edge starts after the radius";
     save_render(button, QStringLiteral("search-button"));
 
     // Disabled: the faded face over the window colour behind it.

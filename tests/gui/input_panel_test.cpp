@@ -236,6 +236,8 @@ TEST(InputPanel, Cards_sit_in_a_2_by_2_grid_with_the_card_paddings)
         }
     }
     EXPECT_EQ(wizz::app::SectionCard::kPadding, QMargins(14, 6, 14, 8));
+    ASSERT_NE(card(panel, 0)->hint_label(), nullptr);
+    ASSERT_NE(card(panel, 3)->hint_label(), nullptr);
     EXPECT_EQ(card(panel, 0)->hint_label()->text(), QStringLiteral("(empty “To” = anywhere)"));
     EXPECT_EQ(card(panel, 3)->hint_label()->text().toStdString(),
               "Return flights go from the destination area back to any airport near home.");
