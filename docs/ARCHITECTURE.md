@@ -1,7 +1,8 @@
 # WizzairHelper — architecture and conventions
 
-The specification (`00-README.md` … `07-formatting-and-invariants.md`, `protocol-reference.md`,
-`fixtures/`) is the authority. This file records how the C++ code base is organised so that every
+The specification (chapters `00`–`07` and the protocol reference, kept locally in `spec/` and not
+published with the code; code comments cite it as "01 §10.3" etc.) together with `fixtures/` is the
+authority. This file records how the C++ code base is organised so that every
 contributor builds the same thing. Deliberate deviations from the spec are listed in
 [`DECISIONS.md`](DECISIONS.md).
 

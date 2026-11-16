@@ -10,10 +10,13 @@ Native C++23 / Qt 6 Widgets / libcurl, built with CMake and vcpkg (MSVC x64).
 
 ## Repository map
 
+The code follows a detailed specification that is not published here; comments cite its chapters
+as "01 §10.3" and so on, and [`docs/DECISIONS.md`](docs/DECISIONS.md) records how conflicts in it
+were resolved.
+
 | Path | What |
 |---|---|
-| `00-README.md` … `07-formatting-and-invariants.md`, `protocol-reference.md` | The specification (authority) |
-| `fixtures/`, `history/` | Byte-exact test inputs and the dated evidence (frozen live dataset) |
+| `fixtures/`, `history/live-cache-2026-11-02/` | Byte-exact test inputs: captured responses and a frozen live dataset |
 | `src/core` | Pure logic: decimal, JSON, Unicode/locale, time, geo, catalog, planner, pricing, round trips |
 | `src/services` | I/O: libcurl transport, caches, Wizz client, currency service, place resolver, search service |
 | `src/ui_logic` | Qt-free presentation rules: texts, busy-panel model, date rules, grid rules, settings, autotest |
@@ -36,3 +39,8 @@ Settings, caches and `errors.log` live in `%LOCALAPPDATA%\WizzairHelper\`.
 Fares come from wizzair.com's unofficial website API; geocoding uses Photon / Nominatim
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.
 Keep usage personal and low-volume.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The release package ships the licences of its third-party
+components (Qt under LGPL-3.0, libcurl, zlib, brotli, …) in `THIRD-PARTY-NOTICES.txt` and `licenses/`.

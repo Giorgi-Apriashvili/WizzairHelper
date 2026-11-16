@@ -1,7 +1,7 @@
 # Building WizzairHelper
 
-Windows x64 only. The specification is in `00-README.md` … `07-formatting-and-invariants.md`;
-the code conventions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the deliberate
+Windows x64 only. The specification is kept locally in `spec/` (not published; code comments cite
+its chapters as "01 §10.3" etc.); the code conventions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the deliberate
 deviations in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Prerequisites

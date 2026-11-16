@@ -12,3 +12,5 @@ CMakeUserPresets.json
 *.user
 # Agent worktrees and local tool state
 /.claude/
+# The specification is kept locally in spec/ and is not published with the code.
+/spec/
