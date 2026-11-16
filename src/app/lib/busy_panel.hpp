@@ -25,6 +25,7 @@
 // UI thread only. Worker progress must be marshalled to the UI thread before
 // report(); reports that arrive after end() are ignored.
 
+#include "panel_progress_bar.hpp"
 #include "taskbar_progress.hpp"
 
 #include "wizz/core/locale.hpp"
@@ -169,7 +170,7 @@ private:
     QGridLayout* grid_ = nullptr;
     QWidget* bar_box_ = nullptr;
     SpinnerWidget* spinner_ = nullptr;
-    QProgressBar* bar_ = nullptr;
+    PanelProgressBar* bar_ = nullptr;  ///< still while idle (no style glow)
     QLabel* elapsed_ = nullptr;
     ElidedLabel* status_ = nullptr;
     QLabel* wait_ = nullptr;

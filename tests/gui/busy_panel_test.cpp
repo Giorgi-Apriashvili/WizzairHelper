@@ -19,6 +19,8 @@
 #include <QPalette>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QTimer>
 
 #include <gtest/gtest.h>
@@ -351,6 +353,67 @@ TEST_F(BusyPanelTest, Failed_end_is_red_keeps_the_bar_and_clears_the_taskbar_err
     fire_error_reset_timer();
     ASSERT_EQ(mock_.calls.size(), 4U);
     EXPECT_TRUE(is_state_call(mock_.calls[3], TBPF_NOPROGRESS));
+}
+
+/// Counts the native style's animation frames sent to a widget.
+class StyleAnimationCounter final : public QObject {
+public:
+    explicit StyleAnimationCounter(QObject* target) { target->installEventFilter(this); }
+    int frames = 0;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::StyleAnimationUpdate) {
+            ++frames;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+TEST_F(BusyPanelTest, An_idle_bar_is_still_after_a_search_ends)
+{
+    // The "windowsvista" style the app uses animates a moving glow over any bar
+    // with 0 < value < maximum. After End the bar rests at 1000 of 1001 (success)
+    // or part-filled (failure); it must not keep moving, or the app looks busy.
+    std::unique_ptr<QStyle> vista{QStyleFactory::create(QStringLiteral("windowsvista"))};
+    if (!vista) {
+        GTEST_SKIP() << "windowsvista style not available";
+    }
+    QProgressBar* bar = panel_->progress_bar();
+    bar->setStyle(vista.get());
+    panel_->resize(800, 60);
+    panel_->show();
+    StyleAnimationCounter counter{bar};
+
+    // Sanity: while busy and part-filled, the style does animate (the detector works).
+    panel_->begin("Outbound: starting…");
+    panel_->report(progress("Fetching fares", "x", 4, 8));
+    bar->repaint();
+    pump_for(300ms);
+    EXPECT_GT(counter.frames, 0) << "the style's glow should run while busy";
+
+    for (const bool success : {true, false}) {
+        if (!success) {
+            panel_->begin("Return: starting…");
+            panel_->report(progress("Fetching fares", "x", 4, 8));
+            bar->repaint();
+            pump_for(100ms);
+        }
+        panel_->end(success ? "Done." : "Cancelled.", success);
+        bar->repaint();
+        pump_for(100ms);  // let a stopping animation deliver its last frame
+        counter.frames = 0;
+        pump_for(400ms);
+        EXPECT_EQ(counter.frames, 0) << (success ? "after a successful end" : "after a failed end");
+        if (success) {
+            EXPECT_EQ(bar->value(), 1000);  // full, as End sets it
+        } else {
+            EXPECT_GT(bar->value(), 0);  // failure leaves the bar part-filled where it was
+            EXPECT_LT(bar->value(), 1000);
+        }
+    }
+    bar->setStyle(nullptr);
 }
 
 TEST_F(BusyPanelTest, The_error_reset_keeps_a_new_busy_period_untouched)

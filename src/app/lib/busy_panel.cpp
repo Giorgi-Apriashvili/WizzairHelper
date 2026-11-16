@@ -73,7 +73,7 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
     spinner_->setContentsMargins(0, 0, kSpinnerRightMargin, 0);
     spinner_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
 
-    bar_ = new QProgressBar;
+    bar_ = new PanelProgressBar;
     bar_->setRange(0, kBarRangeMax);
     bar_->setValue(0);
     bar_->setTextVisible(false);
@@ -313,6 +313,8 @@ void BusyPanel::render()
         set_bar_value(view.bar_value);
     }
 
+    // The bar may show the style's moving glow only while something is being processed.
+    bar_->set_live(is_busy());
     spinner_->set_spinning(view.spinning);
     spinner_->set_angle(view.spinner_angle);
 
