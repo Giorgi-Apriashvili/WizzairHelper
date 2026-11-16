@@ -14,19 +14,29 @@ target_compile_definitions(wizz_project_options INTERFACE
     _WIN32_WINNT=0x0A00
     WINVER=0x0A00)
 
+# MSVC and clang-cl share the cl-style command line (MSVC is true for both).
 if(MSVC)
     target_compile_options(wizz_project_options INTERFACE
         /W4                 # high warning level
         /permissive-        # standards conformance
         /utf-8              # UTF-8 sources and execution charset (06 §4)
         /Zc:__cplusplus
-        /Zc:preprocessor
         /Zc:inline
-        /Zc:throwingNew
         /EHsc
         /bigobj
-        /MP                 # parallel compilation with the Visual Studio generator
         /diagnostics:caret)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        # Options clang-cl does not implement (it would warn "argument unused").
+        target_compile_options(wizz_project_options INTERFACE
+            /Zc:preprocessor
+            /Zc:throwingNew
+            /MP)            # parallel compilation with the Visual Studio generator
+    else()
+        # clang-cl: designated initializers that leave members to their default
+        # member initializers are intended (e.g. Airport{.iata = "LTN", .name = ...}).
+        target_compile_options(wizz_project_options INTERFACE
+            -Wno-missing-designated-field-initializers)
+    endif()
     if(WIZZ_WARNINGS_AS_ERRORS)
         target_compile_options(wizz_project_options INTERFACE /WX)
     endif()

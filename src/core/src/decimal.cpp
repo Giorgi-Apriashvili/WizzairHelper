@@ -139,7 +139,6 @@ public:
         return *this;
     }
 
-    friend constexpr bool operator==(const Wide&, const Wide&) noexcept = default;
     friend constexpr std::strong_ordering operator<=>(const Wide& a, const Wide& b) noexcept
     {
         for (std::size_t i = kWords; i-- > 0;) {

@@ -120,20 +120,6 @@ constexpr Date kExampleTo = Date::from_ymd(2026, 12, 21);
     return planner::plan(live(), request, kToday);
 }
 
-[[nodiscard]] std::string describe(const PlannedRequest& r)
-{
-    return r.from->iata + "→" + r.query_to + " [" + r.group_key + "] " + r.start_date.iso() + ".." + r.end_date.iso();
-}
-
-[[nodiscard]] Strings describe(const SearchPlan& plan)
-{
-    Strings result;
-    for (const PlannedRequest& r : plan.requests) {
-        result.push_back(describe(r));
-    }
-    return result;
-}
-
 [[nodiscard]] Strings km_labels(const std::vector<AreaAirport>& airports)
 {
     Strings result;

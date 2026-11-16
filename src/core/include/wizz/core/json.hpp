@@ -81,6 +81,14 @@ public:
     /// The literal null.
     Value() noexcept = default;
 
+    // Defined after Member is complete (below): a std::vector<Member> member may
+    // only be copied or destroyed once Member is a complete type.
+    Value(const Value& other);
+    Value(Value&& other) noexcept;
+    Value& operator=(const Value& other);
+    Value& operator=(Value&& other) noexcept;
+    ~Value();
+
     [[nodiscard]] Kind kind() const noexcept
     {
         return std::holds_alternative<UnreadableText>(storage_) ? Kind::string : static_cast<Kind>(storage_.index());
@@ -156,7 +164,7 @@ private:
     using Storage = std::variant<std::monostate, bool, NumberText, std::string, std::vector<Value>, std::vector<Member>,
                                  UnreadableText>;
 
-    explicit Value(Storage storage) noexcept : storage_(std::move(storage)) {}
+    explicit Value(Storage storage) noexcept;
 
     Storage storage_;
 };
@@ -181,6 +189,14 @@ private:
     Value name_;  ///< always of kind string
     Value value_;
 };
+
+// Value's special members, now that Member is complete.
+inline Value::Value(Storage storage) noexcept : storage_(std::move(storage)) {}
+inline Value::Value(const Value& other) = default;
+inline Value::Value(Value&& other) noexcept = default;
+inline Value& Value::operator=(const Value& other) = default;
+inline Value& Value::operator=(Value&& other) noexcept = default;
+inline Value::~Value() = default;
 
 /// Parses one UTF-8 JSON document (JsonDocument.Parse with default options).
 /// Throws ParseError on anything RFC 8259 rejects, on nesting deeper than kMaxDepth,

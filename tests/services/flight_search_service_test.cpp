@@ -818,7 +818,7 @@ private:
 TEST(FlightSearchService, R_01_One_report_per_request_before_it_starts_with_StepStartedUtc)
 {
     // Spacing S = 1 s, jitter 0; the fake clock advances by every recorded delay.
-    constexpr Duration kSpacing = 1s;
+    static constexpr Duration kSpacing = 1s;  // static: the lambdas below use it without capturing
     const auto clock = std::make_shared<FixedClock>();
     Timeline timeline;
     SearchHarnessOptions options;

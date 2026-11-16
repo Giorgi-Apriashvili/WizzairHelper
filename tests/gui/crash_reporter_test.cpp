@@ -267,6 +267,12 @@ TEST(ExceptionDescription, Type_names_drop_msvc_keywords)
 
 TEST(ExceptionDescription, Nested_exceptions_are_inner_exceptions)
 {
+#if defined(__clang__)
+    // clang-cl with the MSVC STL: std::throw_with_nested captures no inner exception
+    // (std::current_exception() is empty inside the nested_exception constructor), so
+    // there is nothing to describe. The shipped program is built with MSVC.
+    GTEST_SKIP() << "clang-cl: std::throw_with_nested does not capture the inner exception";
+#endif
     std::exception_ptr error;
     try {
         try {
