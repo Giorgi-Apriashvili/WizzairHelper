@@ -98,6 +98,15 @@ void expect_window_follows(WindowRig& rig, const style::Theme& expected)
     EXPECT_EQ(calendar->weekdayTextFormat(Qt::Saturday).foreground().color(), expected.accent_text);
     EXPECT_EQ(calendar->weekdayTextFormat(Qt::Sunday).foreground().color(), expected.accent_text);
     EXPECT_EQ(calendar->palette().color(QPalette::Disabled, QPalette::Text), expected.text_muted);
+    // The navigation bar (Highlight / HighlightedText) is the tint with the text colour, not the
+    // accent of selected text; its year box selects text in the accent.
+    const auto* navigation = calendar->findChild<QWidget*>(QStringLiteral("qt_calendar_navigationbar"));
+    ASSERT_NE(navigation, nullptr);
+    EXPECT_EQ(navigation->palette().color(navigation->backgroundRole()), expected.selection);
+    EXPECT_EQ(navigation->palette().color(QPalette::HighlightedText), expected.selection_text);
+    const auto* year = navigation->findChild<QWidget*>(QStringLiteral("qt_calendar_yearedit"));
+    ASSERT_NE(year, nullptr);
+    EXPECT_EQ(year->palette().color(QPalette::Highlight), expected.text_selection);
     EXPECT_EQ(cheapest_background(rig), expected.cheapest);
     // The grid delegate's kept selection brush (a selected row that is not a cheapest one).
     const wizz::app::GridTableView* table = rig.outbound().table();

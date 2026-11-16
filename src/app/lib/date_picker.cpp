@@ -70,6 +70,21 @@ void DatePicker::apply_calendar_look()
                      theme.high_contrast ? QApplication::palette().color(QPalette::Disabled, QPalette::Text)
                                          : theme.text_muted);
     calendar->setPalette(palette);
+    // The navigation bar fills itself with the Highlight role and writes the month and year in
+    // HighlightedText: there the selection tint and the text colour, like the selected day,
+    // not the accent of selected text. Its year box keeps the selected-text colours.
+    if (auto* bar = calendar->findChild<QWidget*>(QStringLiteral("qt_calendar_navigationbar"))) {
+        QPalette tint = bar->palette();
+        tint.setColor(QPalette::Highlight, theme.selection);
+        tint.setColor(QPalette::HighlightedText, theme.selection_text);
+        bar->setPalette(tint);
+        if (auto* year = bar->findChild<QWidget*>(QStringLiteral("qt_calendar_yearedit"))) {
+            QPalette edit = year->palette();
+            edit.setColor(QPalette::Highlight, theme.text_selection);
+            edit.setColor(QPalette::HighlightedText, theme.on_accent);
+            year->setPalette(edit);
+        }
+    }
 }
 
 void DatePicker::set_bounds(const ui::DateBounds& bounds)
