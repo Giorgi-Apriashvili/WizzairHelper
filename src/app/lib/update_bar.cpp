@@ -2,7 +2,6 @@
 
 #include "qt_strings.hpp"
 #include "search_button.hpp"
-#include "system_colours.hpp"
 #include "ui_style.hpp"
 
 #include <QEvent>
@@ -18,8 +17,6 @@ namespace wizz::app {
 
 namespace {
 
-/// Share of the magenta in the background tint (over white).
-constexpr double kTintStrength = 0.08;
 /// Horizontal padding of the "Later" text inside its flat button.
 constexpr int kLaterPadding = 10;
 
@@ -46,10 +43,6 @@ public:
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }
 };
 
-[[nodiscard]] int blend(int base, int accent) noexcept
-{
-    return static_cast<int>(base + ((accent - base) * kTintStrength) + 0.5);
-}
 
 } // namespace
 
@@ -102,15 +95,15 @@ void UpdateBar::show_view(const ui::UpdateBarView& view)
 
 QColor UpdateBar::background_colour()
 {
-    const QColor magenta = style::wizz_magenta();
-    return QColor{blend(255, magenta.red()), blend(255, magenta.green()), blend(255, magenta.blue())};
+    return style::theme().update_tint;
 }
 
 void UpdateBar::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter{this};
     painter.fillRect(rect(), background_colour());
-    painter.fillRect(QRect{0, 0, kAccentWidth, height()}, style::wizz_magenta());
+    painter.fillRect(QRect{0, 0, kAccentWidth, height()}, style::theme().accent_line);
+    painter.fillRect(QRect{0, height() - 1, width(), 1}, style::theme().border);
 }
 
 void UpdateBar::changeEvent(QEvent* event)
@@ -123,8 +116,8 @@ void UpdateBar::changeEvent(QEvent* event)
 
 void UpdateBar::apply_text_colour()
 {
-    // ControlText on the tint, whatever the style paints (system_colours.hpp).
-    const QColor text = system_colour(SystemColour::control_text);
+    // The theme's text on the tint, whatever the style paints.
+    const QColor text = style::theme().text;
     for (QWidget* widget : {static_cast<QWidget*>(message_), static_cast<QWidget*>(later_)}) {
         QPalette palette = widget->palette();
         if (palette.color(QPalette::WindowText) != text || palette.color(QPalette::ButtonText) != text) {

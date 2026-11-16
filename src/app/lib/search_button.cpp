@@ -1,24 +1,21 @@
 #include "search_button.hpp"
 
+#include "modern_style.hpp"
 #include "ui_style.hpp"
 
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QPainter>
-#include <QStyle>
-#include <QStyleOptionFocusRect>
+
+#include <algorithm>
+#include <cmath>
 
 namespace wizz::app {
 
 namespace {
 
-/// The flat button adapter's internal padding on each side (ButtonFlatAdapter
-/// layout.paddingSize = 2; border size 0).
-constexpr int kInternalPadding = 2;
-/// Hover / pressed shades of the magenta (flat buttons darken or lighten their
-/// BackColor while the mouse is over or down).
-constexpr int kHoverLighter = 112;
-constexpr int kPressedDarker = 115;
+constexpr int kGlyphGap = 8;
+constexpr qreal kGlyphPointSize = 9.5;
 
 } // namespace
 
@@ -30,6 +27,22 @@ SearchButton::SearchButton(const QString& text, QWidget* parent) : QPushButton(t
     setDefault(false);
     setAttribute(Qt::WA_Hover);
     setFocusPolicy(Qt::StrongFocus);
+    setCursor(Qt::PointingHandCursor);
+}
+
+void SearchButton::set_glyph(char16_t glyph)
+{
+    glyph_ = glyph;
+    updateGeometry();
+    update();
+}
+
+int SearchButton::glyph_width() const
+{
+    if (glyph_ == 0) {
+        return 0;
+    }
+    return static_cast<int>(std::ceil(style::icon_size(glyph_, kGlyphPointSize).width())) + kGlyphGap;
 }
 
 QSize SearchButton::sizeHint() const
@@ -37,9 +50,9 @@ QSize SearchButton::sizeHint() const
     ensurePolished();
     const QFontMetrics metrics(font());
     const QSize text_size = metrics.size(Qt::TextShowMnemonic, text());
-    const int extra = 2 * kInternalPadding;
-    const QSize hint(text_size.width() + kPadding.left() + kPadding.right() + extra,
-                     text_size.height() + kPadding.top() + kPadding.bottom() + extra);
+    const QSize hint(glyph_width() + text_size.width() + kPadding.left() + kPadding.right(),
+                     std::max(ModernStyle::control_height(QFontMetrics(style::form_font())),
+                              text_size.height() + kPadding.top() + kPadding.bottom()));
     return hint.expandedTo(kMinimumSize);
 }
 
@@ -50,17 +63,19 @@ QSize SearchButton::minimumSizeHint() const
 
 QColor SearchButton::background_color() const
 {
-    const QColor magenta = style::wizz_magenta();
+    const style::Theme& theme = style::theme();
     if (!isEnabled()) {
-        return magenta;
+        QColor faded = theme.accent;
+        faded.setAlphaF(0.45F);
+        return faded;
     }
     if (isDown()) {
-        return magenta.darker(kPressedDarker);
+        return theme.accent_pressed;
     }
     if (underMouse()) {
-        return magenta.lighter(kHoverLighter);
+        return theme.accent_hover;
     }
-    return magenta;
+    return theme.accent;
 }
 
 QColor SearchButton::text_color() const
@@ -71,23 +86,32 @@ QColor SearchButton::text_color() const
 void SearchButton::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter(this);
-    const QColor background = background_color();
-    painter.fillRect(rect(), background);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF face = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(background_color());
+    painter.drawRoundedRect(face, ModernStyle::kRadius, ModernStyle::kRadius);
 
-    QRect text_rect = rect();
-    if (isDown()) {
-        text_rect.translate(1, 1);  // the flat adapter offsets pressed text by one pixel
+    // Icon and text centred together.
+    const QFontMetrics metrics(font());
+    const int text_width = metrics.horizontalAdvance(text());
+    const int content = glyph_width() + text_width;
+    int x = (width() - content) / 2;
+    painter.setPen(text_color());
+    if (glyph_ != 0) {
+        const int advance = glyph_width() - kGlyphGap;
+        style::draw_icon(painter, QRectF(x, 0, advance, height()), glyph_, kGlyphPointSize, text_color());
+        x += advance + kGlyphGap;
     }
     painter.setFont(font());
-    painter.setPen(text_color());
-    painter.drawText(text_rect, Qt::AlignCenter | Qt::TextShowMnemonic, text());
+    painter.drawText(QRect(x, 0, text_width + 1, height()), Qt::AlignVCenter | Qt::AlignLeft | Qt::TextShowMnemonic,
+                     text());
 
     if (hasFocus()) {
-        QStyleOptionFocusRect option;
-        option.initFrom(this);
-        option.rect = rect().adjusted(kInternalPadding, kInternalPadding, -kInternalPadding, -kInternalPadding);
-        option.backgroundColor = background;
-        style()->drawPrimitive(QStyle::PE_FrameFocusRect, &option, &painter, this);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5));
+        painter.drawRoundedRect(QRectF(rect()).adjusted(2.75, 2.75, -2.75, -2.75), ModernStyle::kRadius - 2,
+                                ModernStyle::kRadius - 2);
     }
 }
 

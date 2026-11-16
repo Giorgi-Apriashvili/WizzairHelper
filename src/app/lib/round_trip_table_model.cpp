@@ -27,7 +27,7 @@ static_assert([] {
 RoundTripTableModel::RoundTripTableModel(std::shared_ptr<const Locale> locale, QObject* parent)
     : KeyedTableModel(parent), grid_(std::move(locale))
 {
-    bold_.setBold(true);  // only the weight is set: it resolves against the view's font
+    bold_.setWeight(QFont::DemiBold);  // only the weight is set: it resolves against the view's font
 }
 
 int RoundTripTableModel::column_index(ui::TripColumn column) noexcept
@@ -86,6 +86,11 @@ QVariant RoundTripTableModel::headerData(int section, Qt::Orientation orientatio
 {
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < columnCount()) {
         return QString::fromStdString(grid_.header(column_at(section)));
+    }
+    if (orientation == Qt::Horizontal && role == Qt::TextAlignmentRole && section >= 0 && section < columnCount()) {
+        // Headers line up with their values (numbers right), wrapped.
+        const Qt::Alignment horizontal = alignment(column_at(section)) & Qt::AlignHorizontal_Mask;
+        return static_cast<int>(horizontal.toInt() | Qt::AlignVCenter | Qt::TextWordWrap);
     }
     return QAbstractTableModel::headerData(section, orientation, role);
 }

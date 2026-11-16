@@ -5,7 +5,7 @@
 //
 //   [▌] WizzairHelper 1.2.0 is ready to install. It will be …   [Restart and update]  Later
 //
-// Look: the window's form font (Segoe UI 9 pt) in ControlText on a light tint of
+// Look: the window's form font in the theme's text colour on a tint of
 // the Wizz magenta, a 4 px magenta accent at the left edge, the action as a
 // magenta search-style button (01 §4.5) and "Later" as a small flat button.
 // Padding (10 + accent, 4, 8, 4). The message wraps when the window is too narrow,

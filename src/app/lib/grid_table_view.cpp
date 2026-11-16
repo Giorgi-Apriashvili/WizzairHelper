@@ -1,7 +1,9 @@
 #include "grid_table_view.hpp"
 
 #include "grid_row_delegate.hpp"
+#include "ui_style.hpp"
 
+#include <QApplication>
 #include <QContextMenuEvent>
 #include <QEvent>
 #include <QHeaderView>
@@ -49,6 +51,11 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     setSelectionMode(SingleSelection);
     setFrameShape(QFrame::NoFrame);
     setWordWrap(false);
+    setShowGrid(false);  // rows are separated by the delegate's line, columns by space
+    QPalette colours = palette();
+    colours.setColor(QPalette::Base, style::theme().surface);
+    colours.setColor(QPalette::Text, style::theme().text);
+    setPalette(colours);
     setCornerButtonEnabled(false);
     setSortingEnabled(false);              // header clicks sort through ui_logic (01 §8.4)
     setVerticalScrollMode(ScrollPerItem);  // the scroll value is the first displayed row (01 §8.6)
@@ -65,6 +72,7 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
     columns->setSectionResizeMode(QHeaderView::Interactive);
     columns->setStretchLastSection(false);
     columns->setHighlightSections(false);
+    columns->setFont(style::semibold_font(QApplication::font().pointSizeF()));
     // WinForms header cells: MiddleLeft, wrapped text.
     columns->setDefaultAlignment(Qt::Alignment::fromInt(Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap));
     columns->setTextElideMode(Qt::ElideNone);
@@ -161,7 +169,7 @@ void GridTableView::fit_fill_column()
 
 int GridTableView::row_height() const
 {
-    return fontMetrics().height() + 9;
+    return fontMetrics().height() + 12;  // comfortable rows (prototype "layout" look)
 }
 
 void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest request, int column,

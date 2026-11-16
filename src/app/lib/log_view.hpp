@@ -1,8 +1,8 @@
 #pragma once
 // The Log tab (01 §12.1): a read-only multi-line text box with both scroll bars,
-// no word wrap, Courier New 9 pt and the text-box background SystemColors.Window
-// with WindowText (system_colours.hpp; never the grey read-only colour, whatever
-// the Qt style paints).
+// no word wrap, Cascadia Mono 9.5 pt (Consolas on Windows 10) in the theme's text
+// colour on its surface colour (ui_style.hpp; never the grey read-only colour,
+// whatever the Qt style paints), no frame of its own: the results card frames it.
 // append_line writes "[" + local now "HH:mm:ss" (culture time separator) + "] "
 // + line + CRLF through wizz::ui::log_entry, moves the caret to the end and
 // scrolls there. There is no size limit; the log lives in memory only.
@@ -36,7 +36,7 @@ public:
     /// Everything appended so far, CRLF line ends included.
     [[nodiscard]] const std::string& text() const noexcept { return text_; }
 
-    /// Courier New 9 pt (monospace fallback).
+    /// Cascadia Mono 9.5 pt, else Consolas.
     [[nodiscard]] static QFont log_font();
 
 protected:

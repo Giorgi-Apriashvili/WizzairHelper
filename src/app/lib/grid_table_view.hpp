@@ -41,7 +41,7 @@ public:
     void set_fill_column(int logical_column, int minimum_width);
     /// Re-applies the fill rule (after a column was shown or hidden).
     void fit_fill_column();
-    /// Row height: font height + 9, the WinForms DataGridView row template.
+    /// Row height: font height + 12 (prototype "layout" look; WinForms used + 9).
     [[nodiscard]] int row_height() const;
     /// Header height: one text line, or as many as the longest wrapped header text needs.
     void fit_header_height();

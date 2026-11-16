@@ -39,7 +39,7 @@ static_assert([] {
 FlightTableModel::FlightTableModel(std::shared_ptr<const Locale> locale, bool offer_plan_return, QObject* parent)
     : KeyedTableModel(parent), grid_(std::move(locale), offer_plan_return), gray_text_(grid_colors::gray_text())
 {
-    bold_.setBold(true);  // only the weight is set: it resolves against the view's font
+    bold_.setWeight(QFont::DemiBold);  // only the weight is set: it resolves against the view's font
 }
 
 std::size_t FlightTableModel::idx_at(int row) const
@@ -100,9 +100,9 @@ QVariant FlightTableModel::data(const QModelIndex& index, int role) const
     case Qt::ForegroundRole:
         return grid_.tone(row) == ui::RowTone::unavailable ? QVariant::fromValue(gray_text_) : QVariant{};
     case Qt::BackgroundRole:
-        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::kCheapestBack}) : QVariant{};
+        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::cheapest_back()}) : QVariant{};
     case GridRowDelegate::SelectionBackgroundRole:
-        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::kCheapestSelectionBack})
+        return grid_.tone(row) == ui::RowTone::cheapest ? QVariant::fromValue(QBrush{grid_colors::cheapest_selection_back()})
                                                          : QVariant{};
     case RowToneRole:
         return static_cast<int>(grid_.tone(row));
@@ -115,6 +115,11 @@ QVariant FlightTableModel::headerData(int section, Qt::Orientation orientation, 
 {
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < columnCount()) {
         return QString::fromStdString(grid_.header(column_at(section)));
+    }
+    if (orientation == Qt::Horizontal && role == Qt::TextAlignmentRole && section >= 0 && section < columnCount()) {
+        // Headers line up with their values (numbers right, times centred), wrapped.
+        const Qt::Alignment horizontal = alignment(column_at(section)) & Qt::AlignHorizontal_Mask;
+        return static_cast<int>(horizontal.toInt() | Qt::AlignVCenter | Qt::TextWordWrap);
     }
     return QAbstractTableModel::headerData(section, orientation, role);
 }

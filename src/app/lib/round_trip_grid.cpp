@@ -32,14 +32,14 @@ struct ColumnWidth {
 };
 constexpr std::array kColumnWidths{
     ColumnWidth{TripColumn::total, 95},        ColumnWidth{TripColumn::nights, 55},
-    ColumnWidth{TripColumn::out_date, 95},     ColumnWidth{TripColumn::outbound, 300},
+    ColumnWidth{TripColumn::out_date, 95},     ColumnWidth{TripColumn::outbound, 310},
     ColumnWidth{TripColumn::out_price, 80},    ColumnWidth{TripColumn::return_date, 95},
-    ColumnWidth{TripColumn::return_leg, 300},  ColumnWidth{TripColumn::return_price, 85},
+    ColumnWidth{TripColumn::return_leg, 310},  ColumnWidth{TripColumn::return_price, 85},
     ColumnWidth{TripColumn::booking_notes, 260},
 };
-/// "Booking / notes" fills the remaining width; no minimum is set, so WinForms' default
-/// DataGridViewColumn.MinimumWidth (5) applies.
-constexpr int kNotesMinimumWidth = 5;
+/// "Booking / notes" fills the remaining width, at least L(120) (prototype: a 5 px column
+/// wrapped its header word by word and made the header row three lines tall).
+constexpr int kNotesMinimumWidth = 120;
 
 [[nodiscard]] int section(TripColumn column) noexcept
 {

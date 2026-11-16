@@ -1,5 +1,7 @@
 #include "spinner_widget.hpp"
 
+#include "ui_style.hpp"
+
 #include "wizz/ui/busy_panel_model.hpp"
 
 #include <QPainter>
@@ -9,10 +11,13 @@ namespace wizz::app {
 
 namespace {
 
-// 01 §10.8 colours.
-constexpr QColor kTrackColour{0, 0, 0, 40};     // ARGB(40, 0, 0, 0)
-constexpr QColor kArcColour{197, 0, 110};       // RGB(197, 0, 110), the Wizz magenta
-constexpr QColor kIdleDotColour{0, 0, 0, 120};  // ARGB(120, 0, 0, 0)
+// 01 §10.8 colours, from the theme: the text colour at 40 / 120 alpha (white-ish in
+// dark mode) and the accent for the arc.
+[[nodiscard]] QColor with_alpha(QColor colour, int alpha)
+{
+    colour.setAlpha(alpha);
+    return colour;
+}
 
 /// Qt angles are counter-clockwise in 1/16 degree; GDI+ angles run clockwise.
 constexpr int kQtDegree = 16;
@@ -79,16 +84,19 @@ void SpinnerWidget::paintEvent(QPaintEvent* /*event*/)
     const qreal thickness = geometry->thickness;
 
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(kTrackColour, thickness, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+    const style::Theme& theme = style::theme();
+    painter.setPen(QPen(with_alpha(theme.text, theme.dark ? 50 : 40), thickness, Qt::SolidLine, Qt::FlatCap,
+                        Qt::MiterJoin));
     painter.drawEllipse(circle);
 
     if (spinning_) {
-        painter.setPen(QPen(kArcColour, thickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setPen(QPen(theme.dark ? theme.accent_line : theme.accent, thickness, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
         // GDI+ DrawArc(start = angle, sweep = 100) runs clockwise on screen: negate for Qt.
         painter.drawArc(circle, -angle_ * kQtDegree, -geometry->sweep_degrees * kQtDegree);
     } else {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(kIdleDotColour);
+        painter.setBrush(with_alpha(theme.text, 120));
         painter.drawEllipse(QRectF(geometry->dot_left, geometry->dot_top, geometry->dot_diameter,
                                    geometry->dot_diameter));
     }

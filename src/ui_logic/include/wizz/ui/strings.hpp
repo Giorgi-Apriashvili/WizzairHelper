@@ -61,6 +61,13 @@ inline constexpr std::string_view kLabelNights = "nights";
 inline constexpr std::string_view kHintReturn = "Return flights go from the destination area back to any airport near home.";
 inline constexpr std::string_view kSearchOutbound = "Search outbound";
 inline constexpr std::string_view kSearchReturn = "Search return";
+// Prototype "layout" direction: the grouped input area names its sections, and
+// "Outbound between" / "Return between" become the section name + "between".
+inline constexpr std::string_view kSectionWhere = "Where";
+inline constexpr std::string_view kSectionTravellers = "Travellers & prices";
+inline constexpr std::string_view kSectionOutbound = "Outbound";
+inline constexpr std::string_view kSectionReturn = "Return";
+inline constexpr std::string_view kLabelBetween = "between";
 inline constexpr std::string_view kTooltipFrom =
     "City or airport you start from (any city works — nearby Wizz Air airports are found automatically)";
 inline constexpr std::string_view kTooltipTo = "Destination city or airport. Leave empty to search ANYWHERE Wizz Air flies.";

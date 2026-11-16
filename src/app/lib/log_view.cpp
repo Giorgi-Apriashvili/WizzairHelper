@@ -1,6 +1,6 @@
 #include "log_view.hpp"
 
-#include "system_colours.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/leg_text.hpp"
 
@@ -29,16 +29,20 @@ LogView::LogView(const Clock& clock, std::shared_ptr<const Locale> locale, QWidg
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);  // ScrollBars.Both
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     setFont(log_font());
+    setFrameShape(QFrame::NoFrame);  // the results card is the frame
+    auto* corner = new QWidget(this);  // where the scroll bars meet: the surface colour
+    corner->setAutoFillBackground(true);
+    QPalette corner_colours = corner->palette();
+    corner_colours.setColor(QPalette::Window, style::theme().surface);
+    corner->setPalette(corner_colours);
+    setCornerWidget(corner);
+    document()->setDocumentMargin(10);
     apply_system_colours();
 }
 
 QFont LogView::log_font()
 {
-    QFont font(QStringLiteral("Courier New"));
-    font.setPointSizeF(9.0);
-    font.setStyleHint(QFont::TypeWriter);
-    font.setFixedPitch(true);
-    return font;
+    return style::mono_font(9.5);  // Cascadia Mono, Consolas on Windows 10
 }
 
 void LogView::append_line(std::string_view line)
@@ -77,8 +81,8 @@ void LogView::apply_system_colours()
     // BackColor = SystemColors.Window, also while read-only, and its WindowText. Styles
     // may leave the viewport unfilled (the "windows11" style draws a grey panel behind it).
     QPalette colours = palette();
-    const QColor window = system_colour(SystemColour::window);
-    const QColor window_text = system_colour(SystemColour::window_text);
+    const QColor window = style::theme().surface;
+    const QColor window_text = style::theme().text;
     if (colours.color(QPalette::Base) != window || colours.color(QPalette::Text) != window_text) {
         colours.setColor(QPalette::Base, window);
         colours.setColor(QPalette::Text, window_text);
