@@ -20,6 +20,7 @@ using wizz::test::look::LookGuard;
 
 TEST(UiStyle, Fonts_follow_the_look_with_their_Windows_10_fallbacks)
 {
+    const LookGuard guard;  // the Windows 11 families, whatever WIZZ_FONTS the run has
     // UI: Segoe UI Variable Text 10 pt; Windows 10 picks the next family (QFont::setFamilies).
     const QFont form = style::form_font();
     EXPECT_EQ(form.families(), (QStringList{"Segoe UI Variable Text", "Segoe UI"}));

@@ -49,7 +49,8 @@ TEST(SearchButton, Uses_the_semibold_UI_font_the_accent_and_white_text)
     const style::Theme& theme = style::theme();
     EXPECT_EQ(button.text(), QStringLiteral("Search outbound"));
     EXPECT_EQ(button.font(), style::bold_form_font());
-    EXPECT_EQ(button.font().families().front(), QStringLiteral("Segoe UI Variable Text Semibold"));
+    EXPECT_EQ(button.font().families().front(), style::windows10_fonts() ? QStringLiteral("Segoe UI Semibold")
+                                                                         : QStringLiteral("Segoe UI Variable Text Semibold"));
     EXPECT_DOUBLE_EQ(button.font().pointSizeF(), 10.0);
     EXPECT_TRUE(button.isFlat());
     EXPECT_FALSE(button.autoDefault());

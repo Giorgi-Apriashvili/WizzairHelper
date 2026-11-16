@@ -170,7 +170,8 @@ TEST_F(BusyPanelTest, Fonts_and_colours_follow_the_theme)
     const QFont elapsed = panel_->elapsed_label()->font();
     EXPECT_EQ(elapsed, BusyPanel::elapsed_font());
     EXPECT_EQ(elapsed.families(), style::mono_font(10.0).families());
-    EXPECT_EQ(elapsed.families().front(), QStringLiteral("Cascadia Mono"));
+    // Cascadia Mono, Consolas under WIZZ_FONTS=windows10 (a Windows 10 without Windows Terminal).
+    EXPECT_EQ(elapsed.families().front(), style::windows10_fonts() ? QStringLiteral("Consolas") : QStringLiteral("Cascadia Mono"));
     EXPECT_DOUBLE_EQ(elapsed.pointSizeF(), 10.0);
     EXPECT_EQ(elapsed.weight(), QFont::DemiBold);
 

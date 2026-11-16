@@ -77,7 +77,8 @@ TEST_F(LogViewTest, Is_a_read_only_unwrapped_monospace_box_on_the_surface_colour
     EXPECT_EQ(view_.horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOn);
     EXPECT_EQ(view_.verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOn);
     EXPECT_EQ(view_.font(), wizz::app::style::mono_font(9.5));
-    EXPECT_EQ(view_.font().families().front(), QStringLiteral("Cascadia Mono"));
+    EXPECT_EQ(view_.font().families().front(),
+              wizz::app::style::windows10_fonts() ? QStringLiteral("Consolas") : QStringLiteral("Cascadia Mono"));
     EXPECT_TRUE(view_.font().families().contains(QStringLiteral("Consolas")));
     EXPECT_DOUBLE_EQ(view_.font().pointSizeF(), 9.5);
     EXPECT_FALSE(view_.font().bold());
