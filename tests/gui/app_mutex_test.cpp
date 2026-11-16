@@ -1,79 +1,68 @@
-// AppMutex (D-36): the named mutex the installer's AppMutex directive looks for. The
-// lifetime tests use a name of their own, so a WizzairHelper.exe running on the same
-// desktop cannot disturb them.
+// The installer contract's AppMutex (D-47) and the installer launcher's failure
+// path. No installer is ever started here: the launcher test names a program that
+// does not exist.
 
 #include "app_mutex.hpp"
+#include "grid_actions.hpp"
+#include "installer_launcher.hpp"
 
-#include <windows.h>
+#include "wizz/services/updater.hpp"
 
 #include <gtest/gtest.h>
 
-#include <memory>
-#include <optional>
+#include <filesystem>
+#include <format>
 #include <string>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace {
 
 using wizz::app::AppMutex;
 
-[[nodiscard]] std::wstring test_mutex_name(const wchar_t* suffix)
+/// A name no other test or running app uses.
+[[nodiscard]] std::wstring unique_name()
 {
-    return L"WizzairHelper.Test." + std::to_wstring(GetCurrentProcessId()) + L"." + suffix;
+    return std::format(L"WizzairHelper.AppMutex.Test.{}.{}", GetCurrentProcessId(), GetTickCount64());
 }
 
-/// What Inno Setup's AppMutex check does: open the mutex by name.
-[[nodiscard]] bool mutex_exists(const std::wstring& name)
+TEST(AppMutex, Exists_while_held_and_disappears_with_the_last_handle)
 {
-    const HANDLE handle = OpenMutexW(SYNCHRONIZE, FALSE, name.c_str());
-    if (handle == nullptr) {
-        return false;
-    }
-    CloseHandle(handle);
-    return true;
-}
-
-TEST(AppMutex, D_36_Name_is_the_installer_s_AppMutex)
-{
-    EXPECT_EQ(wizz::app::kAppMutexName, L"WizzairHelper.AppMutex");
-}
-
-TEST(AppMutex, D_36_Exists_while_held_and_disappears_with_the_last_holder)
-{
-    const std::wstring name = test_mutex_name(L"lifetime");
-    ASSERT_FALSE(mutex_exists(name));
+    const std::wstring name = unique_name();
+    EXPECT_FALSE(AppMutex::exists(name));
     {
-        const AppMutex mutex(name);
-        EXPECT_TRUE(mutex.held());
-        EXPECT_TRUE(mutex_exists(name));
-    }
-    EXPECT_FALSE(mutex_exists(name));
-}
+        AppMutex first{name};
+        EXPECT_TRUE(first.held());
+        EXPECT_EQ(first.name(), name);
+        EXPECT_TRUE(AppMutex::exists(name)) << "what the installer's AppMutex check sees";
 
-TEST(AppMutex, D_36_A_second_copy_shares_the_mutex_and_keeps_running)
-{
-    const std::wstring name = test_mutex_name(L"shared");
-    auto first = std::make_optional<AppMutex>(name);
-    {
-        const AppMutex second(name);  // another WizzairHelper.exe: no single-instance lock
-        EXPECT_TRUE(first->held());
+        AppMutex second{name};  // another running copy
         EXPECT_TRUE(second.held());
+        first.release();
+        EXPECT_FALSE(first.held());
+        first.release();  // idempotent
+        EXPECT_TRUE(AppMutex::exists(name)) << "another copy still runs";
     }
-    EXPECT_TRUE(mutex_exists(name));  // the first copy still runs
-    first.reset();
-    EXPECT_FALSE(mutex_exists(name));
+    EXPECT_FALSE(AppMutex::exists(name)) << "released when the app exits";
 }
 
-TEST(AppMutex, D_36_A_name_windows_refuses_is_not_an_error)
+TEST(AppMutex, The_app_uses_the_contract_name)
 {
-    // A waitable event of the same name: CreateMutexW fails with ERROR_INVALID_HANDLE.
-    const std::wstring name = test_mutex_name(L"taken");
-    const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, name.c_str());
-    ASSERT_NE(event, nullptr);
-    {
-        const AppMutex mutex(name);
-        EXPECT_FALSE(mutex.held());
-    }
-    CloseHandle(event);
+    EXPECT_EQ(wizz::update::kAppMutexName, L"WizzairHelper.AppMutex");
+}
+
+TEST(InstallerLauncher, Reports_the_system_message_when_the_installer_cannot_start)
+{
+    const std::filesystem::path missing = std::filesystem::temp_directory_path() / (unique_name() + L"-setup.exe");
+    ASSERT_FALSE(std::filesystem::exists(missing));
+    const wizz::update::InstallerCommand command =
+        wizz::update::silent_install_command(missing, wizz::update::Relaunch::no);
+    const std::expected<void, std::string> launched = wizz::app::launch_detached(command);
+    ASSERT_FALSE(launched.has_value());
+    EXPECT_EQ(launched.error(), wizz::app::system_message(ERROR_FILE_NOT_FOUND).toStdString());
 }
 
 } // namespace

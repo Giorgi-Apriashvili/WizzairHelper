@@ -1,8 +1,9 @@
 # wizzairhelper_services: everything that performs I/O.
 # libcurl transport (Schannel, Windows trust store, Windows proxy settings),
 # file caches and AppPaths, request gate, Wizz Air client (discovery,
-# classification, retries), currency service, geocoding / place resolver and
-# the flight search service that runs a leg on a worker thread.
+# classification, retries), currency service, geocoding / place resolver,
+# the flight search service that runs a leg on a worker thread, and the
+# self-updater core (GitHub releases, verified downloads, schedule).
 
 find_package(CURL CONFIG REQUIRED)
 
@@ -23,4 +24,5 @@ target_link_libraries(wizzairhelper_services
     PRIVATE CURL::libcurl
             winhttp     # WinHttpGetIEProxyConfigForCurrentUser (Windows proxy settings)
             shell32     # SHGetKnownFolderPath
-            ole32)      # CoTaskMemFree
+            ole32       # CoTaskMemFree
+            bcrypt)     # SHA-256 of update downloads (Windows CNG)

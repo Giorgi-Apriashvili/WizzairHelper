@@ -47,4 +47,9 @@ std::filesystem::path errors_log(const std::optional<std::filesystem::path>& roo
     return default_root(root_override) / L"errors.log";
 }
 
+std::filesystem::path updates_dir(const std::optional<std::filesystem::path>& root_override)
+{
+    return default_root(root_override) / L"updates";
+}
+
 } // namespace wizz::app_paths

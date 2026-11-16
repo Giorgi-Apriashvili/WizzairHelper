@@ -18,7 +18,10 @@ without a window.
   the busy panel's "⏳" font fallback, 0.2–0.4 s the first time, D-33); `AppServices::create`
   (`ServiceConfig::for_run`: CurlTransport / ReplayTransport, SystemClock / FixedClock, user
   locale, data-root-aware `FileCache`s, `--no-pacing`); `AppSettings::load`; the window is built;
-  `FontWarmup::wait()`; `MainWindow::show_main_window()`; `exec()`.
+  in a normal run (no `--autotest` / `--replay`, `ui::updates_allowed`) `MainWindow::enable_updates`
+  with `UpdateHooks::system` (D-45); `FontWarmup::wait()`; `MainWindow::show_main_window()`; `exec()`.
+  Right after the crash handler, `main` creates the installer's `AppMutex` (`WizzairHelper.AppMutex`,
+  D-47), which the updater releases just before it starts an installer.
 - `AppServices` (`app_services.hpp`): one transport shared by `WizzApiClient`, `CurrencyService`
   and `PlaceResolver`, plus `FlightSearchService`, the clock, the locale and the data root.
 - `CrashReporter` (`crash_reporter.hpp/.cpp`): `show_crash(message, details)` appends
@@ -56,7 +59,7 @@ without a window.
 
 | Class | Spec | Responsibility |
 |---|---|---|
-| `MainWindow` (QMainWindow) | 01 §4, §5, §6.3, §6.4, §11, §12, §13 | Owns everything below and the `Controller`; dock order (busy panel bottom with its fixed height, input panel top, tabs fill; tab header padding (12, 4) via a `tabSizeHint` override), window geometry (§4.1), the start-up log line, OnShownAsync (map load, then `AutoTestRunner`), settings on close (cancel first; not in autotest). Keyboard (§6.3): an Enter no control used reaches `keyPressEvent` and presses `InputPanel::trigger_accept()` (grids consume Enter; a focused push button is clicked); an application event filter turns Esc in this window into `BusyPanel::request_cancel()` while working and no popup (drop-down, completer, calendar, menu) is open (D-11, WF-3). |
+| `MainWindow` (QMainWindow) | 01 §4, §5, §6.3, §6.4, §11, §12, §13 | Owns everything below and the `Controller`; dock order (busy panel bottom with its fixed height, input panel top, the hidden-by-default update bar under it (D-46), tabs fill; tab header padding (12, 4) via a `tabSizeHint` override), window geometry (§4.1), the start-up log line, OnShownAsync (map load, then `AutoTestRunner`), settings on close (cancel first; not in autotest), then the updater's exit step (D-47); `enable_updates` (refused in autotest). Keyboard (§6.3): an Enter no control used reaches `keyPressEvent` and presses `InputPanel::trigger_accept()` (grids consume Enter; a focused push button is clicked); an application event filter turns Esc in this window into `BusyPanel::request_cancel()` while working and no popup (drop-down, completer, calendar, menu) is open (D-11, WF-3). |
 | `Controller` (QObject) | 01 §5, §6.4, §11, §12.2 | The MainForm flows as coroutines (see below): LoadCatalogAsync, PrepareAsync / ResolveAsync (+ chooser), SearchOutbound/Return, PlanReturnFromAsync, RunLegAsync (plan, 0-request path, budget gate, streaming, final status), OnCurrencyChanged, RecomputeTrips, UpdateTabTitles, Log, SetWorking. Modal boxes through injectable `ControllerDialogs`. |
 | `AutoTestRunner` (QObject) | 01 §17.2 | The self-test script as a coroutine; screenshots through an injectable `Screenshotter` (default `save_window_png`). |
 | `InputPanel` (QWidget) | 01 §4.2–4.5, §6.1–6.2 | Three wrapping `FlowLayout` rows + `_resolved` label; `PlaceCombo` ×2 (editable, completer, tooltips), `FractionalSpinBox` ×6, `DatePicker` ×4 (`ddd dd MMM yyyy`, clamped to [today, today+2y]), fare/currency combos, two styled magenta search buttons. Applies `ui::DateRules` for coupling. Emits `search_outbound_requested`, `search_return_requested`, `currency_changed`, `nights_changed`. |
@@ -70,6 +73,8 @@ without a window.
 | `TaskbarProgress` | 01 §10.9 | `ITaskbarList3` RAII wrapper with the state/value de-duplication rules. |
 | `PlaceChooserDialog` (QDialog) | 01 §11.5 | Modal chooser, exact texts, `Use this place` default, Cancel rightmost, double-click = OK. |
 | `LogView` | 01 §12 | Read-only `QPlainTextEdit`, Courier New 9 pt, `[HH:mm:ss] ` prefix (culture time separator), unlimited, scroll to end; background SystemColors.Window (viewport kept filled after the style's polish); `text()` keeps the CRLF text for `summary.json`. |
+| `UpdateBar` (QWidget) | D-46 (not in the spec) | The slim strip between the input panel and the tabs, hidden unless an update is offered: wrapping plain-text message (form font, ControlText) on a light magenta tint with a 4 px magenta accent, a `SearchButton`-style action (`Restart and update` / `Download`) and a flat, text-sized `Later`; fixed-size buttons; renders `ui::UpdateBarView`, never takes the focus. |
+| `UpdateController` (QObject) | D-45, D-47 | The updater's lifecycle over `ui::UpdateModel` and an `UpdateBackend` (`CoreUpdateBackend` = the services' `Updater` + `UpdateSchedule`): first evaluation at the first Shown, then hourly (`QTimer`); check and download on its own `JobRunner` workers; Log lines; bar refresh on results and on `Controller::working_changed`; `Later`; `Restart and update` → `restart_requested` (the window closes); `on_window_closing` (from `closeEvent`, after the settings) releases the `AppMutex` and starts a verified installer through the injectable `InstallerLauncher` (`launch_detached`). |
 
 ## Controller and threading (01 §7, §11, §14; 06 §2)
 

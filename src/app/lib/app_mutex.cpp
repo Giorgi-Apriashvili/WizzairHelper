@@ -1,23 +1,41 @@
 #include "app_mutex.hpp"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 namespace wizz::app {
 
-AppMutex::AppMutex(std::wstring_view name)
+AppMutex::AppMutex(std::wstring_view name) : name_(name)
 {
-    // Not owned (bInitialOwner FALSE): the installer only asks whether the object exists,
-    // and every copy of the app holds a handle of its own. CreateMutexW opens an existing
-    // mutex of that name (ERROR_ALREADY_EXISTS), which is how a second copy shares it.
-    const std::wstring terminated(name);
-    handle_ = CreateMutexW(nullptr, FALSE, terminated.c_str());
+    // Not owned: the installer only asks whether a mutex of this name exists. When
+    // another copy runs, CreateMutexW opens the same object (ERROR_ALREADY_EXISTS).
+    handle_ = ::CreateMutexW(nullptr, FALSE, name_.c_str());
 }
 
 AppMutex::~AppMutex()
 {
+    release();
+}
+
+void AppMutex::release() noexcept
+{
     if (handle_ != nullptr) {
-        CloseHandle(static_cast<HANDLE>(handle_));
+        ::CloseHandle(static_cast<HANDLE>(handle_));
+        handle_ = nullptr;
     }
+}
+
+bool AppMutex::exists(std::wstring_view name)
+{
+    const std::wstring terminated{name};
+    const HANDLE handle = ::OpenMutexW(SYNCHRONIZE, FALSE, terminated.c_str());
+    if (handle == nullptr) {
+        return ::GetLastError() == ERROR_ACCESS_DENIED;  // there, but not ours to open
+    }
+    ::CloseHandle(handle);
+    return true;
 }
 
 } // namespace wizz::app

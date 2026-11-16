@@ -2,6 +2,7 @@
 // Where the app keeps its files (04 §6, 02 §7, 01 §3.2 and §13, 06 §3):
 //   %LOCALAPPDATA%\WizzairHelper\settings.json, errors.log
 //   %LOCALAPPDATA%\WizzairHelper\cache\api-url.txt, map.json, fx.json, geocode.json
+//   %LOCALAPPDATA%\WizzairHelper\updates\update-state.json, update.log, downloads\ (updater, D-40)
 // Every function takes an optional root override so tests (and an isolated
 // --autotest profile, D-30) can supply their own directory.
 
@@ -24,5 +25,9 @@ namespace wizz::app_paths {
 
 /// `<root>\errors.log` (01 §3.2).
 [[nodiscard]] std::filesystem::path errors_log(const std::optional<std::filesystem::path>& root_override = std::nullopt);
+
+/// `<root>\updates`: the self-updater's state, log and downloads (D-40), kept out of
+/// the root itself.
+[[nodiscard]] std::filesystem::path updates_dir(const std::optional<std::filesystem::path>& root_override = std::nullopt);
 
 } // namespace wizz::app_paths

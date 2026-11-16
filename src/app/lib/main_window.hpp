@@ -9,7 +9,9 @@
 //     --autotest. The position is never saved.
 //   * Layout (§4.2): the BusyPanel docked at the bottom with its fixed height (it gets
 //     its height first), the InputPanel at the top, the result tabs filling the rest
-//     with header padding (12, 4): Outbound / Return / Round trips / Log (§5).
+//     with header padding (12, 4): Outbound / Return / Round trips / Log (§5). Between
+//     the input panel and the tabs sits the update bar (D-46), hidden unless an update
+//     is ready or available.
 //   * Keyboard (§6.3): an Enter nobody handled presses the AcceptButton that follows
 //     focus (InputPanel::trigger_accept) — grids open their row and consume Enter, the
 //     chooser and drop-downs are separate windows; a focused push button is clicked.
@@ -17,11 +19,15 @@
 //     Cancel button (BusyPanel::request_cancel, D-11). Focus starts in From.
 //   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest.
 //   * Closing (§13): stop running work first, then commit a number typed but not yet
-//     entered and save settings.json (not in autotest).
+//     entered and save settings.json (not in autotest), then let the updater start a
+//     verified installer (D-47).
 //   * The Log starts with the start-up line (§12.2).
+//   * Updates (D-45): enable_updates() turns the self-updater on in a normal run; it
+//     starts with the window's first Shown, next to OnShownAsync.
 
 #include "app_services.hpp"
 #include "task.hpp"
+#include "update_controller.hpp"
 
 #include "wizz/ui/autotest_options.hpp"
 #include "wizz/ui/settings.hpp"
@@ -43,6 +49,7 @@ class FlightGrid;
 class InputPanel;
 class LogView;
 class RoundTripGrid;
+class UpdateBar;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -71,6 +78,13 @@ public:
     /// apply_start_geometry() + show().
     void show_main_window();
 
+    /// Turns the self-updater on (D-45): an UpdateController over `hooks` drives the
+    /// update bar and the Log, follows the controller's working state, starts with the
+    /// first Shown and may start the installer when the window closes. Returns false and
+    /// does nothing in an --autotest run (never with --autotest, D-30) or when the
+    /// updater is already on.
+    bool enable_updates(UpdateHooks hooks);
+
     // --- Parts ----------------------------------------------------------------------------
     [[nodiscard]] InputPanel* input_panel() const noexcept { return input_; }
     [[nodiscard]] BusyPanel* busy_panel() const noexcept { return busy_; }
@@ -79,7 +93,10 @@ public:
     [[nodiscard]] FlightGrid* return_grid() const noexcept { return inbound_; }
     [[nodiscard]] RoundTripGrid* round_trip_grid() const noexcept { return trips_; }
     [[nodiscard]] LogView* log_view() const noexcept { return log_; }
+    [[nodiscard]] UpdateBar* update_bar() const noexcept { return update_bar_; }
     [[nodiscard]] Controller* controller() const noexcept { return controller_; }
+    /// The self-updater, or null when enable_updates() was not called (or refused).
+    [[nodiscard]] UpdateController* update_controller() const noexcept { return updates_; }
     /// The --autotest script, or null in a normal run.
     [[nodiscard]] AutoTestRunner* autotest_runner() const noexcept { return autotest_runner_; }
     [[nodiscard]] const AppServices& services() const noexcept { return *services_; }
@@ -130,8 +147,10 @@ private:
     RoundTripGrid* trips_ = nullptr;
     LogView* log_ = nullptr;
     BusyPanel* busy_ = nullptr;
+    UpdateBar* update_bar_ = nullptr;
     Controller* controller_ = nullptr;
     AutoTestRunner* autotest_runner_ = nullptr;
+    UpdateController* updates_ = nullptr;
 };
 
 } // namespace wizz::app

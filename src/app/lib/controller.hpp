@@ -130,6 +130,9 @@ Q_SIGNALS:
     /// RunLegAsync began the fetch phase of `leg` (busy panel begun, grid cleared); its
     /// worker starts right after this signal. Used by the --autotest diagnostics (D-30).
     void leg_started(wizz::app::Controller::Leg leg);
+    /// `_working` changed (SetWorking, 01 §6.4); the update bar's "Restart and update"
+    /// follows it (D-46).
+    void working_changed(bool working);
 
 public Q_SLOTS:
     /// The Search outbound button / Enter mapping.

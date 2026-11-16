@@ -60,28 +60,6 @@ constexpr DWORD kIoChunk = 1u << 20;
     }
 }
 
-/// Creates or truncates `path` exclusively, so a concurrent writer of the same
-/// temporary file fails instead of interleaving (06 §3), then writes and flushes.
-[[nodiscard]] bool write_all_bytes(const std::filesystem::path& path, std::string_view content)
-{
-    const HANDLE raw =
-        ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (raw == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    const win32::UniqueHandle file{raw};
-    while (!content.empty()) {
-        const auto chunk = static_cast<DWORD>(std::min<std::size_t>(content.size(), kIoChunk));
-        DWORD written = 0;
-        if (::WriteFile(raw, content.data(), chunk, &written, nullptr) == FALSE || written == 0) {
-            return false;
-        }
-        content.remove_prefix(written);
-    }
-    // Make the data durable before the rename publishes it.
-    return ::FlushFileBuffers(raw) != FALSE;
-}
-
 } // namespace
 
 std::optional<std::filesystem::path> FileCache::path_of(std::string_view name) const
@@ -127,7 +105,9 @@ void FileCache::try_write(std::string_view name, std::string_view content) const
     }
     std::filesystem::path temporary = *path;
     temporary += L".tmp";
-    if (!write_all_bytes(temporary, content)) {
+    // Exclusive, so a concurrent writer of the same temporary file fails instead of
+    // interleaving (06 §3); flushed before the rename publishes it.
+    if (win32::write_new_file(temporary, content) != ERROR_SUCCESS) {
         return;
     }
     // A failed replace (e.g. the target is open without delete sharing) leaves the

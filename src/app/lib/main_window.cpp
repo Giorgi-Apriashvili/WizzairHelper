@@ -11,6 +11,8 @@
 #include "log_view.hpp"
 #include "qt_strings.hpp"
 #include "round_trip_grid.hpp"
+#include "search_button.hpp"
+#include "update_bar.hpp"
 #include "window_placement.hpp"
 
 #include "wizz/ui/strings.hpp"
@@ -124,6 +126,8 @@ MainWindow::~MainWindow()
     qApp->removeEventFilter(this);
     // The flows go first (they reference the widgets), then the widgets, while the
     // services they use (clock, locale) are still alive.
+    delete updates_;
+    updates_ = nullptr;
     delete autotest_runner_;
     autotest_runner_ = nullptr;
     delete controller_;
@@ -150,19 +154,44 @@ void MainWindow::build()
     tabs_->addTab(trips_, to_qstring(strings::kTabRoundTrips));
     tabs_->addTab(log_, to_qstring(strings::kTabLog));
     busy_ = new BusyPanel(*services_->clock, locale, central);
+    update_bar_ = new UpdateBar(central);  // hidden until an update is offered (D-46)
 
     // Dock order (01 §4.2): the busy panel has a fixed height and is laid out first; the
-    // input panel takes its height for the width; the tabs fill the rest.
+    // input panel takes its height for the width; the tabs fill the rest. The update bar
+    // (D-46) takes its height for the width between the input panel and the tabs.
     layout->addWidget(input_);
+    layout->addWidget(update_bar_);
     layout->addWidget(tabs_, 1);
     layout->addWidget(busy_);
     setCentralWidget(central);
 
-    // Tab order (01 §6.3): the input panel's own order, then the result tabs, then Cancel.
+    // Tab order (01 §6.3): the input panel's own order, then the result tabs, then Cancel;
+    // the update bar's buttons come between the input panel and the tabs while it shows.
     const std::vector<QWidget*> inputs = input_->tab_order();
     if (!inputs.empty()) {
-        QWidget::setTabOrder(inputs.back(), tabs_);
+        QWidget::setTabOrder(inputs.back(), update_bar_->action_button());
     }
+    QWidget::setTabOrder(update_bar_->action_button(), update_bar_->later_button());
+    QWidget::setTabOrder(update_bar_->later_button(), tabs_);
+}
+
+bool MainWindow::enable_updates(UpdateHooks hooks)
+{
+    if (is_autotest() || updates_ != nullptr) {
+        return false;  // a self-test run never contacts GitHub (D-45)
+    }
+    Controller* const controller = controller_;
+    updates_ = new UpdateController(std::move(hooks), *update_bar_,
+                                    [controller](std::string_view line) { controller->log(line); }, this);
+    updates_->set_working(controller_->is_working());
+    connect(controller_, &Controller::working_changed, updates_, &UpdateController::set_working);
+    connect(update_bar_, &UpdateBar::action_clicked, updates_, &UpdateController::trigger_action);
+    connect(update_bar_, &UpdateBar::later_clicked, updates_, &UpdateController::dismiss);
+    connect(updates_, &UpdateController::restart_requested, this, &QWidget::close);
+    if (shown_once_) {
+        updates_->start();  // enabled after the first Shown: start at once
+    }
+    return true;
 }
 
 void MainWindow::wire()
@@ -301,8 +330,17 @@ void MainWindow::showEvent(QShowEvent* event)
     }
     shown_once_ = true;
     input_->focus_from();
-    // OnShownAsync runs once the window is visible, so the progress UI can be seen.
-    QMetaObject::invokeMethod(this, [this] { controller_->spawn(on_shown()); }, Qt::QueuedConnection);
+    // OnShownAsync runs once the window is visible, so the progress UI can be seen; the
+    // updater's first evaluation runs on its own worker next to it (D-45).
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            controller_->spawn(on_shown());
+            if (updates_ != nullptr) {
+                updates_->start();
+            }
+        },
+        Qt::QueuedConnection);
 }
 
 Task<> MainWindow::on_shown()
@@ -320,6 +358,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (!is_autotest()) {
         input_->commit_numeric_edits();  // the X / Alt+F4 move no focus: read the typed number too
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored
+    }
+    if (updates_ != nullptr) {
+        updates_->on_window_closing();  // a verified installer starts now (D-47)
     }
     QMainWindow::closeEvent(event);
 }
