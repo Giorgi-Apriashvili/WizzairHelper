@@ -114,7 +114,7 @@ constexpr std::uint8_t kPngSignature[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A,
 TEST(AppIcon, Window_icon_offers_16_24_32_48_and_256_px)
 {
     const QIcon icon = QApplication::windowIcon();
-    ASSERT_FALSE(icon.isNull()) << "the application sets no window icon";
+    ASSERT_FALSE(icon.isNull()) << "no window icon: not set, or its embedded PNGs are missing";
     std::set<int> available;
     for (const QSize& size : icon.availableSizes()) {
         EXPECT_EQ(size.width(), size.height());
