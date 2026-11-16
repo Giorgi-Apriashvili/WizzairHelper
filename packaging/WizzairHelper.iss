@@ -12,6 +12,9 @@
 ;   a Start-menu entry, an optional desktop icon, and an uninstaller (unins000.exe in the
 ;   install folder, Settings > Apps). An installed copy is recognised by unins000.exe next
 ;   to WizzairHelper.exe; the settings in %LOCALAPPDATA%\WizzairHelper stay on uninstall.
+; - Icons (DECISIONS D-51): Setup and the uninstaller carry the application icon
+;   (SetupIconFile, the committed .ico); the shortcuts and the Settings > Apps entry show
+;   WizzairHelper.exe's own icon, its first icon group (no IconFilename; UninstallDisplayIcon).
 ; - AppMutex: WizzairHelper.exe holds the mutex WizzairHelper.AppMutex while it runs
 ;   (src/app/lib/app_mutex.hpp), so Setup and the uninstaller see a running copy.
 ; - The app's silent update runs
@@ -58,6 +61,8 @@ DefaultDirName={localappdata}\Programs\{#AppName}
 DisableProgramGroupPage=yes
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+; Relative to this script's folder (SourceDir); tools/make_app_icon.py writes it.
+SetupIconFile=..\src\app\resources\icon\WizzairHelper.ico
 ; Windows 10 1903 or later, x64 (BUILDING.md; the app uses the system icu.dll).
 MinVersion=10.0.18362
 ArchitecturesAllowed=x64compatible

@@ -115,8 +115,8 @@ written.
    git push origin main
    git push origin vX.Y.Z
    ```
-4. Wait for the tag's run: `pwsh tools/tag_wait.ps1 -Tag vX.Y.Z`. Both build legs and the release
-   job must succeed.
+4. Wait for the tag's run: `pwsh tools/tag_wait.ps1 -Tag vX.Y.Z`. All three build legs and the
+   release job must succeed.
 5. Replace the generated notes:
    `gh release edit vX.Y.Z --notes-file release-notes-X.Y.Z.md`.
 6. Verify the published release: `pwsh tools/release_check.ps1 -Tag vX.Y.Z -Exe WizzairHelper.exe`.
@@ -172,11 +172,19 @@ Add `/RELAUNCH` to the Setup arguments to see the app start after the install. W
 `WaitForExit()`, not `Start-Process -Wait`: PowerShell's `-Wait` also waits for the app that Setup
 started.
 
+**The icon where users see it** (DECISIONS D-51) is checked by eye, because the `AppIcon` tests
+cover the exe's icon group and the window icon but not the shell. For a release that changes the
+icon or the installer, run Setup without `/VERYSILENT` and check that Setup itself, the Start-menu
+entry, the optional desktop shortcut, *Settings > Apps* and the uninstaller show the pin icon, not
+the generic program icon, and that the title bar and taskbar button do at 100 %, 150 % and 200 %
+display scaling. Windows caches icons: if an old one shows, sign out and in before judging.
+
 ## Checklist
 
 ```
 [ ] owner said "release"; patch or minor decided
-[ ] CI green on HEAD (msvc-release and msvc-debug)
+[ ] CI green on HEAD (msvc-release, msvc-debug and clang-cl-release)
+[ ] icon or installer changed: installed by hand, icons checked (Checking the installer locally)
 [ ] notes written in release-notes-X.Y.Z.md
 [ ] version bumped in CMakeLists.txt only; commit "Release X.Y.Z"
 [ ] git tag vX.Y.Z; git push origin main; git push origin vX.Y.Z

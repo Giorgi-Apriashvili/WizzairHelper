@@ -5,6 +5,12 @@
 
 #include "wizz_version.h"
 
+// The application icon (D-51): icon/WizzairHelper.ico, made by tools/make_app_icon.py from
+// the SVGs next to it. The exe's first icon group is the one Explorer, shortcuts, the
+// taskbar and Apps & Features show, so this must stay the first (and only) one. IDI_ICON1
+// is also the name Qt's Windows plugin loads as the default icon of its window class.
+IDI_ICON1 ICON "icon/WizzairHelper.ico"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    WIZZ_VER_MAJOR, WIZZ_VER_MINOR, WIZZ_VER_PATCH, 0
  PRODUCTVERSION WIZZ_VER_MAJOR, WIZZ_VER_MINOR, WIZZ_VER_PATCH, 0

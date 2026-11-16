@@ -1,3 +1,5 @@
+<img src="src/app/resources/icon/WizzairHelper-128.png" width="128" height="128" alt="WizzairHelper icon: a magenta map pin with a white plane, and an orange ring around its tip">
+
 # WizzairHelper
 
 [![build](https://github.com/Giorgi-Apriashvili/WizzairHelper/actions/workflows/build.yml/badge.svg)](https://github.com/Giorgi-Apriashvili/WizzairHelper/actions/workflows/build.yml)
@@ -7,6 +9,9 @@ start, to every airport near where you want to go (or anywhere), over a date ran
 the way back and pairs both legs into the cheapest round trips for your stay. Fares stream in while
 the search runs, prices are converted to one currency, and double-clicking a fare opens it on
 wizzair.com.
+
+WizzairHelper is an independent project. It is not affiliated with, endorsed by or connected to
+Wizz Air; its icon is original artwork, not an airline logo.
 
 Native C++23 / Qt 6 Widgets / libcurl, built with CMake and vcpkg (MSVC x64).
 
@@ -38,10 +43,10 @@ were resolved.
 | `src/core` | Pure logic: decimal, JSON, Unicode/locale, time, geo, catalog, planner, pricing, round trips |
 | `src/services` | I/O: libcurl transport, caches, Wizz client, currency service, place resolver, search service, self-updater core |
 | `src/ui_logic` | Qt-free presentation rules: texts, busy-panel model, date rules, grid rules, settings, autotest |
-| `src/app` | The Qt 6 desktop application (`WizzairHelper.exe`) |
+| `src/app` | The Qt 6 desktop application (`WizzairHelper.exe`); its icon's sources and images in `src/app/resources/icon` |
 | `tests/` | Conformance suite (05), ui_logic tests, widget tests (`tests/gui`) and end-to-end autotest replays |
 | `packaging/` | The package's README and notices, the Inno Setup installer script |
-| `tools/` | Release helpers: wait for CI, wait for a tag's run, check a published release |
+| `tools/` | Release helpers: wait for CI, wait for a tag's run, check a published release; the icon generator (`make_app_icon.py`) |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions & deviations](docs/DECISIONS.md), [GUI design](docs/GUI_DESIGN.md), [release checks](docs/RELEASE_CHECKS.md), [releasing](docs/RELEASING.md) |
 
 ## Build

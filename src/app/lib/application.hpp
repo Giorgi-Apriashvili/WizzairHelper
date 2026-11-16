@@ -6,6 +6,9 @@
 // (errors.log + crash box, 01 §3.2) and the application keeps running. Without
 // an installed reporter the exception propagates as before.
 //
+// The constructor makes the application icon (application_icon(), D-51) the icon
+// of every window.
+//
 // notify() also reports each UI-thread dispatch to an optional EventWatchdog
 // (the --autotest diagnostics, 05 §7.3 R-03); none is installed normally.
 

@@ -14,6 +14,9 @@ deviations in [`docs/DECISIONS.md`](docs/DECISIONS.md).
   dependencies from `vcpkg.json` on the first configure: qtbase 6.11.2, libcurl (Schannel, brotli),
   GoogleTest.
 - Python 3 (optional) for the end-to-end `--autotest` checks; without it CMake skips them.
+- Pillow and Microsoft Edge (optional), only to regenerate the application icon after editing its
+  SVGs ([below](#the-application-icon)); the build uses the committed icon files and needs no
+  image tools.
 - Inno Setup 6 (only for the `dist` target, which builds the installer):
   `winget install JRSoftware.InnoSetup`. CMake looks for `ISCC.exe` on `PATH`, in
   `C:\Program Files (x86)\Inno Setup 6` and in `%LOCALAPPDATA%\Programs\Inno Setup 6`; elsewhere,
@@ -58,7 +61,9 @@ the configure step after adding files.
   clock, en-US).
 - `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, run by CTest with
   `QT_QPA_PLATFORM=minimal` (no window appears). Run the binary directly without that variable to
-  use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots.
+  use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots. The
+  `AppIcon` tests also read the committed icon files and the icon group of the
+  `WizzairHelper.exe` of the same configuration, which the build makes first.
 - Label `timing`: the R-03 / 05 §5 timing tests of `wizzairhelper_gui_tests` (`FlightGridPerformance.*`,
   the progress timer under a replay). They run alone (RUN_SERIAL) and check the UI thread's own CPU
   time always and wall-clock time unless other processes held the CPUs (DECISIONS D-50), so they hold
@@ -118,6 +123,33 @@ A `vX.Y.Z` tag makes CI build, test and publish a GitHub release with the ZIP, t
 | `tools/release_check.ps1 -Tag vX.Y.Z -Exe WizzairHelper.exe` | Verifies a published release: assets, `SHA256SUMS.txt`, the packaged exe's `--version`, `releases/latest` |
 
 `-Repo` defaults to `Giorgi-Apriashvili/WizzairHelper`.
+
+## The application icon
+
+`src/app/resources/icon/` holds the icon's two sources and everything made from them, all
+committed ([DECISIONS D-51](docs/DECISIONS.md#application-icon)):
+
+| File | What |
+|---|---|
+| `WizzairHelper.svg` | The design, drawn for 40 px and up |
+| `WizzairHelper-small.svg` | The same design hand-tuned for 16 to 32 px (only the ring's front arc, bolder strokes, a taller pin) |
+| `WizzairHelper-<N>.png` | N = 16, 20, 24, 32, 40, 48, 64, 96, 128, 256: each drawn from its SVG at that size |
+| `WizzairHelper.ico` | Those ten PNGs, byte for byte, as PNG-compressed icon entries |
+
+The `.ico` is the exe's icon (`IDI_ICON1` in `src/app/resources/WizzairHelper.rc`: Explorer,
+shortcuts, the taskbar, Apps & Features) and the installer's (`SetupIconFile`); the PNGs are
+embedded as the Qt resource `:/icons/` and make the window icon (title bar, Alt+Tab, taskbar
+button). After editing an SVG, regenerate the other files and commit them together:
+
+```powershell
+python -I tools\make_app_icon.py
+```
+
+It needs Python 3.10+ with Pillow installed for that interpreter (`python -m pip install pillow`;
+`-I` ignores per-user site-packages) and Microsoft Edge, which draws every size headless from the
+vector art on a transparent background (`--edge <msedge.exe>` if it is not in the usual place).
+The same SVGs, Edge and Pillow give byte-identical files, so a run without changes leaves
+`git status` clean; `--out <dir>` writes the files somewhere else instead, e.g. to compare them.
 
 ## The hidden self-test mode and replays
 

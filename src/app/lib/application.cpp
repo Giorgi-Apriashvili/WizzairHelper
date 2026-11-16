@@ -1,5 +1,6 @@
 #include "application.hpp"
 
+#include "app_info.hpp"
 #include "crash_reporter.hpp"
 #include "event_watchdog.hpp"
 
@@ -8,7 +9,11 @@
 
 namespace wizz::app {
 
-Application::Application(int& argc, char** argv) : QApplication(argc, argv) {}
+Application::Application(int& argc, char** argv) : QApplication(argc, argv)
+{
+    // Every window and dialog shows the application icon (D-51) unless it sets its own.
+    setWindowIcon(application_icon());
+}
 
 bool Application::notify(QObject* receiver, QEvent* event)
 {

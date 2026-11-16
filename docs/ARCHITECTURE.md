@@ -40,13 +40,23 @@ directory needs no CMake edit.
 | `wizzairhelper_core` (`wizz::core`) | `src/core` | Pure logic, no I/O: time, decimal, JSON, Unicode text, locale/formatting, geo, domain values, airport catalog + offline place matching, planner, pricing/FX tables, result views, booking links, round trips; abstract `Clock`, `http::Transport`, cancellation, progress records | C++ std, Windows ICU |
 | `wizzairhelper_services` (`wizz::services`) | `src/services` | Everything that performs I/O or owns threads: libcurl transport, file cache + AppPaths, request gate, Wizz client, currency service, geocoder + place resolver, flight search service, system clock, self-updater core (GitHub release check, verified downloads, update schedule, silent installer command line — D-40..D-44) | core, libcurl, Win32 (incl. CNG) |
 | `wizzairhelper_ui_logic` (`wizz::ui_logic`) | `src/ui_logic` | Qt-free presenter / view-model logic of the desktop app (05 §7.2), namespace `wizz::ui`: string catalogue, leg status / log texts, BusyPanel state machine, date and nights coupling, request building, settings.json, `--autotest` options + replay transport (D-30), summary.json, grid models (sort, selection, streaming), the self-updater's rules and texts (`UpdateModel`, D-45..D-49) | core, services |
-| `WizzairHelper` | `src/app` | Qt 6 Widgets UI (thin widgets over `ui_logic`), diagnostics, crash reporting, `--autotest` driver, the update bar and the updater's lifecycle (worker checks, installer start on exit, AppMutex) | core, services, ui_logic, Qt |
+| `WizzairHelper` | `src/app` | Qt 6 Widgets UI (thin widgets over `ui_logic`), diagnostics, crash reporting, `--autotest` driver, the update bar and the updater's lifecycle (worker checks, installer start on exit, AppMutex); the exe's resources and the application icon in `src/app/resources` (below) | core, services, ui_logic, Qt |
 | `wizzairhelper_tests` | `tests` | GoogleTest conformance suite: fake transport, fixed clock, recording delay, fixture replay | core, services, ui_logic, gtest |
 
 Core, services and ui_logic never include Qt. Nothing in core performs I/O.
 
 Header layout: public headers under `src/<target>/include/wizz/<target>/…`, included as
 `#include "wizz/core/decimal.hpp"`. Private helpers live next to the `.cpp` files in `src/<target>/src/`.
+
+## Resources of the app
+
+| File | What |
+|---|---|
+| `src/app/resources/WizzairHelper.rc` | The exe's version resource (D-37) and its icon `IDI_ICON1` from `icon/WizzairHelper.ico` (D-51) |
+| `src/app/resources/WizzairHelper.manifest` | Application manifest: per-monitor-v2 DPI awareness (01 §3, 06 §4) |
+| `src/app/resources/icon/` | The application icon (D-51): two SVG sources, the PNG of every size and the `.ico`, all committed; `tools/make_app_icon.py` regenerates the outputs. The ten PNGs are also the Qt resource `:/icons/` of `wizzairhelper_app`, the window icon (`application_icon()` in `app_info.hpp`) |
+
+The build needs no image tools: it compiles the committed `.ico` and PNGs as they are.
 
 ## Code conventions
 

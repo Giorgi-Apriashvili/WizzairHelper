@@ -4,6 +4,9 @@ WizzairHelper
 Finds the cheapest Wizz Air flights from airports near a place you choose,
 and combines outbound and return fares into round trips.
 
+WizzairHelper is an independent project. It is not affiliated with, endorsed by
+or connected to Wizz Air; its icon is original artwork, not an airline logo.
+
 Running
 -------
 Start WizzairHelper.exe. Nothing else needs to be installed: the Qt libraries,
