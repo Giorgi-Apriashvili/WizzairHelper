@@ -37,6 +37,26 @@ gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal")
 
+# The real WizzairHelper.exe --version (D-35): exactly "WizzairHelper <version>" and a line
+# feed on standard output and exit code 0, read through pipes (app.version) and captured by
+# Windows PowerShell inside a pipeline, as tools/release_check.ps1 does (app.version.powershell);
+# the exe's version resource carries the same project version (app.version.resource). No window
+# opens.
+add_test(NAME app.version
+    COMMAND "${CMAKE_COMMAND}" "-DEXE=$<TARGET_FILE:WizzairHelper>" "-DVERSION=${PROJECT_VERSION}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_version.cmake")
+foreach(_check IN ITEMS powershell resource)
+    set(_switch)
+    if(_check STREQUAL "resource")
+        set(_switch -Resource)
+    endif()
+    add_test(NAME app.version.${_check}
+        COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/check_version.ps1"
+                -Exe "$<TARGET_FILE:WizzairHelper>" -Version "${PROJECT_VERSION}" ${_switch})
+endforeach()
+set_tests_properties(app.version app.version.powershell app.version.resource PROPERTIES TIMEOUT 60)
+
 # --autotest end to end (01 §17, 05 §5, D-30): the real WizzairHelper.exe on the
 # replay scenarios of tests/replay (heavy_cached / cancel_cached generate theirs) with
 # an isolated data root, the fixed clock and --diagnostics; check_autotest.py validates

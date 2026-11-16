@@ -14,6 +14,11 @@ deviations in [`docs/DECISIONS.md`](docs/DECISIONS.md).
   dependencies from `vcpkg.json` on the first configure: qtbase 6.11.2, libcurl (Schannel, brotli),
   GoogleTest.
 - Python 3 (optional) for the end-to-end `--autotest` checks; without it CMake skips them.
+- Inno Setup 6 (only for the `dist` target, which builds the installer):
+  `winget install JRSoftware.InnoSetup`. CMake looks for `ISCC.exe` on `PATH`, in
+  `C:\Program Files (x86)\Inno Setup 6` and in `%LOCALAPPDATA%\Programs\Inno Setup 6`; elsewhere,
+  configure with `-DWIZZ_ISCC=<path of ISCC.exe>`. Without it everything else builds, and `dist`
+  fails and says so.
 
 ## Configure, build, test
 
@@ -25,10 +30,14 @@ ctest --preset debug               # or: --preset release
 
 | Preset | What |
 |---|---|
-| `msvc-x64` | App, core/services/ui_logic libraries, conformance tests and GUI tests |
+| `msvc-x64` | App, core/services/ui_logic libraries, conformance tests and GUI tests; build presets `debug`, `release` and `dist` (the release artefacts) |
 | `msvc-x64-core` | Core, services, ui_logic and their tests, no Qt (`core-debug` / `core-release`) |
-| `msvc-x64-release` | App only, for the release package (`package`) |
-| workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full` |
+| `msvc-x64-release` | App only, no tests; build preset `package` = the `dist` target in this tree |
+| workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full`; `release-package` = configure `msvc-x64` + build `dist` |
+
+CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs the same presets: `release`
+and `debug` with `ctest -LE autotest`, the `autotest` label and `dist` in the Release leg
+([`docs/RELEASING.md`](docs/RELEASING.md)).
 
 In a git worktree without the vcpkg submodule, point at another checkout's vcpkg; to reuse an
 already-installed dependency tree without running vcpkg, also pass its installed directory:
@@ -48,31 +57,61 @@ the configure step after adding files.
 - `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, run by CTest with
   `QT_QPA_PLATFORM=minimal` (no window appears). Run the binary directly without that variable to
   use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots.
+- `app.version*`: the real `WizzairHelper.exe --version` read through pipes, captured by Windows
+  PowerShell, and its version resource (D-35, D-37). No window opens.
 - `autotest.*` (label `autotest`): the real `WizzairHelper.exe` in its hidden self-test mode on
   replayed scenarios, checked by `tests/gui/check_autotest.py`. They open real windows one at a
   time and need an interactive desktop session. `ctest --preset debug -L autotest` runs only these,
   `-LE autotest` everything else.
 
-## Release package
+## Release artefacts
 
 ```powershell
-cmake --preset msvc-x64-release
-cmake --build --preset package     # = cmake --workflow --preset release-package
+cmake --preset msvc-x64
+cmake --build --preset dist        # = cmake --workflow --preset release-package
 ```
 
-The `package` build preset builds Release and the CPack target `PACKAGE`:
-`build/msvc-x64-release/package/WizzairHelper-1.0.0-win64.zip`. It contains `WizzairHelper.exe`,
-the Qt DLLs with `platforms/qwindows.dll`, `styles/qmodernwindowsstyle.dll` and `imageformats/`
-(deployed by vcpkg's `windeployqt`), libcurl, zlib (`z.dll`), brotli and Qt's own dependencies, the
+The `dist` build preset builds Release and the target `dist` (`cmake/WizzPackaging.cmake`,
+`cmake/WizzDist.cmake`, D-38), which writes exactly two files to `build/msvc-x64/dist`:
+
+| File | What |
+|---|---|
+| `WizzairHelper-X.Y.Z-win64.zip` | Portable package: one folder `WizzairHelper-X.Y.Z-win64` |
+| `WizzairHelper-X.Y.Z-win64-setup.exe` | Per-user Inno Setup installer of exactly the same files ([`packaging/WizzairHelper.iss`](packaging/WizzairHelper.iss)) |
+
+X.Y.Z is `project(VERSION)` in `CMakeLists.txt`, the single source of the version (D-37): the exe's
+version resource and `WizzairHelper.exe --version` (D-35) take it from there too. The files are
+staged with `cmake --install` in `build/msvc-x64/dist-stage` first: `WizzairHelper.exe`, the Qt
+DLLs with `platforms/qwindows.dll`, `styles/qmodernwindowsstyle.dll` and `imageformats/` (deployed
+by vcpkg's `windeployqt`), libcurl, zlib (`z.dll`), brotli and Qt's own dependencies, the
 **app-local MSVC runtime** (no VC++ redistributable needed; the UCRT ships with Windows),
-`THIRD-PARTY-NOTICES.txt`, `README.txt` and `licenses/`. The same folder without the ZIP:
+`LICENSE.txt` (MIT), `THIRD-PARTY-NOTICES.txt`, `README.txt` and `licenses/`. The same folder without packing:
 
 ```powershell
-cmake --install build/msvc-x64-release --config Release --prefix C:\Temp\WizzairHelper
+cmake --install build/msvc-x64 --config Release --prefix C:\Temp\WizzairHelper
 ```
 
-Unpack the ZIP anywhere and start `WizzairHelper.exe`; it keeps its data in
-`%LOCALAPPDATA%\WizzairHelper`. `docs/RELEASE_CHECKS.md` records the release verification.
+`cmake --build --preset package` builds the same target in the app-only tree
+(`cmake --preset msvc-x64-release` first) into `build/msvc-x64-release/dist`.
+
+Unpack the ZIP anywhere and start `WizzairHelper.exe`, or run the installer: it installs per user
+into `%LOCALAPPDATA%\Programs\WizzairHelper` without administrator rights, with a Start-menu entry
+and an uninstaller. Either way the app keeps its data in `%LOCALAPPDATA%\WizzairHelper`. The
+installer's silent update switches and `/RELAUNCH`, and how to try them locally, are in
+[`docs/RELEASING.md`](docs/RELEASING.md); `docs/RELEASE_CHECKS.md` records the release verification.
+
+## Releases and `tools/`
+
+A `vX.Y.Z` tag makes CI build, test and publish a GitHub release with the ZIP, the installer and
+`SHA256SUMS.txt`; [`docs/RELEASING.md`](docs/RELEASING.md) is the process. Its PowerShell helpers:
+
+| Script | Use |
+|---|---|
+| `tools/ci_wait.ps1 -Sha <sha>` | Waits for a commit's CI run, then prints each job's result, minutes and failed step |
+| `tools/tag_wait.ps1 -Tag vX.Y.Z` | The same for a tag's run (the one with the release job) |
+| `tools/release_check.ps1 -Tag vX.Y.Z -Exe WizzairHelper.exe` | Verifies a published release: assets, `SHA256SUMS.txt`, the packaged exe's `--version`, `releases/latest` |
+
+`-Repo` defaults to `Giorgi-Apriashvili/WizzairHelper`.
 
 ## The hidden self-test mode and replays
 

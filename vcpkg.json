@@ -1,7 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "wizzairhelper",
-  "version": "1.0.0",
   "description": "Finds the cheapest Wizz Air trips from airports near a chosen starting place.",
   "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [

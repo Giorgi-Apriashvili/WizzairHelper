@@ -1,0 +1,142 @@
+# Builds and tests every push to main and every pull request; a v* tag also publishes a GitHub
+# release with the portable ZIP, the installer and SHA256SUMS.txt (docs/RELEASING.md).
+# Adapted from the owner's grab workflow template.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    # Visual Studio 2026 (18), CMake 4, Inno Setup 6 and Python 3 are on the image. The presets
+    # use the "Visual Studio 18 2026" generator, so no developer command prompt is needed.
+    runs-on: windows-2025-vs2026
+    # The first run (or one after vcpkg.json or the vcpkg submodule changed) builds Qt, Debug and
+    # Release, from source; later runs restore it from the binary cache below.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false          # one failing leg doesn't hide the other
+      matrix:
+        include:
+          # The same configure, build and test presets as local work: CI runs exactly what you run.
+          - name: msvc-release
+            configure: msvc-x64
+            build: release
+            test: release
+          - name: msvc-debug
+            configure: msvc-x64
+            build: debug
+            test: debug
+    steps:
+      # vcpkg is the pinned external/vcpkg submodule. Shallow is enough: its commit is the
+      # manifest's builtin-baseline and every override names the version at that commit.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # A tag must match the project's version, so a release can't ship under the wrong number.
+      - name: Check that the tag matches project(VERSION)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          # project(WizzairHelper VERSION X.Y.Z ...) spans lines; cmake_minimum_required's VERSION is not it.
+          if ((Get-Content -Raw CMakeLists.txt) -notmatch 'project\(\s*WizzairHelper\s+VERSION\s+(\d+\.\d+\.\d+)') {
+            throw "no project(WizzairHelper VERSION X.Y.Z) in CMakeLists.txt"
+          }
+          $version = $Matches[1]
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "tag ${{ github.ref_name }} does not match project version v$version in CMakeLists.txt"
+          }
+          Write-Output "tag matches project version v$version"
+
+      # vcpkg's binary cache, kept between runs, so Qt, libcurl and GoogleTest build only when
+      # vcpkg.json or the vcpkg submodule change. The image version is part of the key: a new image
+      # (compiler) restores the previous cache, rebuilds only what no longer matches and saves anew.
+      - name: vcpkg
+        id: vcpkg
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:GITHUB_WORKSPACE 'vcpkg-cache'
+          New-Item -ItemType Directory -Force $cache | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_DEFAULT_BINARY_CACHE=$cache"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "commit=$(git rev-parse HEAD:external/vcpkg)"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "image=$env:ImageOS-$env:ImageVersion"
+
+      - name: vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.image }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-${{ runner.os }}-${{ steps.vcpkg.outputs.commit }}-
+            vcpkg-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.test }} --output-on-failure -LE autotest
+
+      # The end-to-end --autotest runs (label autotest) open the real app window, one at a time,
+      # checked by tests/gui/check_autotest.py: one leg only. The test preset fails when no test
+      # matches (noTestsAction), so a runner without Python fails here instead of skipping them.
+      - name: End-to-end GUI tests (autotest)
+        if: matrix.name == 'msvc-release'
+        timeout-minutes: 30
+        run: ctest --preset ${{ matrix.test }} --output-on-failure -L autotest
+
+      # The `dist` target writes WizzairHelper-<version>-win64.zip and -win64-setup.exe to
+      # build/msvc-x64/dist, from the Release build tested above.
+      - name: Package (portable zip + installer)
+        if: matrix.name == 'msvc-release'
+        run: cmake --build --preset dist
+
+      # Anything that installs or updates the app refuses a download that doesn't match this file.
+      - name: Checksums
+        if: matrix.name == 'msvc-release'
+        shell: pwsh
+        working-directory: build/msvc-x64/dist
+        run: |
+          Get-ChildItem -File | Where-Object { $_.Extension -in '.zip', '.exe' } | Sort-Object Name |
+            ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
+            Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Upload artifacts
+        if: matrix.name == 'msvc-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wizzairhelper-windows-x64
+          path: |
+            build/msvc-x64/dist/*.zip
+            build/msvc-x64/dist/*.exe
+            build/msvc-x64/dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  # Only on tags, and only when every build leg passed.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wizzairhelper-windows-x64
+          path: dist
+
+      # The generated notes are a placeholder: `gh release edit vX.Y.Z --notes-file ...` replaces them.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
