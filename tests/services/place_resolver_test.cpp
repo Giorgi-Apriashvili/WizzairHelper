@@ -1012,9 +1012,15 @@ TEST(PlaceResolver, Waiting_for_the_geocoding_lock_is_cancellable)
     std::stop_source cancel;
     auto waiter = std::async(std::launch::async,
                              [&] { return rig.resolver.resolve("Vienna", *cat(), {}, cancel.get_token()); });
-    EXPECT_EQ(waiter.wait_for(100ms), std::future_status::timeout) << "the second lookup waits for the lock";
+    // Wait for the second lookup to queue on the lock (polling; 60 s is only the cap).
+    const auto give_up = std::chrono::steady_clock::now() + 60s;
+    while (rig.resolver.lock_waiters() == 0 && std::chrono::steady_clock::now() < give_up) {
+        std::this_thread::sleep_for(1ms);
+    }
+    ASSERT_EQ(rig.resolver.lock_waiters(), 1) << "the second lookup waits for the lock";
+    EXPECT_EQ(waiter.wait_for(0s), std::future_status::timeout);
     cancel.request_stop();
-    ASSERT_EQ(waiter.wait_for(10s), std::future_status::ready);
+    ASSERT_EQ(waiter.wait_for(60s), std::future_status::ready);
     expect_throws_exactly<OperationCancelled>([&] { (void)waiter.get(); });
 
     release.set_value();

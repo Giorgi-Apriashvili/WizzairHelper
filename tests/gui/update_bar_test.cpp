@@ -137,7 +137,7 @@ TEST(UpdateBar, Follows_the_input_panel_in_the_tab_order_while_visible)
     UpdateRig rig;
     rig.backend->script_checks({release_info(wizz::update::Version{1, 2, 0})});
     rig.start();
-    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }));
     const std::vector<QWidget*> stops = gui::tab_stops(rig.window());
     const auto at = [&](QWidget* widget) { return std::ranges::find(stops, widget) - stops.begin(); };
     const std::vector<QWidget*> inputs = rig.window_rig.input().tab_order();
@@ -180,7 +180,7 @@ TEST(UpdateBar, Lays_out_without_clipping_in_the_main_window)
         UpdateRig rig{std::move(options)};
         rig.backend->script_checks({release_info(wizz::update::Version{1, 2, 0})});
         rig.start();
-        ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }, 10s));
+        ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); }));
         const QString name = kind == wizz::update::InstallKind::installed ? QStringLiteral("update_bar_ready")
                                                                           : QStringLiteral("update_bar_available");
 

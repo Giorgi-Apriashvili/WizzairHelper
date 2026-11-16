@@ -36,7 +36,10 @@ public:
     {
         throw_if_cancelled(stop);
         std::unique_lock lock(owner_.flight_mutex_);
-        if (!owner_.flight_released_.wait(lock, stop, [this] { return !owner_.flight_busy_; })) {
+        ++owner_.flight_waiters_;
+        const bool acquired = owner_.flight_released_.wait(lock, stop, [this] { return !owner_.flight_busy_; });
+        --owner_.flight_waiters_;
+        if (!acquired) {
             throw OperationCancelled{};
         }
         owner_.flight_busy_ = true;
@@ -59,6 +62,12 @@ public:
 private:
     CurrencyService& owner_;
 };
+
+int CurrencyService::lock_waiters() const
+{
+    const std::lock_guard lock(flight_mutex_);
+    return flight_waiters_;
+}
 
 std::string CurrencyService::downloading_notice(std::string_view source_name)
 {

@@ -4,19 +4,17 @@
 // key input sent through QApplication like real input, the Tab stops of a
 // window, and an event-loop wait without sleeping.
 
+#include "diagnostics_test_support.hpp"
 #include "grid_actions.hpp"
 
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QContextMenuEvent>
-#include <QElapsedTimer>
-#include <QEventLoop>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QTableView>
-#include <QTimer>
 
 #include <chrono>
 #include <functional>
@@ -151,24 +149,12 @@ inline void context_menu_at(QTableView& view, QPoint pos)
     QApplication::sendEvent(view.viewport(), &event);
 }
 
-/// Runs the event loop until `done()` or the timeout; returns `done()`.
-[[nodiscard]] inline bool wait_until(const std::function<bool()>& done, std::chrono::milliseconds timeout)
+/// Runs the event loop until `done()` or the timeout; returns whether `done()` held
+/// (wizz::test::pump_until: a measured deadline, a latched result, no busy loop).
+[[nodiscard]] inline bool wait_until(const std::function<bool()>& done,
+                                     std::chrono::milliseconds timeout = wizz::test::kWaitCap)
 {
-    if (done()) {
-        return true;
-    }
-    QEventLoop loop;
-    QTimer poll;
-    poll.setInterval(5);
-    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-        if (done()) {
-            loop.quit();
-        }
-    });
-    QTimer::singleShot(timeout, &loop, &QEventLoop::quit);
-    poll.start();
-    loop.exec();
-    return done();
+    return wizz::test::pump_until(done, timeout);
 }
 
 /// Lets queued layout and paint work run.

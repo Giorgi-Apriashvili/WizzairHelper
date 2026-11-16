@@ -38,7 +38,6 @@
 #include <functional>
 #include <ios>
 #include <iterator>
-#include <latch>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1252,11 +1251,16 @@ TEST(WizzClient, User_cancel_wins_over_a_timeout_and_cancels_a_stalled_transfer)
     EXPECT_TRUE(h.delays().empty());
     EXPECT_EQ(h.messages(), (Strings{kLookingUp}));
 
-    // A transfer that would stall for 30 s ends at once on cancel.
+    // A transfer that would stall for the whole request timeout (30 s) ends on cancel —
+    // in a fraction of it: half the timeout is far more than any scheduling delay of a
+    // loaded machine and far less than a transfer that ran into its timeout.
     auto fake = std::make_shared<FakeTransport>(default_responder());
     const auto stalling = std::make_shared<StallingTransport>(fake, "/search/timetableV2");
     const RecordingDelay delay;
-    WizzApiClient client{stalling, test_options(std::make_shared<FixedClock>(), delay)};
+    WizzClientOptions options = test_options(std::make_shared<FixedClock>(), delay);
+    const Duration request_timeout = options.request_timeout;
+    ASSERT_GE(request_timeout, 10s);
+    WizzApiClient client{stalling, std::move(options)};
     std::stop_source user;
     const auto started = std::chrono::steady_clock::now();
     std::jthread canceller{[&](std::stop_token own) {
@@ -1267,7 +1271,7 @@ TEST(WizzClient, User_cancel_wins_over_a_timeout_and_cancels_a_stalled_transfer)
     }};
     EXPECT_THROW((void)client.get_timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)), {}, user.get_token()),
                  OperationCancelled);
-    EXPECT_LT(std::chrono::steady_clock::now() - started, 10s);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, request_timeout / 2);
     EXPECT_TRUE(delay.delays().empty());
 }
 
@@ -1502,15 +1506,20 @@ TEST(WizzClient, A_not_served_chunk_stops_the_remaining_chunks)
 
 TEST(WizzClient, P_33_Discovery_lock_lets_one_cold_caller_discover)
 {
-    std::latch second_started{1};
+    std::atomic<const WizzApiClient*> client{nullptr};
     const Responder fallback = default_responder();
-    Harness h{[&second_started, fallback](const RecordedRequest& r) {
+    Harness h{[&client, fallback](const RecordedRequest& r) {
         if (is_homepage(r)) {
-            second_started.wait();                        // the other caller is on its way...
-            std::this_thread::sleep_for(50ms);            // ...and queues on the discovery lock
+            // The discovering caller holds the lock until the other one queues on it
+            // (polling; 60 s is only the cap).
+            const auto give_up = std::chrono::steady_clock::now() + 60s;
+            while (client.load()->discovery_waiters() == 0 && std::chrono::steady_clock::now() < give_up) {
+                std::this_thread::sleep_for(1ms);
+            }
         }
         return fallback(r);
     }};
+    client.store(&h.client());
     const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
 
     TimetableResult first_result;
@@ -1526,7 +1535,6 @@ TEST(WizzClient, P_33_Discovery_lock_lets_one_cold_caller_discover)
             }
         }};
         std::jthread second{[&] {
-            second_started.count_down();
             try {
                 second_result = h.timetable(query);
             } catch (...) {

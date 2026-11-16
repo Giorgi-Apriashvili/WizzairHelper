@@ -199,7 +199,7 @@ TEST(RecordingDelay, Records_in_order_and_never_sleeps)
     func(5s, {});
     delay(15s, {});
     func(30min, {});
-    EXPECT_LT(std::chrono::steady_clock::now() - started, 1s);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 5s) << "sleeping even the shortest delay takes 5 s";
     EXPECT_EQ(delay.delays(), (std::vector<wizz::Duration>{5s, 15s, 30min}));
 }
 

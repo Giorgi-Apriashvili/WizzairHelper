@@ -64,7 +64,10 @@ public:
     {
         throw_if_cancelled(stop);  // WaitAsync observes a cancelled token before taking a free slot
         std::unique_lock lock(owner_.mutex_);
-        if (!owner_.released_.wait(lock, stop, [this] { return !owner_.busy_; })) {
+        ++owner_.waiters_;
+        const bool acquired = owner_.released_.wait(lock, stop, [this] { return !owner_.busy_; });
+        --owner_.waiters_;
+        if (!acquired) {
             throw OperationCancelled{};
         }
         owner_.busy_ = true;
@@ -101,6 +104,12 @@ PlaceResolver::PlaceResolver(std::shared_ptr<http::Transport> transport, FileCac
     if (!delay_) {
         throw std::invalid_argument("PlaceResolver needs a delay function.");
     }
+}
+
+int PlaceResolver::lock_waiters() const
+{
+    const std::scoped_lock lock(mutex_);
+    return waiters_;
 }
 
 PlaceLookup PlaceResolver::resolve(std::string_view text, const AirportCatalog& catalog, const NoticeSink& notices,

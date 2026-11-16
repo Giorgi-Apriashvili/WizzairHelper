@@ -118,6 +118,10 @@ public:
     /// propagate unchanged.
     [[nodiscard]] FxRatesPtr get_rates(const NoticeSink& notices, std::stop_token stop);
 
+    /// Callers blocked on the single-flight lock right now (tests wait for a caller to
+    /// queue instead of sleeping).
+    [[nodiscard]] int lock_waiters() const;
+
 private:
     /// What `Remember` stored: the rates and when they were loaded.
     struct Memory {
@@ -144,9 +148,10 @@ private:
     std::atomic<std::shared_ptr<const Memory>> memory_;
 
     /// Single-flight lock (`SemaphoreSlim(1)` with a cancellable wait).
-    std::mutex flight_mutex_;
+    mutable std::mutex flight_mutex_;
     std::condition_variable_any flight_released_;
     bool flight_busy_ = false;
+    int flight_waiters_ = 0;  ///< guarded by flight_mutex_
 };
 
 } // namespace wizz

@@ -20,11 +20,13 @@
 // every 10 ms and at the end of a long dispatch: its window starts up to 10 ms
 // early.
 //
+// Wall time (every `ms`, and the 10 ms between CPU readings) comes from the
+// clock given at construction, by default a QElapsedTimer; tests pass one they
+// move by hand. CPU time and who held the CPUs always come from CpuMeter.
+//
 // Test-only diagnostics of the --autotest mode (DECISIONS D-30); UI thread only.
 
 #include "cpu_meter.hpp"
-
-#include <QElapsedTimer>
 
 #include <cstddef>
 #include <cstdint>
@@ -62,8 +64,12 @@ public:
         std::vector<Dispatch> longest;    ///< the kKeptDispatches longest, longest first
     };
 
-    /// `is_busy` tells whether the progress UI is busy (BusyPanel::is_busy).
-    explicit EventWatchdog(std::function<bool()> is_busy);
+    /// Monotonic nanoseconds since an arbitrary start.
+    using Clock = std::function<std::int64_t()>;
+
+    /// `is_busy` tells whether the progress UI is busy (BusyPanel::is_busy). Time comes from
+    /// `clock`, by default a QElapsedTimer started now; tests pass one they move by hand.
+    explicit EventWatchdog(std::function<bool()> is_busy, Clock clock = {});
 
     /// A dispatch of `event` to `receiver` starts (read before dispatch: the receiver may
     /// be deleted by it).
@@ -91,11 +97,11 @@ private:
         const char* receiver = "";
     };
 
-    [[nodiscard]] std::int64_t now_ns() const { return clock_.nsecsElapsed(); }
+    [[nodiscard]] std::int64_t now_ns() const { return clock_(); }
     void record(const Frame& frame, const Dispatch& measured, std::int64_t now);
 
     std::function<bool()> is_busy_;
-    QElapsedTimer clock_;
+    Clock clock_;
     std::vector<Frame> stack_;
     CpuMeter::Sample sampled_;            ///< the latest CPU counters
     std::int64_t sampled_ns_ = -1;        ///< when they were read

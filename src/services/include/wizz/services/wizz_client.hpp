@@ -157,6 +157,10 @@ public:
     /// attempts, counted just before each send, failed ones included).
     [[nodiscard]] std::int64_t request_count() const noexcept { return request_count_.load(); }
 
+    /// Callers queued on the discovery lock right now (tests wait for a caller to queue
+    /// instead of sleeping).
+    [[nodiscard]] std::size_t discovery_waiters() const { return discovery_lock_.waiter_count(); }
+
     /// `CurrentApiUrl` (04 §13): the in-memory API base, or nullopt (warm start
     /// before the URL was needed, or just after an invalidation).
     [[nodiscard]] std::optional<std::string> current_api_url() const;

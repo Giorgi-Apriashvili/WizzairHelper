@@ -181,7 +181,7 @@ public:
     }
 
     /// Shows the window and waits for OnShownAsync (the map load; the autotest script).
-    void start(std::chrono::milliseconds timeout = 10s)
+    void start(std::chrono::milliseconds timeout = kWaitCap)
     {
         window_->show_main_window();
         ASSERT_TRUE(gui::wait_until([this] { return started_; }, timeout)) << "start-up did not finish";
@@ -189,7 +189,7 @@ public:
 
     /// Runs a flow to its end (the event loop runs meanwhile).
     template <class T>
-    T run(wizz::app::Task<T> task, std::chrono::milliseconds timeout = 10s)
+    T run(wizz::app::Task<T> task, std::chrono::milliseconds timeout = kWaitCap)
     {
         task.start();
         if (!gui::wait_until([&task] { return task.done(); }, timeout)) {

@@ -223,8 +223,17 @@ public:
     {
     }
 
-    /// MainWindow::enable_updates with the fake backend and the recording hooks.
-    bool enable() { return window_rig.window().enable_updates(launches.hooks(backend, interval_)); }
+    /// MainWindow::enable_updates with the fake backend and the recording hooks; from then
+    /// on the rig counts the evaluations the controller completes.
+    bool enable()
+    {
+        const bool enabled = window_rig.window().enable_updates(launches.hooks(backend, interval_));
+        if (enabled) {
+            QObject::connect(controller(), &wizz::app::UpdateController::evaluated, controller(),
+                             [this] { ++completed_; });
+        }
+        return enabled;
+    }
 
     /// enable(), show the window, wait for the start-up map load and the first evaluation.
     void start()
@@ -234,13 +243,14 @@ public:
         wait_for_evaluations(1);
     }
 
-    /// Waits until `count` evaluations ran and none is running.
-    void wait_for_evaluations(int count, std::chrono::milliseconds timeout = std::chrono::seconds{10})
+    /// Waits until the controller has completed `count` evaluations (its `evaluated` signal:
+    /// the worker's answer has been applied on the UI thread). A count only grows, so this
+    /// needs no moment in which no evaluation runs — with a short recheck interval on a busy
+    /// machine the next tick may start one as soon as the last ended.
+    void wait_for_evaluations(int count, std::chrono::milliseconds timeout = kWaitCap)
     {
-        ASSERT_TRUE(gui::wait_until(
-            [&] { return backend->evaluations() >= count && controller() != nullptr && !controller()->is_running(); },
-            timeout))
-            << "evaluations: " << backend->evaluations();
+        ASSERT_TRUE(gui::wait_until([&] { return completed_ >= count; }, timeout))
+            << "evaluations completed: " << completed_ << ", started on the core: " << backend->evaluations();
         gui::settle();
     }
 
@@ -255,6 +265,7 @@ public:
 
 private:
     std::chrono::milliseconds interval_;
+    int completed_ = 0;
 };
 
 } // namespace wizz::test::app

@@ -4,8 +4,10 @@
 // UI thread's own CPU time and who held the CPUs (D-50).
 //
 // Sleeps stand in for a blocked UI thread and spin_cpu() for UI work. A busy machine
-// may stretch any of them and delay any tick, so the checks never assume how long a
-// stretch took: they bracket it with the test's own clock or read lower bounds only.
+// may stretch any of them and delay any tick (a loaded CI runner by hundreds of ms), so
+// the checks never assume how long a stretch took: they compare the probe with times
+// the test measures itself, right around the calls that start and stop a run or an
+// exclusion (the probe's own readings lie inside them), or read lower bounds only.
 
 #include "busy_panel.hpp"
 #include "diagnostics_test_support.hpp"
@@ -14,8 +16,11 @@
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/locale.hpp"
 
+#include <QElapsedTimer>
 #include <QEventLoop>
+#include <QObject>
 #include <QTimer>
+#include <QtGlobal>
 
 #include <gtest/gtest.h>
 
@@ -25,18 +30,24 @@
 namespace {
 
 using namespace std::chrono_literals;
-using Clock = std::chrono::steady_clock;
 using wizz::app::BusyPanel;
 using wizz::app::TimerGapProbe;
-using wizz::test::ms_between;
 using wizz::test::pump_for;
 using wizz::test::spin_cpu;
 
+/// Milliseconds between two readings of the test's clock.
+[[nodiscard]] double span_ms(qint64 from_ns, qint64 to_ns)
+{
+    return static_cast<double>(to_ns - from_ns) / 1e6;
+}
+
 class TimerGapProbeTest : public ::testing::Test {
 protected:
-    /// Runs the event loop until the probe has seen `count` more ticks. It waits in the
-    /// loop (pump_until polls, which would put the test's own spinning into every gap's
-    /// CPU time).
+    TimerGapProbeTest() { stopwatch_.start(); }
+
+    /// Runs the event loop until the probe has seen `count` more ticks (at most kWaitCap).
+    /// It waits for the timer's own ticks: pump_until's 5 ms poll would add dispatches of
+    /// the test's own to every gap and its CPU time.
     [[nodiscard]] bool wait_ticks(int count)
     {
         const int target = probe_.stats().ticks + count;
@@ -47,31 +58,35 @@ protected:
                 loop.quit();
             }
         });
-        QTimer::singleShot(5s, &loop, &QEventLoop::quit);
+        QTimer::singleShot(wizz::test::kWaitCap, &loop, &QEventLoop::quit);
         loop.exec();
         return probe_.stats().ticks >= target;
     }
 
+    /// The test's own clock: a QElapsedTimer, like the probe's.
+    [[nodiscard]] qint64 now_ns() const { return stopwatch_.nsecsElapsed(); }
+
     wizz::FixedClock clock_;
     BusyPanel panel_{clock_, wizz::Locale::en_us()};
     TimerGapProbe probe_{panel_};
+    QElapsedTimer stopwatch_;
 };
 
 TEST_F(TimerGapProbeTest, Counts_runs_ticks_and_the_gaps_of_a_busy_period)
 {
     EXPECT_EQ(probe_.stats().runs, 0);
-    const Clock::time_point begin = Clock::now();
+    const qint64 started = now_ns();
     panel_.begin("Loading Wizz Air route map…");
     ASSERT_TRUE(wait_ticks(4));
     panel_.end("Ready.");
-    const Clock::time_point end = Clock::now();
+    const qint64 ended = now_ns();
     const TimerGapProbe::Stats& stats = probe_.stats();
     EXPECT_EQ(stats.runs, 1);
     EXPECT_GE(stats.ticks, 4);
     EXPECT_EQ(stats.gaps, stats.ticks + 1) << "start to first tick, tick to tick, last tick to stop";
     EXPECT_GE(stats.longest_gap_ms, 30.0);
     EXPECT_GT(stats.mean_gap_ms(), 0.0);
-    EXPECT_LE(stats.total_gap_ms, ms_between(begin, end) + 0.5) << "the gaps tile the run";
+    EXPECT_LE(stats.total_gap_ms, span_ms(started, ended)) << "the gaps tile the run";
     EXPECT_FALSE(stats.longest_gaps.empty());
     EXPECT_LE(stats.longest_gaps.size(), TimerGapProbe::kKeptGaps);
     for (std::size_t i = 1; i < stats.longest_gaps.size(); ++i) {
@@ -130,41 +145,54 @@ TEST_F(TimerGapProbeTest, Work_right_before_End_counts_although_no_tick_followed
 
 TEST_F(TimerGapProbeTest, Idle_time_between_busy_periods_is_not_a_gap)
 {
-    const Clock::time_point first_begin = Clock::now();
+    const qint64 start_one = now_ns();
     panel_.begin("One");
     ASSERT_TRUE(wait_ticks(1));
     panel_.end("ok");
-    const Clock::time_point first_end = Clock::now();
-    pump_for(300ms);
-    const Clock::time_point second_begin = Clock::now();
+    const qint64 end_one = now_ns();
+    pump_for(300ms);  // idle: what a probe that measured across runs would count
+    const qint64 start_two = now_ns();
     panel_.begin("Two");
     ASSERT_TRUE(wait_ticks(2));
     panel_.end("ok");
-    const Clock::time_point second_end = Clock::now();
-    EXPECT_EQ(probe_.stats().runs, 2);
-    // The gaps tile the two runs only: the 300 ms between them are in no gap.
-    EXPECT_LE(probe_.stats().total_gap_ms,
-              ms_between(first_begin, first_end) + ms_between(second_begin, second_end) + 0.5);
+    const qint64 end_two = now_ns();
+
+    const TimerGapProbe::Stats& stats = probe_.stats();
+    EXPECT_EQ(stats.runs, 2);
+    EXPECT_EQ(stats.gaps, stats.ticks + stats.runs) << "per run: start to first tick, tick to tick, last tick to stop";
+    // The gaps of a run add up to the run, which lies inside the test's own measurement of
+    // it; counting the idle time would add at least its 300 ms on top.
+    const double runs_ms = span_ms(start_one, end_one) + span_ms(start_two, end_two);
+    const double idle_ms = span_ms(end_one, start_two);
+    ASSERT_GE(idle_ms, 300.0);
+    EXPECT_LE(stats.total_gap_ms, runs_ms) << "the " << idle_ms << " ms between the runs were counted";
 }
 
 TEST_F(TimerGapProbeTest, Harness_work_is_excluded_and_reported_apart)
 {
-    const Clock::time_point begin = Clock::now();
+    const qint64 started = now_ns();
     panel_.begin("Fetching fares…");
     ASSERT_TRUE(wait_ticks(1));
     probe_.exclude_begin();
+    const qint64 excluded_from = now_ns();
     std::this_thread::sleep_for(150ms);  // a screenshot: waiting ...
     spin_cpu(60.0);                      // ... and work
+    const qint64 excluded_to = now_ns();
     probe_.exclude_end();
     ASSERT_TRUE(wait_ticks(1));
     panel_.end("ok");
-    const Clock::time_point end = Clock::now();
+    const qint64 ended = now_ns();
+
     const TimerGapProbe::Stats& stats = probe_.stats();
     EXPECT_EQ(stats.exclusions, 1);
-    EXPECT_GE(stats.excluded_ms, 200.0);
-    EXPECT_GE(stats.longest_exclusion_ms, 200.0);
-    // The gaps tile the run without the excluded stretch, and none holds its CPU time.
-    EXPECT_LE(stats.total_gap_ms + stats.excluded_ms, ms_between(begin, end) + 0.5);
+    const double inside_ms = span_ms(excluded_from, excluded_to);  // within the exclusion
+    ASSERT_GE(inside_ms, 200.0) << "150 ms asleep and 60 ms of CPU time";
+    EXPECT_GE(stats.excluded_ms, inside_ms);
+    EXPECT_GE(stats.longest_exclusion_ms, inside_ms);
+    // Gaps and the exclusion share the run without overlapping: the screenshot is in no
+    // gap, and no gap holds its CPU time.
+    EXPECT_LE(stats.total_gap_ms + stats.excluded_ms, span_ms(started, ended))
+        << "the excluded time was counted in a gap too";
     EXPECT_LT(stats.longest_gap_cpu_ms, 30.0);
 }
 

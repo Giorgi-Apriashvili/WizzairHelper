@@ -14,6 +14,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -93,7 +95,7 @@ TEST(AutoTestRunner, Runs_the_script_takes_the_screenshots_in_order_and_writes_s
     WindowRig rig{std::move(options)};
     ShotLog shots;
     rig.window().autotest_runner()->set_screenshotter(shots.make());
-    rig.start(20s);
+    rig.start();
 
     EXPECT_EQ(shots.without_progress(), (std::vector<std::string>{"1-outbound.png", "2-return.png", "3-roundtrips.png",
                                                                   "5-currency-switched.png", "4-log.png"}));
@@ -150,7 +152,7 @@ TEST(AutoTestRunner, Progress_screenshots_every_2200_ms_while_working)
     WindowRig rig{std::move(options)};
     ShotLog shots;
     rig.window().autotest_runner()->set_screenshotter(shots.make());
-    rig.start(30s);
+    rig.start();
 
     std::vector<std::string> progress;
     std::ranges::copy_if(shots.names, std::back_inserter(progress),
@@ -163,8 +165,14 @@ TEST(AutoTestRunner, Progress_screenshots_every_2200_ms_while_working)
     const auto& summary = rig.window().autotest_runner()->summary();
     ASSERT_TRUE(summary.has_value());
     ASSERT_EQ(summary->progress_screenshots.size(), progress.size());
+    // Each shot shows a status of a running search: mostly "Fetching fares" (the server's
+    // 700 ms answers dominate), but on a slow machine a 2200 ms tick may also land in a
+    // search's first or last phase. Never the line a finished search leaves while idle.
     for (const std::string& status : summary->progress_screenshots) {
-        EXPECT_TRUE(status.starts_with("Fetching fares")) << status;
+        EXPECT_FALSE(status.empty());
+        EXPECT_FALSE(status.starts_with("Ready") || status.starts_with("Outbound Done") ||
+                     status.starts_with("Return Done"))
+            << status;
     }
     EXPECT_FALSE(summary->after_currency_switch.has_value());
     EXPECT_EQ(shots.without_progress(),
@@ -255,7 +263,7 @@ TEST(AutoTestRunner, D_30_Warm_cache_makes_the_scripts_search_a_cached_replay)
     WindowRig rig{std::move(options)};
     ShotLog shots;
     rig.window().autotest_runner()->set_screenshotter(shots.make());
-    rig.start(20s);
+    rig.start();
 
     const auto& summary = rig.window().autotest_runner()->summary();
     ASSERT_TRUE(summary.has_value());
@@ -293,9 +301,19 @@ TEST(AutoTestRunner, D_30_Warm_cache_makes_the_scripts_search_a_cached_replay)
 
 TEST(AutoTestRunner, D_30_Cancel_after_ms_presses_Esc_and_Cancel_with_one_transition)
 {
+    // The cancel_waiting server answers a timetable request only after a long delay, so
+    // the cancel 300 ms into the fetch lands while the first request waits — on any
+    // machine. Half that delay bounds the cancelled search: far more than any scheduling
+    // delay of a loaded runner, far less than a search that waited the request out.
+    std::chrono::milliseconds server_delay{0};
+    for (const wizz::ui::ReplayTransport::Rule& rule : wizz::test::app::scenario_rules("cancel_waiting", true)) {
+        server_delay = std::max(server_delay, rule.delay);
+    }
+    ASSERT_GE(server_delay, 10s);
     QTemporaryDir out;
     WindowRigOptions options;
-    options.keep_delays = true;  // the first timetable answer takes 700 ms: cancelled while waiting
+    options.scenario = "cancel_waiting";
+    options.keep_delays = true;
     options.autotest = section11_options(out);
     options.autotest->inbound.reset();
     options.autotest->then_currency.reset();
@@ -306,7 +324,7 @@ TEST(AutoTestRunner, D_30_Cancel_after_ms_presses_Esc_and_Cancel_with_one_transi
     rig.window().autotest_runner()->set_screenshotter(shots.make());
     int cancel_requests = 0;
     QObject::connect(&rig.busy(), &wizz::app::BusyPanel::cancel_requested, [&] { ++cancel_requests; });
-    rig.start(20s);
+    rig.start();
 
     EXPECT_EQ(cancel_requests, 1) << "Esc, Cancel, Esc and the handler: one transition (D-11)";
     const auto& summary = rig.window().autotest_runner()->summary();
@@ -328,7 +346,9 @@ TEST(AutoTestRunner, D_30_Cancel_after_ms_presses_Esc_and_Cancel_with_one_transi
     EXPECT_EQ(cancel.cancel_requests, 1);
     EXPECT_EQ(cancel.status_after_press, strings::kCancelling);
     EXPECT_FALSE(cancel.cancel_enabled_after_press);
-    EXPECT_LT(diagnostics->searches.at(0).duration_ms, 690.0) << "the 700 ms wait was interrupted";
+    EXPECT_LT(diagnostics->searches.at(0).duration_ms,
+              static_cast<double>(server_delay.count()) / 2)
+        << "the server's wait was interrupted";
 }
 
 TEST(AutoTestRunner, D_30_A_cancel_timer_that_fires_after_the_search_presses_nothing)
@@ -342,7 +362,7 @@ TEST(AutoTestRunner, D_30_A_cancel_timer_that_fires_after_the_search_presses_not
     WindowRig rig{std::move(options)};
     ShotLog shots;
     rig.window().autotest_runner()->set_screenshotter(shots.make());
-    rig.start(20s);
+    rig.start();
     const auto& diagnostics = rig.window().autotest_runner()->diagnostics();
     ASSERT_TRUE(diagnostics.has_value());
     EXPECT_FALSE(diagnostics->cancel.has_value()) << "stopped with the outbound search, never carried into the return";

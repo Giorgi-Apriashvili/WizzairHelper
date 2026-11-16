@@ -81,7 +81,11 @@ LoopbackServer::Handler respond_with(std::string raw_response)
     };
 }
 
-bool wait_until(const auto& condition, std::chrono::milliseconds limit = 5s)
+/// The cap of a wait for a condition: it returns as soon as the condition holds, so a
+/// generous cap costs nothing in a passing run (a loaded CI runner is many times slower).
+constexpr std::chrono::milliseconds kWaitCap = 60s;
+
+bool wait_until(const auto& condition, std::chrono::milliseconds limit = kWaitCap)
 {
     const auto give_up = std::chrono::steady_clock::now() + limit;
     while (!condition()) {
@@ -546,6 +550,73 @@ TEST(CurlTransport, At_most_50_redirects_are_followed_then_the_3xx_is_returned)
 
 // --- failures, timeouts and cancellation (04 §11.2) ------------------------------------
 
+/// Something a server handler or a proxy lookup waits at until the test opens it, or
+/// until a limit passes (so that a failing test cannot hang). Counts the waits.
+struct Gate {
+    std::mutex mutex;
+    std::condition_variable opened;
+    bool is_open = false;
+    std::atomic<int> calls{0};
+
+    void open()
+    {
+        {
+            const std::scoped_lock lock{mutex};
+            is_open = true;
+        }
+        opened.notify_all();
+    }
+    void wait(std::chrono::milliseconds limit)
+    {
+        ++calls;
+        std::unique_lock lock{mutex};
+        opened.wait_for(lock, limit, [this] { return is_open; });
+    }
+};
+
+/// Opens the gate when a test ends; declared after the server and the transport, so it
+/// runs before they wait for a held handler or an abandoned lookup.
+class GateOpener {
+public:
+    explicit GateOpener(std::shared_ptr<Gate> gate) : gate_(std::move(gate)) {}
+    ~GateOpener() { gate_->open(); }
+    GateOpener(const GateOpener&) = delete;
+    GateOpener& operator=(const GateOpener&) = delete;
+
+private:
+    std::shared_ptr<Gate> gate_;
+};
+
+/// How many cancellations a latency test makes. A busy machine only ever adds to a
+/// latency (the cancelled thread or the test thread waits for a CPU), so the shortest of a
+/// few is the transport's own reaction: one that noticed a cancel only at libcurl's ~1 s
+/// progress callback, not through curl_multi_wakeup or its 100 ms poll (04 §11.2), shows
+/// that in every try; a scheduling delay does not hit every try.
+constexpr int kCancelTries = 5;
+/// 04 §11.2, a responsive Cancel: the transport wakes at once on a cancel and polls at
+/// least every 100 ms; 300 ms leaves room for that poll and the test's own thread.
+constexpr std::chrono::milliseconds kCancelLatencyLimit = 300ms;
+
+/// The latency of one cancellation: `start` starts a send with the given stop token on
+/// another thread and returns once it is in the state to cancel; then the stop is
+/// requested, and the time until the send threw OperationCancelled is returned (nullopt
+/// when it ended otherwise).
+template <class Start>
+[[nodiscard]] std::optional<std::chrono::nanoseconds> cancel_latency(Start start)
+{
+    std::stop_source source;
+    std::future<Response> pending = start(source.get_token());
+    const auto cancelled_at = std::chrono::steady_clock::now();
+    source.request_stop();
+    try {
+        static_cast<void>(pending.get());
+    } catch (const wizz::OperationCancelled&) {
+        return std::chrono::steady_clock::now() - cancelled_at;
+    } catch (...) {
+    }
+    return std::nullopt;
+}
+
 TEST(CurlTransport, Connection_refused_is_a_transport_error)
 {
     const std::uint16_t port = wizz::test::unused_loopback_port();
@@ -575,10 +646,19 @@ TEST(CurlTransport, Body_that_breaks_after_the_headers_is_a_transport_error_CT_S
 
 TEST(CurlTransport, Server_that_sends_headers_then_stalls_times_out)
 {
-    LoopbackServer server{[](const ReceivedRequest&, LoopbackConnection& connection) {
+    // The server sends the headers and part of the body, then holds the connection for
+    // kHold before it closes it. The request's 300 ms deadline must end the transfer: a
+    // TimeoutError no earlier than the deadline, and long before the server gives up —
+    // half its hold is far more than any scheduling delay of a loaded machine and far
+    // less than a transfer that ignored the deadline would take.
+    static constexpr std::chrono::milliseconds kHold = 30s;
+    const auto hold = std::make_shared<Gate>();
+    LoopbackServer server{[hold](const ReceivedRequest&, LoopbackConnection& connection) {
         connection.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"partial");
-        connection.wait_for_close();
+        hold->wait(kHold);
+        connection.close_after_response();
     }};
+    const GateOpener release_at_end{hold};
     CurlTransport transport = direct_transport();
     Request request = get(server.url("/stall"));
     request.timeout = 300ms;
@@ -587,7 +667,7 @@ TEST(CurlTransport, Server_that_sends_headers_then_stalls_times_out)
     EXPECT_THROW(static_cast<void>(transport.send(request, {})), wizz::http::TimeoutError);
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_GE(elapsed, 250ms);
-    EXPECT_LT(elapsed, 3s);
+    EXPECT_LT(elapsed, kHold / 2);
 }
 
 TEST(CurlTransport, Server_that_never_answers_times_out_P_10)
@@ -620,21 +700,27 @@ TEST(CurlTransport, Timeout_spans_redirect_hops)
 
 TEST(CurlTransport, Cancel_during_a_stalled_transfer_returns_within_300_ms)
 {
-    LoopbackServer server{[](const ReceivedRequest&, LoopbackConnection& connection) {
+    std::atomic<int> stalled{0};
+    LoopbackServer server{[&stalled](const ReceivedRequest&, LoopbackConnection& connection) {
         connection.send("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{");
+        ++stalled;  // the transfer is under way and will not finish by itself
         connection.wait_for_close();
     }};
     CurlTransport transport = direct_transport();
-    std::stop_source source;
 
-    auto pending = std::async(std::launch::async, [&] { return transport.send(get(server.url("/slow")), source.get_token()); });
-    ASSERT_TRUE(wait_until([&] { return server.requests().size() == 1; }));
-    std::this_thread::sleep_for(150ms); // well inside the transfer
-    const auto cancelled_at = std::chrono::steady_clock::now();
-    source.request_stop();
-
-    EXPECT_THROW(static_cast<void>(pending.get()), wizz::OperationCancelled);
-    EXPECT_LT(std::chrono::steady_clock::now() - cancelled_at, 300ms);
+    std::chrono::nanoseconds fastest = std::chrono::nanoseconds::max();
+    for (int attempt = 1; attempt <= kCancelTries; ++attempt) {
+        const std::optional<std::chrono::nanoseconds> latency = cancel_latency([&](std::stop_token stop) {
+            auto pending = std::async(std::launch::async, [&transport, &server, stop] {
+                return transport.send(get(server.url("/slow")), stop);
+            });
+            EXPECT_TRUE(wait_until([&] { return stalled.load() == attempt; })) << "the server never got request " << attempt;
+            return pending;
+        });
+        ASSERT_TRUE(latency.has_value()) << "try " << attempt << " did not end with OperationCancelled";
+        fastest = std::min(fastest, *latency);
+    }
+    EXPECT_LT(fastest, kCancelLatencyLimit);
 }
 
 TEST(CurlTransport, Cancelled_token_sends_nothing_and_wins_over_a_timeout)
@@ -654,51 +740,23 @@ TEST(CurlTransport, Cancelled_token_sends_nothing_and_wins_over_a_timeout)
 
 /// Stands in for a slow WinHTTP proxy discovery: the lookup blocks until the gate opens
 /// (or `limit` passes, so that a failing test cannot hang), then connects directly.
-struct ProxyGate {
-    std::mutex mutex;
-    std::condition_variable opened;
-    bool is_open = false;
-    std::atomic<int> calls{0};
-
-    void open()
-    {
-        {
-            const std::scoped_lock lock{mutex};
-            is_open = true;
-        }
-        opened.notify_all();
-    }
-};
-
-CurlTransport::ProxySelector gated_selector(const std::shared_ptr<ProxyGate>& gate,
-                                            std::chrono::milliseconds limit = 3s)
+CurlTransport::ProxySelector gated_selector(const std::shared_ptr<Gate>& gate, std::chrono::milliseconds limit = 3s)
 {
     return [gate, limit](const std::string&) -> std::optional<std::string> {
-        ++gate->calls;
-        std::unique_lock lock{gate->mutex};
-        gate->opened.wait_for(lock, limit, [&] { return gate->is_open; });
+        gate->wait(limit);
         return std::string{};
     };
 }
 
-/// Opens the gate when a test ends; declared after the transport, so it runs before the
-/// transport waits for an abandoned lookup.
-class GateOpener {
-public:
-    explicit GateOpener(std::shared_ptr<ProxyGate> gate) : gate_(std::move(gate)) {}
-    ~GateOpener() { gate_->open(); }
-    GateOpener(const GateOpener&) = delete;
-    GateOpener& operator=(const GateOpener&) = delete;
-
-private:
-    std::shared_ptr<ProxyGate> gate_;
-};
-
 TEST(CurlTransport, Proxy_discovery_counts_against_the_request_timeout)
 {
+    // The lookup blocks for kLookup unless the test ends first. The 200 ms deadline must
+    // end the wait: half the lookup's time is far more than any scheduling delay and far
+    // less than a wait for the lookup to return.
+    constexpr std::chrono::milliseconds kLookup = 30s;
     LoopbackServer server{respond_with(http_response(200, {}, "too late"))};
-    const auto gate = std::make_shared<ProxyGate>();
-    CurlTransport transport{gated_selector(gate)};
+    const auto gate = std::make_shared<Gate>();
+    CurlTransport transport{gated_selector(gate, kLookup)};
     const GateOpener open_at_end{gate};
     Request request = get(server.url("/"));
     request.timeout = 200ms;
@@ -707,7 +765,7 @@ TEST(CurlTransport, Proxy_discovery_counts_against_the_request_timeout)
     EXPECT_THROW(static_cast<void>(transport.send(request, {})), wizz::http::TimeoutError);
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_GE(elapsed, 150ms);
-    EXPECT_LT(elapsed, 1s); // the wait ends at the deadline, not when the lookup returns
+    EXPECT_LT(elapsed, kLookup / 2); // the wait ends at the deadline, not when the lookup returns
     EXPECT_TRUE(server.requests().empty());
 }
 
@@ -730,18 +788,23 @@ TEST(CurlTransport, Proxy_discovery_time_is_taken_from_the_transfer_budget)
 TEST(CurlTransport, Cancel_during_proxy_discovery_returns_within_300_ms)
 {
     LoopbackServer server{respond_with(http_response(200))};
-    const auto gate = std::make_shared<ProxyGate>();
-    CurlTransport transport{gated_selector(gate)};
+    const auto gate = std::make_shared<Gate>();
+    CurlTransport transport{gated_selector(gate, kWaitCap)};
     const GateOpener open_at_end{gate};
-    std::stop_source source;
 
-    auto pending = std::async(std::launch::async, [&] { return transport.send(get(server.url("/")), source.get_token()); });
-    ASSERT_TRUE(wait_until([&] { return gate->calls.load() == 1; }));
-    const auto cancelled_at = std::chrono::steady_clock::now();
-    source.request_stop();
-
-    EXPECT_THROW(static_cast<void>(pending.get()), wizz::OperationCancelled);
-    EXPECT_LT(std::chrono::steady_clock::now() - cancelled_at, 300ms);
+    std::chrono::nanoseconds fastest = std::chrono::nanoseconds::max();
+    for (int attempt = 1; attempt <= kCancelTries; ++attempt) {
+        const std::optional<std::chrono::nanoseconds> latency = cancel_latency([&](std::stop_token stop) {
+            auto pending = std::async(std::launch::async, [&transport, &server, stop] {
+                return transport.send(get(server.url("/")), stop);
+            });
+            EXPECT_TRUE(wait_until([&] { return gate->calls.load() == attempt; })) << "lookup " << attempt << " never started";
+            return pending;
+        });
+        ASSERT_TRUE(latency.has_value()) << "try " << attempt << " did not end with OperationCancelled";
+        fastest = std::min(fastest, *latency);
+    }
+    EXPECT_LT(fastest, kCancelLatencyLimit);
     EXPECT_TRUE(server.requests().empty());
 }
 

@@ -326,13 +326,17 @@ TEST(SystemClock, Utc_now_follows_the_system_clock)
 TEST(SystemClock, Local_now_is_utc_shifted_by_the_machine_zone_offset)
 {
     const wizz::SystemClock clock;
+    // The two readings are taken one after the other; the time between them (measured
+    // around them, so a busy machine cannot make it exceed the bound) is the only slack.
+    const auto before = std::chrono::steady_clock::now();
     const auto utc = clock.utc_now();
     const auto local = clock.local_now();
+    const auto between = std::chrono::steady_clock::now() - before;
     const auto offset = local.time_since_epoch() - utc.time_since_epoch();
-    EXPECT_LE(offset, Ticks{14h + 1s});
-    EXPECT_GE(offset, -Ticks{14h + 1s});
+    EXPECT_LE(offset, Ticks{14h} + std::chrono::ceil<Ticks>(between));
+    EXPECT_GE(offset, -Ticks{14h});
     const auto expected = std::chrono::current_zone()->get_info(utc).offset;
-    EXPECT_LE(offset - expected, Ticks{1s});
+    EXPECT_LE(offset - expected, std::chrono::ceil<Ticks>(between) + Ticks{1ms});
     EXPECT_GE(offset - expected, Ticks::zero());
 }
 

@@ -62,10 +62,11 @@ private:
     mutable std::atomic<bool> fired_{false};
 };
 
-/// Spins (yielding) until `condition` holds; fails the test after 10 s.
+/// Waits (polling every 1 ms) until `condition` holds; fails the test after 60 s, a cap
+/// that costs nothing when the condition holds, generous for a loaded CI runner.
 void wait_until(const std::function<bool()>& condition)
 {
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    const auto deadline = std::chrono::steady_clock::now() + 60s;
     while (!condition()) {
         ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "condition never became true";
         std::this_thread::sleep_for(1ms);
@@ -245,7 +246,7 @@ TEST(RequestGate, Cancellation_while_queued_for_the_turn_lock)
             queued_error = std::current_exception();
         }
     }};
-    std::this_thread::sleep_for(20ms);  // let it queue (the outcome is the same if it has not yet)
+    wait_until([&] { return gate.queued_turns() == 1; });  // queued behind the holder
     cancel.request_stop();
     queued.join();
     ASSERT_TRUE(queued_error);

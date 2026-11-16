@@ -1,6 +1,7 @@
-// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11):
+// BusyPanel widget (01 §10, §18.2-18.3; 05 U-05..U-08, R-04; 07 §4; D-04, D-11, D-34):
 // texts, colours, enabled states, bar, spinner, timers, taskbar forwarding, Cancel/Esc
-// idempotence and the font-driven layout of §10.1. Time comes from a FixedClock.
+// idempotence, the still idle bar and the font-driven layout of §10.1. Time comes from a
+// FixedClock.
 
 #include "busy_panel.hpp"
 #include "diagnostics_test_support.hpp"
@@ -16,21 +17,28 @@
 #include <QFontMetrics>
 #include <QLabel>
 #include <QLayout>
+#include <QPainter>
 #include <QPalette>
 #include <QProgressBar>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QStyleOptionProgressBar>
 #include <QTimer>
 
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
+
+#include <windows.h>
 
 namespace {
 
@@ -355,6 +363,153 @@ TEST_F(BusyPanelTest, Failed_end_is_red_keeps_the_bar_and_clears_the_taskbar_err
     EXPECT_TRUE(is_state_call(mock_.calls[3], TBPF_NOPROGRESS));
 }
 
+// ---------------------------------------------------------------------------
+// The idle bar is still (D-34)
+// ---------------------------------------------------------------------------
+
+/// Records every fill the bar asks its style to draw (CE_ProgressBarContents) with the
+/// clip it is drawn under, then lets the real style draw it. The fill is the element the
+/// "windowsvista" style animates: drawing a marquee or a part-filled fill
+/// (minimum < progress < maximum) starts its moving glow, drawing any other fill stops it.
+/// Whether a started glow then visibly moves depends on Windows' client-area animation
+/// setting; what the bar asks for does not, so this records D-34 on any machine.
+class FillRecorder final : public QProxyStyle {
+public:
+    struct Fill {
+        int minimum = 0;
+        int maximum = 0;
+        int progress = 0;
+        QRect rect;                 ///< the contents rectangle
+        std::optional<QRect> clip;  ///< the painter's clip, when one is set
+
+        /// The state the style animates (QWindowsVistaStyle: a marquee, or
+        /// 0 < progress < maximum on a bar whose minimum is 0).
+        [[nodiscard]] bool animated() const noexcept
+        {
+            return (minimum == 0 && maximum == 0) || (progress > minimum && progress < maximum);
+        }
+    };
+
+    using QProxyStyle::QProxyStyle;
+
+    void drawControl(ControlElement element, const QStyleOption* option, QPainter* painter,
+                     const QWidget* widget) const override
+    {
+        if (element == CE_ProgressBarContents) {
+            if (const auto* bar = qstyleoption_cast<const QStyleOptionProgressBar*>(option)) {
+                fills.push_back(Fill{.minimum = bar->minimum,
+                                     .maximum = bar->maximum,
+                                     .progress = bar->progress,
+                                     .rect = bar->rect,
+                                     .clip = painter->hasClipping()
+                                                 ? std::optional<QRect>{painter->clipBoundingRect().toAlignedRect()}
+                                                 : std::nullopt});
+            }
+        }
+        QProxyStyle::drawControl(element, option, painter, widget);
+    }
+
+    mutable std::vector<Fill> fills;
+};
+
+/// Gives the bar back its default style when a test ends, also after a failed ASSERT.
+class StyleOverride {
+public:
+    StyleOverride(QWidget& widget, QStyle& style) : widget_(widget) { widget_.setStyle(&style); }
+    ~StyleOverride() { widget_.setStyle(nullptr); }
+    StyleOverride(const StyleOverride&) = delete;
+    StyleOverride& operator=(const StyleOverride&) = delete;
+
+private:
+    QWidget& widget_;
+};
+
+/// The app's style ("windowsvista") under the recorder, or the default style without it.
+[[nodiscard]] std::unique_ptr<FillRecorder> fill_recorder()
+{
+    return std::make_unique<FillRecorder>(QStyleFactory::create(QStringLiteral("windowsvista")));  // takes ownership
+}
+
+/// Paints the bar once and returns the fills it asked for.
+[[nodiscard]] std::vector<FillRecorder::Fill> paint(QProgressBar& bar, FillRecorder& recorder)
+{
+    recorder.fills.clear();
+    static_cast<void>(bar.grab());  // runs paintEvent, shown or not
+    return recorder.fills;
+}
+
+TEST_F(BusyPanelTest, An_idle_bar_never_asks_the_style_for_a_fill_it_animates)
+{
+    // D-34: while busy the bar draws its real value (the style's glow is a sign of life);
+    // while idle — after End the bar rests at 1000 of 1001, or part-filled after a failure —
+    // it draws a full fill, for which the style stops its glow, clipped to the real value.
+    QProgressBar* bar = panel_->progress_bar();
+    const std::unique_ptr<FillRecorder> recorder = fill_recorder();
+    const StyleOverride style{*bar, *recorder};
+    panel_->resize(800, panel_->height());
+    panel_->show();
+    panel_->layout()->activate();
+
+    struct Case {
+        const char* name;
+        bool success;
+        int expected_value;
+    };
+    for (const Case& c : {Case{"failed end", false, 150}, Case{"successful end", true, 1000}}) {
+        SCOPED_TRACE(c.name);
+        panel_->begin("Outbound: starting…");
+        panel_->report(progress("Fetching fares", "x", 4, 8));  // shown 0.15 → 150
+        ASSERT_EQ(bar->value(), 150);
+        const std::vector<FillRecorder::Fill> busy = paint(*bar, *recorder);
+        ASSERT_FALSE(busy.empty());
+        for (const FillRecorder::Fill& fill : busy) {
+            EXPECT_EQ(fill.progress, 150) << "busy: the real value is drawn";
+            EXPECT_TRUE(fill.animated()) << "busy: the style may run its glow";
+            EXPECT_FALSE(fill.clip.has_value());
+        }
+
+        panel_->end(c.success ? "Done." : "Cancelled.", c.success);
+        ASSERT_EQ(bar->value(), c.expected_value);
+        ASSERT_GT(bar->value(), bar->minimum());
+        ASSERT_LT(bar->value(), bar->maximum()) << "a part-filled bar: the case the style would animate";
+        const std::vector<FillRecorder::Fill> idle = paint(*bar, *recorder);
+        ASSERT_FALSE(idle.empty());
+        for (const FillRecorder::Fill& fill : idle) {
+            EXPECT_FALSE(fill.animated()) << "idle: drawn as " << fill.progress << " of " << fill.minimum << ".."
+                                          << fill.maximum;
+            EXPECT_EQ(fill.progress, fill.maximum) << "idle: a full fill";
+            ASSERT_TRUE(fill.clip.has_value()) << "idle: clipped to the real value";
+            const double done = static_cast<double>(c.expected_value - bar->minimum()) / (bar->maximum() - bar->minimum());
+            EXPECT_EQ(fill.clip->left(), fill.rect.left()) << "left to right";
+            EXPECT_EQ(fill.clip->top(), fill.rect.top());
+            EXPECT_EQ(fill.clip->height(), fill.rect.height());
+            EXPECT_NEAR(fill.clip->width(), fill.rect.width() * done, 1.0) << "the fill width is unchanged";
+        }
+    }
+
+    // Idle and empty (an End before any report): nothing to fill, nothing animated.
+    panel_->begin("Loading Wizz Air route map…");
+    panel_->end("Failed.", false);
+    ASSERT_EQ(bar->value(), bar->minimum());
+    for (const FillRecorder::Fill& fill : paint(*bar, *recorder)) {
+        EXPECT_FALSE(fill.animated());
+        EXPECT_EQ(fill.progress, fill.minimum);
+    }
+
+    // Right to left the done part starts at the right edge.
+    panel_->begin("Return: starting…");
+    panel_->report(progress("Fetching fares", "x", 4, 8));
+    panel_->end("Cancelled.", false);
+    bar->setLayoutDirection(Qt::RightToLeft);
+    for (const FillRecorder::Fill& fill : paint(*bar, *recorder)) {
+        EXPECT_FALSE(fill.animated());
+        ASSERT_TRUE(fill.clip.has_value());
+        EXPECT_EQ(fill.clip->right(), fill.rect.right());
+        EXPECT_NEAR(fill.clip->width(), fill.rect.width() * 150.0 / 1001.0, 1.0);
+    }
+    bar->setLayoutDirection(Qt::LeftToRight);
+}
+
 /// Counts the native style's animation frames sent to a widget.
 class StyleAnimationCounter final : public QObject {
 public:
@@ -371,41 +526,67 @@ protected:
     }
 };
 
+/// Windows' "Animate controls and elements inside windows" (SPI_GETCLIENTAREAANIMATION),
+/// read only. The "windowsvista" style animates progress bars only when it is on; Windows
+/// Server images, such as the CI runners', turn it off.
+[[nodiscard]] bool client_area_animation_on()
+{
+    BOOL on = FALSE;
+    return SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0) != FALSE && on != FALSE;
+}
+
 TEST_F(BusyPanelTest, An_idle_bar_is_still_after_a_search_ends)
 {
-    // The "windowsvista" style the app uses animates a moving glow over any bar
-    // with 0 < value < maximum. After End the bar rests at 1000 of 1001 (success)
-    // or part-filled (failure); it must not keep moving, or the app looks busy.
-    std::unique_ptr<QStyle> vista{QStyleFactory::create(QStringLiteral("windowsvista"))};
-    if (!vista) {
+    // D-34 as the user sees it, where the style really animates: its glow runs while busy,
+    // and once the panel is idle no animation frame reaches the bar. The test above checks
+    // the cause on any machine; this one needs Windows to animate client areas.
+    if (!client_area_animation_on()) {
+        GTEST_SKIP() << "Windows' client-area animations are off (SPI_GETCLIENTAREAANIMATION, as on Windows "
+                        "Server): the windowsvista style does not animate a progress bar even while busy. "
+                        "An_idle_bar_never_asks_the_style_for_a_fill_it_animates covers D-34 without them.";
+    }
+    if (!QStyleFactory::keys().contains(QStringLiteral("windowsvista"), Qt::CaseInsensitive)) {
         GTEST_SKIP() << "windowsvista style not available";
     }
     QProgressBar* bar = panel_->progress_bar();
-    bar->setStyle(vista.get());
+    const std::unique_ptr<FillRecorder> recorder = fill_recorder();
+    const StyleOverride style{*bar, *recorder};
     panel_->resize(800, 60);
     panel_->show();
     StyleAnimationCounter counter{bar};
 
-    // Sanity: while busy and part-filled, the style does animate (the detector works).
-    panel_->begin("Outbound: starting…");
-    panel_->report(progress("Fetching fares", "x", 4, 8));
-    bar->repaint();
-    pump_for(300ms);
-    EXPECT_GT(counter.frames, 0) << "the style's glow should run while busy";
+    // The frame interval of a running glow, in event-loop terms: a reference timer at
+    // the animation clock's 16 ms. A window of kWindowTicks of its ticks gives a running
+    // animation as many chances to deliver a frame, however slow the machine is.
+    constexpr int kWindowTicks = 25;
+    QTimer reference;
+    reference.setTimerType(Qt::PreciseTimer);
+    reference.setInterval(16ms);
+    int ticks = 0;
+    QObject::connect(&reference, &QTimer::timeout, [&ticks] { ++ticks; });
+    reference.start();
 
     for (const bool success : {true, false}) {
-        if (!success) {
-            panel_->begin("Return: starting…");
-            panel_->report(progress("Fetching fares", "x", 4, 8));
-            bar->repaint();
-            pump_for(100ms);
-        }
-        panel_->end(success ? "Done." : "Cancelled.", success);
-        bar->repaint();
-        pump_for(100ms);  // let a stopping animation deliver its last frame
+        SCOPED_TRACE(success ? "successful end" : "failed end");
+        // While busy and part-filled the glow runs (the detector works here).
+        panel_->begin("Outbound: starting…");
+        panel_->report(progress("Fetching fares", "x", 4, 8));
         counter.frames = 0;
-        pump_for(400ms);
-        EXPECT_EQ(counter.frames, 0) << (success ? "after a successful end" : "after a failed end");
+        bar->update();
+        if (!pump_until([&counter] { return counter.frames > 0; }, 10s)) {
+            GTEST_SKIP() << "the windowsvista style sent no animation frame in 10 s although the bar is busy and "
+                            "part-filled (no visual styles?): nothing to observe here";
+        }
+
+        // Once the idle bar has been painted — that paint stops the glow — no frame may come.
+        panel_->end(success ? "Done." : "Cancelled.", success);
+        const std::size_t painted = recorder->fills.size();
+        bar->update();
+        ASSERT_TRUE(pump_until([&] { return recorder->fills.size() > painted; })) << "the idle bar was never painted";
+        counter.frames = 0;
+        const int window_end = ticks + kWindowTicks;
+        ASSERT_TRUE(pump_until([&] { return ticks >= window_end; }));
+        EXPECT_EQ(counter.frames, 0) << "the style still animates the idle bar";
         if (success) {
             EXPECT_EQ(bar->value(), 1000);  // full, as End sets it
         } else {
@@ -413,7 +594,6 @@ TEST_F(BusyPanelTest, An_idle_bar_is_still_after_a_search_ends)
             EXPECT_LT(bar->value(), 1000);
         }
     }
-    bar->setStyle(nullptr);
 }
 
 TEST_F(BusyPanelTest, The_error_reset_keeps_a_new_busy_period_untouched)
