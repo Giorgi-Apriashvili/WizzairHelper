@@ -70,8 +70,8 @@ without a window.
 | `FractionalSpinBox` (QAbstractSpinBox) | 01 §4.4 notes | Displays whole numbers (half away from zero), accepts typed fractions with the locale separator, keeps the fractional value; `int_value()` truncates toward zero. |
 | `FlightGrid` (QWidget: top bar + QTableView) | 01 §8 | `FlightTableModel` (`KeyedTableModel` over `ui::FlightGridModel`, which owns the index vector, sorts, view lists, pick and RestoreSelection): a rebuild is one model reset; a streamed "All fares" batch lands at scattered sorted positions, so it is one `layoutAboutToBeChanged`/`layoutChanged` with persistent indexes following each row's `Idx` (a batch into an empty grid is one `beginInsertRows`); a header sort is one layout change. View combo (`activated` = user choice), summary label, row colouring, context menu, copy with a timer-driven clipboard retry, open URL, Enter/double-click open, self-test accessors. Side effects go through injectable `GridActions` (browser, clipboard, MessageBox). |
 | `RoundTripGrid` (QWidget) | 01 §9 | Two checkboxes, summary, `RoundTripTableModel` (over `ui::RoundTripGridModel`), sort, open combined/both URLs, context menu. |
-| `GridTableView` (QTableView), `GridRowDelegate` | 01 §8.1, §8.3, §9.1, D-53 | Shared table of both grids: DataGridView flags, the 9 pt data font, fixed rows (font height + 12), no cell grid (a separator line under each row), fill column with a minimum, wrapping semibold headers with auto height, intent signals (cell press before the current cell moves, double-click, Enter consumed incl. ShortcutOverride, navigation key-up, context menu from mouse/header/Menu key). The delegate paints the selection as the theme's tint (or the model's `SelectionBackgroundRole`, the cheapest rows' deeper green) in every style, a 3 px accent bar on the selected row while the grid has the focus (a ring round an empty grid), no hover, tooltips for truncated cells; its brushes are kept and renewed when the look changes. |
-| `BusyPanel` (QWidget) | 01 §10, D-34, D-53 | Renders `ui::BusyPanelModel` on a 40 ms `QTimer`: `SpinnerWidget`, `PanelProgressBar` (0..1001, marquee = range 0..0; it paints itself and is still at rest, D-34), elapsed (Cascadia Mono 10 pt semibold), status (`ElidedLabel`, tooltip when cut), wait note (the theme's warning colour, semibold), Cancel; metrics from font metrics (§10.1); drives `TaskbarProgress`. A flat status bar in the theme's surface colour with a top border, the status in the theme's success and failure colours; every colour is taken again when the look changes. Esc must call `request_cancel()` (D-11). |
+| `GridTableView` (QTableView), `GridRowDelegate` | 01 §8.1, §8.3, §9.1, D-53 | Shared table of both grids: DataGridView flags, the 9 pt data font, fixed rows (font height + 12), no cell grid (a separator line under each row), fill column with a minimum, wrapping semibold headers with auto height, intent signals (cell press before the current cell moves, double-click, Enter consumed incl. ShortcutOverride, navigation key-up, context menu from mouse/header/Menu key). The delegate paints the selection as the theme's tint (or the model's `SelectionBackgroundRole`, the cheapest rows' deeper green) in every style, a 3 px bar at the left of the selected row (the accent while the grid has the focus, the muted text colour otherwise) and the accent bar on a focused grid's current row even when it is not selected (a ring round a grid without a current row), no hover, tooltips for truncated cells; its brushes are kept and renewed when the look changes. The summaries are `ElidedLabel`s (cut with "…", the full text as tooltip). |
+| `BusyPanel` (QWidget) | 01 §10, D-34, D-53 | Renders `ui::BusyPanelModel` on a 40 ms `QTimer`: `SpinnerWidget`, `PanelProgressBar` (0..1001, marquee = range 0..0; it paints itself and is still at rest, D-34), elapsed (Cascadia Mono 10 pt semibold), status (`ElidedLabel`: 1 pt smaller when it does not fit, cut with "…" and a tooltip only when it does not fit then either), wait note (the theme's warning colour, the semibold face), Cancel; metrics from font metrics (§10.1); drives `TaskbarProgress`. A flat status bar in the theme's surface colour with a top border, the status in the theme's success and failure colours; every colour is taken again when the look changes. Esc must call `request_cancel()` (D-11). |
 | `SpinnerWidget` | 01 §10.8 | QPainter arc/track/dot exactly as specified. |
 | `TaskbarProgress` | 01 §10.9 | `ITaskbarList3` RAII wrapper with the state/value de-duplication rules. |
 | `PlaceChooserDialog` (QDialog) | 01 §11.5 | Modal chooser, exact texts, `Use this place` default, Cancel rightmost, double-click = OK. |
@@ -88,7 +88,8 @@ SystemColors) is replaced on purpose; behaviour is not.
 **Layout.** The input panel (16 px side margins, 6 px top) holds four `SectionCard`s in a 2 x 2
 grid with an 8 px gap and column stretch 3:2: Where | Travellers & prices, Outbound | Return.
 A card: rounded 8 px, 1 px border, padding (14, 6, 14, 8), a caption row (10 pt accent icon,
-8 pt upper-case semibold caption, 9 pt muted hint), 5 px to the body, 6 px between body rows.
+8 pt upper-case semibold caption, 9 pt muted hint; as tall without a hint as with one, so the rows
+of cards side by side line up), 5 px to the body, 6 px between body rows.
 Fixed widths: radius 76, dates 142, adults 64, fare 206, currency 88, nights 64; the place boxes
 stretch (minimum 180). The resolved line follows 4 px below in 9 pt muted text. The results sit
 4 px below in one rounded card under underline tabs (16, 4, 16, 8 around it); the grid's top bar
@@ -103,9 +104,12 @@ hints: 9 pt; log: Cascadia Mono 9.5 pt; elapsed time: Cascadia Mono 10 pt semibo
 Fluent Icons, painted from the glyph outline (`QRawFont`, cached per glyph), because Qt's shaped
 text renders nothing for these private-use code points. Windows 10: Segoe UI, Segoe UI Semibold,
 Consolas (Cascadia Mono only with Windows Terminal) and Segoe MDL2 Assets (same code points).
+Semibold is always the semibold family (`style::semibold_face()` for text that takes its size from
+elsewhere: the Total cells, the wait note); a weight of 600 on Segoe UI Variable Text gives its Bold.
 
 **Tokens.** All text tokens are at least 4.5:1 on window, surface, surface_alt, input, selection,
-hover and the update tint; accent lines and the input stroke at least 3:1 (`Look.*` tests).
+hover and the update tint; accent lines, the input stroke, selected text against the input, the
+scroll thumbs, the grids' row bars and the busy bar at least 3:1 (`Look.*` tests).
 
 | Token | Light | Dark |
 |---|---|---|
@@ -115,26 +119,32 @@ hover and the update tint; accent lines and the input stroke at least 3:1 (`Look
 | input / input disabled | `#FFFFFF` / `#F4F3F6` | `#27262E` / `#201F25` |
 | border / input border / hover / bottom stroke | `#E1DFE6` / `#C6C2CD` / `#9A95A3` / `#8A8594` | `#2F2D36` / `#474550` / `#6C6976` / `#85818F` |
 | text / secondary / muted / disabled | `#1C1B21` / `#45424D` / `#67636F` / `#A39FAA` | `#EEECF2` / `#C9C6D1` / `#A39FAC` / `#6A6772` |
-| accent (primary buttons, busy bar) / hover / pressed | `#C5006E` / `#B10063` / `#960054` | `#C5006E` / `#D41A80` / `#A8005E` |
-| accent line (focus, selected tab, pills, icons) / accent text (weekends) | `#C5006E` / `#C5006E` | `#F05AA8` / `#F772B8` |
-| selection (every selection, with the text colour) / hover | `#FBE2EF` / `#F3F1F6` | `#4B1834` / `#33313B` |
-| cheapest rows / selected | `#E7F5EB` / `#C6E9D0` | `#173022` / `#225236` |
+| accent (primary buttons, busy bar in light) / hover / pressed | `#C5006E` / `#B10063` / `#960054` | `#C5006E` / `#D41A80` / `#A8005E` |
+| accent line (focus, selected tab, pills, icons, grid bar; busy bar and spinner in dark) / accent text (weekends) | `#C5006E` / `#C5006E` | `#F05AA8` / `#F772B8` |
+| selection (items: grid rows, lists, menus, calendar days; with the text colour) / hover | `#FBE2EF` / `#F3F1F6` | `#4B1834` / `#33313B` |
+| selected text in inputs and the log (with white text) | `#C5006E` | `#D41A80` |
+| cheapest rows / selected | `#E7F5EB` / `#C6E9D0` | `#173022` / `#1F4C32` |
 | success / failure / warning | `#1A7F37` / `#C42B1C` / `#9A5B00` | `#5CCB85` / `#FF7A6E` / `#F5B04A` |
-| row separator, track, scroll thumb / hover | `#EEEDF1`, `#E6E4EA`, `#C9C5CF` / `#9E99A7` | `#2A2931`, `#34323C`, `#4D4A56` / `#6E6B79` |
+| row separator, track, scroll thumb / hover | `#EEEDF1`, `#E6E4EA`, `#8A8594` / `#67636F` | `#2A2931`, `#34323C`, `#85818F` / `#A39FAC` |
 | update tint | `#FBEAF3` | `#361629` |
 
-The palette (`make_palette`) maps them to Qt's roles; Highlight is the selection tint and
-HighlightedText the text colour, so list, menu, calendar and text selections match the grids'.
+The palette (`make_palette`) maps them to Qt's roles; Highlight is the selected-text colour with
+white HighlightedText, so a selection in an input (the place box's inline completion, a select-all)
+stands out. `ModernStyle` paints list items and calendar days with the selection tint and the text
+colour instead (`CE_ItemViewItem`), like the grids' delegate and the menus.
 
 **Surfaces.** Combo lists and the place completer draw their items through the style (hover fill,
 tint, 3 px accent pill); popup frames are 1 px input borders on the surface. Menus: surface,
 1 px border, items of the font height + 12 with a rounded tint and pill on the active one, separators in the border
 colour. The calendar: tint navigation bar with chevron arrows, no week numbers, weekends in the
-accent text colour, neighbouring-month days muted, a ring on the current day. Tooltips: the
+accent text colour, neighbouring-month days muted, days outside the allowed dates in the disabled
+text colour, a ring on the current day, the month name without Fusion's menu arrow over it. Tooltips: the
 surface (surface_alt in dark) with a 1 px border and the theme's text (the tooltip palette is set
 with the application palette). Message boxes and the place chooser use the window colour, the
 default button is primary. Disabled inputs: input_disabled fill, border-coloured frame, disabled
-text; disabled search buttons fade. Hover: a darker frame on inputs, a lighter / darker fill on
+text; disabled search buttons and default buttons: the input_disabled fill, an input-border outline
+and the disabled text, like every other disabled button. Mnemonic underlines show while Alt is held
+or when Windows' "Underline access keys" is on. Hover: a darker frame on inputs, a lighter / darker fill on
 buttons, header sections and check boxes. Focus: see D-53.
 
 **Changes of the look** (D-56). `apply_application_look()` installs the look once; Windows'
@@ -149,7 +159,7 @@ palette, and back.
 switches to the plain native style (windowsvista, else Windows) and the system palette, and takes
 every token from that palette: Window, WindowText, Base, Highlight, HighlightedText, Button and
 GrayText. Nothing is tinted or mixed: muted text is the text colour, the status colours are the
-text colour (the status texts say what happened), cheapest rows are not tinted, the calendar has
+text colour (the status texts say what happened), cheapest rows are semibold instead of tinted, the calendar has
 no weekend colour, a search button is Highlight with HighlightedText (a disabled one a GrayText
 outline), the spinner and the bar use opaque system colours. The app font stays. High Contrast
 wins over `WIZZ_COLOR_SCHEME`.
@@ -161,11 +171,13 @@ window by changing them and calling `style::refresh_appearance()`.
 
 **Tests** (D-57). The GUI tests run under this look (light, High Contrast pinned off; the test main
 installs it like `main()`), on the minimal platform with its Windows font database
-(`minimal:enable_fonts`), so their metrics are Windows' own. `Look.*` covers the choice of the
+(`minimal:enable_fonts`), so their metrics are Windows' own (but for two fonts, D-57). `Look.*` covers the choice of the
 look, a live switch of a running window (palettes, cached brushes, labels, calendars, the busy bar,
-the update bar), the High Contrast fallback, the Windows 10 families and the WCAG contrast of
-every token pair; `ModernStyle.*` the control, header, tab, scroll bar and item metrics the layout
-relies on; `InputPanel.*` the cards, the Tab order of D-54 and the minimum window;
+the update bar), the High Contrast fallback, the Windows 10 families, the WCAG contrast of
+every token pair and what the colours stand for; `ModernStyle.*` the control, header, tab, scroll bar and item metrics the layout
+relies on; `InputPanel.*` the cards (rows of side-by-side cards aligned to the pixel), the Tab order and
+accessible names of D-54 and the minimum window; `FlightGridWidget.*` grabs the row separators,
+the row bars and the ring of a focused grid;
 `MainWindowLayout.*` the whole window at the client area of 980 x 600 (no clipping, 5 round trips
 in view) and of 1320 x 820 (14 round trips); `BusyPanelTest.An_idle_bar_is_completely_still_D_34`
 the still bar. End to end, `named_destination`, `cancel_retrying` and `heavy_cached` also run in
