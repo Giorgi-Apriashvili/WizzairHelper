@@ -6,7 +6,10 @@
 #include "wizz/ui/strings.hpp"
 
 #include <QFontMetrics>
+#include <QPainter>
+#include <QRect>
 
+#include <algorithm>
 #include <utility>
 
 namespace wizz::app {
@@ -23,17 +26,38 @@ std::vector<QFont> FontWarmup::default_fonts()
 
 QString FontWarmup::default_sample()
 {
-    // The wait notes (01 §10.5) plus the punctuation of the status lines and grids.
+    // The wait notes (01 §10.5), the punctuation of the status lines and grids, and the
+    // letters and digits every status line and grid row is made of, so their outlines
+    // are read too.
     return to_qstring(ui::strings::retry_countdown("0.0")) + QLatin1Char(' ') +
            to_qstring(ui::strings::waiting_for_server("0")) +
-           QStringLiteral(" → … — – · “” ≤");
+           QStringLiteral(" → … — – · “” ≤ ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 (),.:;%");
 }
 
-FontWarmup::FontWarmup(std::vector<QFont> fonts, QString sample)
-    : thread_([fonts = std::move(fonts), sample = std::move(sample)] {
+QImage FontWarmup::warm(const QFont& font, const QString& sample)
+{
+    // Laying the text out resolves every glyph, the fallback fonts included; drawing it
+    // reads their outlines and colour layers.
+    const QFontMetrics metrics{font};
+    const QRect bounds = metrics.boundingRect(sample);
+    QImage image{std::max(1, bounds.width() + 8), std::max(1, metrics.height() + 8),
+                 QImage::Format_ARGB32_Premultiplied};
+    image.fill(Qt::transparent);
+    QPainter painter{&image};
+    painter.setFont(font);
+    painter.setPen(Qt::black);
+    painter.drawText(4 - bounds.x(), 4 + metrics.ascent(), sample);
+    return image;
+}
+
+FontWarmup::FontWarmup(std::vector<QFont> fonts, QString sample, Step step)
+    : thread_([fonts = std::move(fonts), sample = std::move(sample), step = std::move(step)] {
           for (const QFont& font : fonts) {
-              // Shaping the text resolves every glyph, the fallback fonts included.
-              (void)QFontMetrics{font}.horizontalAdvance(sample);
+              if (step) {
+                  step(font, sample);
+              } else {
+                  (void)warm(font, sample);
+              }
           }
       })
 {

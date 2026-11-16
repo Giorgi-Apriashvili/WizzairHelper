@@ -13,13 +13,24 @@
 // builds the services and the window; main() waits for it before the window is
 // shown, so no busy period ever meets the cold path.
 //
-// Thread-safety: QFont and QFontMetrics are reentrant and QFontDatabase is
-// thread-safe; the worker only measures text with its own QFont copies. The
-// QApplication must outlive the warm-up (wait() or the destructor joins).
+// The worker also DRAWS each font (warm()), because measuring reads only the
+// metrics: the first drawing still reads the glyph outlines and the colour layers
+// of the fallback font. Measured in fresh processes (DECISIONS D-33): after a
+// measure-only warm-up the UI thread's first drawing of the retry note took about
+// 840 page faults, after a drawing warm-up 4 to 34. With a warm file cache those
+// faults cost 3 ms; on a cold one (GitHub's runner) they were disk reads and froze
+// the first retry note for 149 ms.
+//
+// Thread-safety: QFont and QFontMetrics are reentrant, QFontDatabase is
+// thread-safe, and painting on a QImage is allowed outside the GUI thread; the
+// worker uses its own QFont copies and images. The QApplication must outlive the
+// warm-up (wait() or the destructor joins).
 
 #include <QFont>
+#include <QImage>
 #include <QString>
 
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -33,8 +44,15 @@ public:
     /// Every character the progress UI can show that Segoe UI may lack, in one sample.
     [[nodiscard]] static QString default_sample();
 
-    /// Starts measuring `sample` in each of `fonts` on a worker thread.
-    explicit FontWarmup(std::vector<QFont> fonts = default_fonts(), QString sample = default_sample());
+    /// What the worker does with each font: lays `sample` out and draws it into an image,
+    /// which it returns (for tests; the worker drops it).
+    [[nodiscard]] static QImage warm(const QFont& font, const QString& sample);
+    /// The per-font step the worker runs; empty means warm().
+    using Step = std::function<void(const QFont&, const QString&)>;
+
+    /// Starts warming `sample` in each of `fonts`, in order, on a worker thread.
+    explicit FontWarmup(std::vector<QFont> fonts = default_fonts(), QString sample = default_sample(),
+                        Step step = {});
     /// Waits for the worker.
     ~FontWarmup();
 
