@@ -12,15 +12,20 @@
 #include "wizz/core/locale.hpp"
 
 #include <QApplication>
+#include <QCalendarWidget>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontMetrics>
 #include <QHeaderView>
+#include <QImage>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
+#include <QPainter>
 #include <QPushButton>
 #include <QStandardItemModel>
+#include <QTableView>
 #include <QStyleOptionHeader>
 #include <QStyleOptionMenuItem>
 #include <QStyleOptionSlider>
@@ -44,6 +49,41 @@ using wizz::app::ModernStyle;
 [[nodiscard]] int ui_control_height()
 {
     return ModernStyle::control_height(QFontMetrics(style::form_font()));
+}
+
+/// A large "W" drawn as an item of `view` through the style (CE_ItemViewItem) in `state`, as
+/// a delegate draws it (the option's widget is the view); `foreground` is the text colour a
+/// model or text format gives the item.
+[[nodiscard]] QImage draw_item(const QWidget* view, QStyle::State state, const QColor& foreground)
+{
+    QStyleOptionViewItem item;
+    item.initFrom(view);
+    item.state = state;
+    item.rect = QRect(0, 0, 160, 80);
+    item.text = QStringLiteral("W");
+    item.features |= QStyleOptionViewItem::HasDisplay;
+    item.font = style::form_font();
+    item.font.setPixelSize(48);  // glyph cores in the exact text colour
+    item.fontMetrics = QFontMetrics(item.font);
+    item.displayAlignment = Qt::AlignCenter;
+    item.showDecorationSelected = true;
+    item.palette.setColor(QPalette::Text, foreground);
+    QImage image(item.rect.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(style::theme().surface);
+    QPainter painter(&image);
+    QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &item, &painter, view);
+    return image;
+}
+
+[[nodiscard]] int pixels_of(const QImage& image, const QColor& colour)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            count += image.pixelColor(x, y).rgb() == colour.rgb() ? 1 : 0;
+        }
+    }
+    return count;
 }
 
 TEST(ModernStyle, Is_the_application_style)
@@ -171,11 +211,93 @@ TEST(ModernStyle, Nothing_animates_on_its_own_and_no_mnemonic_underlines)
     // transitions); Windows' default of hidden mnemonic underlines; combo lists drop down
     // under the field instead of a menu over it.
     QStyle& s = app_style();
+    const ModernStyle::KeyboardCuesProbe previous = ModernStyle::set_keyboard_cues_probe([] { return false; });
     EXPECT_EQ(s.styleHint(QStyle::SH_Widget_Animation_Duration), 0);
     EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut), 0);
+    ModernStyle::set_keyboard_cues_probe(previous);
     EXPECT_EQ(s.styleHint(QStyle::SH_ComboBox_Popup), 0);
     EXPECT_EQ(s.styleHint(QStyle::SH_ToolTipLabel_Opacity), 255);
     EXPECT_EQ(static_cast<QRgb>(s.styleHint(QStyle::SH_Table_GridLineColor)), style::theme().row_separator.rgb());
+}
+
+TEST(ModernStyle, Mnemonic_underlines_show_with_Windows_keyboard_cues_or_while_Alt_is_held)
+{
+    // As on Windows (and windowsvista): "Underline access keys" shows them always; else they
+    // show in a window while its Alt key is held, so &Yes / &No can be found.
+    QStyle& s = app_style();
+    const ModernStyle::KeyboardCuesProbe previous = ModernStyle::set_keyboard_cues_probe([] { return false; });
+    QWidget window;
+    auto* yes = new QPushButton(QStringLiteral("&Yes"), &window);
+    QWidget other;
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut, nullptr, yes), 0);
+
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+    QApplication::sendEvent(yes, &press);
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut, nullptr, yes), 1) << "Alt held in its window";
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut, nullptr, &other), 0) << "not in another window";
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+    QApplication::sendEvent(yes, &release);
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut, nullptr, yes), 0) << "hidden again";
+
+    ModernStyle::set_keyboard_cues_probe([] { return true; });
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut, nullptr, yes), 1) << "the Windows setting is on";
+    EXPECT_EQ(s.styleHint(QStyle::SH_UnderlineShortcut), 1);
+    ModernStyle::set_keyboard_cues_probe(previous);
+}
+
+TEST(ModernStyle, Selected_text_is_the_accent_and_selected_items_the_tint)
+{
+    // Selected text in an input (the place box's inline completion, a select-all) is the
+    // accent with white text, at least 3:1 on the input; a selected list item or calendar day
+    // is the soft tint with the normal text colour, like a grid row (D-53).
+    const style::Theme& theme = style::theme();
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(palette.color(QPalette::Highlight), theme.text_selection);
+    EXPECT_EQ(palette.color(QPalette::HighlightedText), theme.on_accent);
+
+    QListView list;
+    const QImage item = draw_item(&list, QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Selected,
+                                  theme.text);
+    EXPECT_EQ(item.pixelColor(item.width() - 12, item.height() / 2), theme.selection) << "the tint, not the accent";
+    EXPECT_GT(pixels_of(item, theme.selection_text), 20) << "the normal text colour, not white";
+
+    QCalendarWidget calendar;
+    const auto* days = calendar.findChild<QTableView*>();
+    ASSERT_NE(days, nullptr);
+    const QImage day = draw_item(days, QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Selected,
+                                 theme.accent_text);
+    EXPECT_EQ(day.pixelColor(day.width() - 12, day.height() / 2), theme.selection);
+}
+
+TEST(ModernStyle, Calendar_days_that_cannot_be_picked_are_in_the_disabled_text_colour)
+{
+    // A day before the minimum date keeps its weekend or month format otherwise, and would
+    // look as pickable as its neighbours.
+    const style::Theme& theme = style::theme();
+    QCalendarWidget calendar;
+    const auto* days = calendar.findChild<QTableView*>();
+    ASSERT_NE(days, nullptr);
+    const QImage out_of_range = draw_item(days, QStyle::State_Active, theme.accent_text);
+    EXPECT_GT(pixels_of(out_of_range, theme.text_disabled), 20);
+    EXPECT_EQ(pixels_of(out_of_range, theme.accent_text), 0);
+    const QImage pickable = draw_item(days, QStyle::State_Enabled | QStyle::State_Active, theme.accent_text);
+    EXPECT_GT(pixels_of(pickable, theme.accent_text), 20) << "a pickable weekend keeps its colour";
+}
+
+TEST(ModernStyle, A_disabled_default_button_looks_like_any_disabled_button)
+{
+    // Message boxes make their default button primary (the accent); disabled it takes the
+    // disabled fill and text instead of a faded accent that reads as pressed.
+    const style::Theme& theme = style::theme();
+    QPushButton primary(QStringLiteral("OK"));
+    primary.setDefault(true);
+    primary.resize(primary.sizeHint());
+    QImage image = primary.grab().toImage();
+    EXPECT_EQ(image.pixelColor(4, image.height() / 2), theme.accent);
+    primary.setEnabled(false);
+    image = primary.grab().toImage();
+    EXPECT_EQ(image.pixelColor(4, image.height() / 2), theme.input_disabled);
+    EXPECT_EQ(pixels_of(image, theme.accent), 0);
 }
 
 TEST(ModernStyle, Grid_rows_are_the_data_font_height_plus_12)

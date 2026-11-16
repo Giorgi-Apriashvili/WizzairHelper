@@ -176,8 +176,9 @@ TEST_F(BusyPanelTest, Fonts_and_colours_follow_the_theme)
     EXPECT_EQ(elapsed.weight(), QFont::DemiBold);
 
     const QLabel* wait = panel_->wait_label();
-    EXPECT_EQ(wait->font().weight(), QFont::DemiBold);
-    EXPECT_EQ(wait->font().families(), panel_->font().families());
+    // The semibold family (a weight of 600 on the panel's family would give its Bold) at the
+    // panel's size.
+    EXPECT_EQ(wait->font().families(), style::semibold_face().families());
     EXPECT_DOUBLE_EQ(wait->font().pointSizeF(), panel_->font().pointSizeF());
     EXPECT_EQ(wait->palette().color(wait->foregroundRole()), theme.warning);
 
@@ -591,8 +592,9 @@ TEST(PanelProgressBarTest, A_marquee_moves_only_while_live)
 
 TEST_F(BusyPanelTest, The_bar_shows_its_value_in_the_accent_then_the_outcome_colour)
 {
-    // The bar paints a 6 px rounded track and a fill of the value's width: the accent while
-    // busy, the outcome colour softened halfway towards the track at rest (D-34, D-53).
+    // The bar paints a 6 px rounded track and a fill of the value's width: the accent line while
+    // busy (the brand magenta in light, the lighter accent line in dark, 3:1 on the track in
+    // both), the outcome colour softened halfway towards the track at rest (D-34, D-53).
     QProgressBar* bar = panel_->progress_bar();
     panel_->resize(800, panel_->height());
     panel_->show();
@@ -607,7 +609,8 @@ TEST_F(BusyPanelTest, The_bar_shows_its_value_in_the_accent_then_the_outcome_col
     panel_->begin("Outbound: starting…");
     panel_->report(progress("Fetching fares", "x", 4, 8));  // 150 of 1001
     QImage image = bar->grab().toImage();
-    EXPECT_NEAR(fill_width(image, theme.accent), expected_width(150), 3) << "busy: the accent";
+    EXPECT_NEAR(fill_width(image, theme.accent_line), expected_width(150), 3) << "busy: the accent";
+    EXPECT_EQ(style::light_theme().accent_line, style::light_theme().accent) << "the brand magenta in light";
     EXPECT_EQ(bar_pixel(image, bar->width() - 4), theme.track);
     EXPECT_NE(image.pixelColor(bar->width() / 2, 1), theme.track) << "a 6 px track, not the whole height";
 
@@ -851,7 +854,7 @@ TEST_F(BusyPanelTest, Metrics_grow_with_the_form_font)
     EXPECT_EQ(panel_->height(), after.height);
     EXPECT_EQ(after.bar_row, before.bar_row);  // the elapsed font is fixed
     EXPECT_DOUBLE_EQ(panel_->wait_label()->font().pointSizeF(), 24.0);
-    EXPECT_EQ(panel_->wait_label()->font().weight(), QFont::DemiBold);
+    EXPECT_EQ(panel_->wait_label()->font().families(), style::semibold_face().families());
     EXPECT_DOUBLE_EQ(panel_->elapsed_label()->font().pointSizeF(), 10.0);
 }
 
@@ -953,6 +956,42 @@ TEST_F(BusyPanelLayoutTest, A_long_status_line_is_elided_but_kept_whole)
     panel_->report(progress("Fetching fares", "short", 0, 0));
     EXPECT_FALSE(label->is_elided());
     EXPECT_TRUE(label->tooltip_text().isEmpty());
+}
+
+TEST_F(BusyPanelLayoutTest, A_status_slightly_too_long_is_drawn_1_pt_smaller_before_it_is_cut)
+{
+    // The request-cap refusal ends with the advice how to fix the search: at the default
+    // window it is shown whole, 1 pt smaller (D-53), instead of losing the advice to "…".
+    const auto* label = panel_->status_label();
+    ASSERT_TRUE(label->compact_font().has_value());
+    EXPECT_EQ(label->compact_font()->families(), panel_->font().families());
+    EXPECT_DOUBLE_EQ(label->compact_font()->pointSizeF(), panel_->font().pointSizeF() - 1.0);
+    const QString text = QString::fromStdString(wizz::ui::strings::request_cap(6794, 148));
+    const int full = QFontMetrics(panel_->font()).horizontalAdvance(text);
+    const int compact = QFontMetrics(*label->compact_font()).horizontalAdvance(text);
+    ASSERT_LT(compact, full);
+
+    panel_->end(wizz::ui::strings::request_cap(6794, 148), false);
+    const int status_x = label->x();
+    const auto width_for_label = [&](int label_width) { return panel_->width() - label->width() + label_width; };
+    panel_->resize(width_for_label((full + compact) / 2), panel_->height());
+    panel_->layout()->activate();
+    ASSERT_LT(label->contentsRect().width(), full);
+    ASSERT_GE(label->contentsRect().width(), compact);
+    EXPECT_FALSE(label->is_elided()) << "fits 1 pt smaller";
+    EXPECT_EQ(label->painted_font(), *label->compact_font());
+    EXPECT_TRUE(label->tooltip_text().isEmpty());
+
+    panel_->resize(width_for_label(full + 20), panel_->height());
+    panel_->layout()->activate();
+    EXPECT_EQ(label->painted_font(), panel_->font()) << "the UI size when it fits";
+    EXPECT_FALSE(label->is_elided());
+
+    panel_->resize(width_for_label(compact / 2), panel_->height());
+    panel_->layout()->activate();
+    EXPECT_TRUE(label->is_elided()) << "too long even 1 pt smaller";
+    EXPECT_EQ(label->tooltip_text(), text);
+    EXPECT_EQ(label->x(), status_x);
 }
 
 TEST_F(BusyPanelLayoutTest, Snapshots_for_visual_inspection)

@@ -1,5 +1,7 @@
 #include "round_trip_table_model.hpp"
 
+#include "ui_style.hpp"
+
 #include <cstddef>
 #include <utility>
 
@@ -25,9 +27,9 @@ static_assert([] {
 } // namespace
 
 RoundTripTableModel::RoundTripTableModel(std::shared_ptr<const Locale> locale, QObject* parent)
-    : KeyedTableModel(parent), grid_(std::move(locale))
+    : KeyedTableModel(parent), grid_(std::move(locale)), bold_(style::semibold_face())
 {
-    bold_.setWeight(QFont::DemiBold);  // only the weight is set: it resolves against the view's font
+    // bold_ sets only the semibold families: the size resolves against the view's font.
 }
 
 int RoundTripTableModel::column_index(ui::TripColumn column) noexcept

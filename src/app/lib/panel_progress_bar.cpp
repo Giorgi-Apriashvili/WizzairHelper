@@ -22,7 +22,7 @@ constexpr qint64 kMarqueePeriodMs = 1600;
 
 PanelProgressBar::PanelProgressBar(QWidget* parent) : QProgressBar(parent)
 {
-    fill_ = style::theme().accent;
+    fill_ = style::theme().accent_line;
     clock_.start();
 }
 

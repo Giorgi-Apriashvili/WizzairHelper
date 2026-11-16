@@ -7,8 +7,8 @@
 // texts that wrap with an auto-sized header height (DataGridView headers:
 // WrapMode True, ColumnHeadersHeightSizeMode AutoSize) and GridRowDelegate
 // cell painting. Its surface and text colours follow the look (ui_style.hpp);
-// keyboard focus shows as the selected row's accent bar, or as an accent ring
-// round the empty table.
+// keyboard focus shows as the accent bar of the current row (selected or not),
+// or as an accent ring round a table without a current row.
 //
 // It turns raw input into intent signals so the grid widgets stay free of
 // event plumbing: a press on a data cell (before Qt moves the current cell),
@@ -80,6 +80,9 @@ Q_SIGNALS:
     void context_menu_requested(QPoint global_pos);
 
 protected:
+    /// Repaints the whole previous and new current rows: the accent bar of the current row
+    /// is drawn at the view's left edge, which need not be the current cell.
+    void currentChanged(const QModelIndex& current, const QModelIndex& previous) override;
     bool event(QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;

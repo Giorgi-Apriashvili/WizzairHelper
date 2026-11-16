@@ -5,7 +5,9 @@
 #include "app_test_support.hpp"
 
 #include "app_info.hpp"
+#include "busy_panel.hpp"
 #include "date_picker.hpp"
+#include "elided_label.hpp"
 #include "fractional_spin_box.hpp"
 #include "grid_table_view.hpp"
 #include "layout_check.hpp"
@@ -224,6 +226,26 @@ TEST(MainWindowLayout, Fourteen_round_trips_are_in_view_at_the_default_window)
                                             << table.row_height() << " px, header "
                                             << table.horizontalHeader()->height() << " px";
     EXPECT_EQ(wizz::app::layout_problems(window), std::vector<std::string>{});
+}
+
+TEST(MainWindowLayout, The_request_cap_refusal_is_shown_whole_at_the_default_window)
+{
+    // 01 §10.1: the status line is cut only when it must be. The longest status a search ends
+    // with, the refusal of a search over 500 requests, ends with the advice how to fix it; at
+    // the default window it is shown whole (1 pt smaller), as the 9 pt windowsvista look did.
+    WindowRig rig;
+    rig.start();
+    MainWindow& window = rig.window();
+    set_client_size(window, gui::default_client_size());
+    gui::settle();
+    wizz::app::BusyPanel& busy = *window.busy_panel();
+    busy.begin("Outbound: planning…");
+    busy.end(strings::request_cap(6794, 148), false);
+    gui::settle();
+    const wizz::app::ElidedLabel* status = busy.status_label();
+    EXPECT_FALSE(status->is_elided()) << status->contentsRect().width() << " px for "
+                                      << QFontMetrics(status->painted_font()).horizontalAdvance(status->text())
+                                      << " px of text";
 }
 
 TEST(MainWindow, Tab_headers_have_the_12_4_padding)

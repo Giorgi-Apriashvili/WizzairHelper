@@ -20,6 +20,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace wizz::app {
@@ -106,9 +107,8 @@ BusyPanel::BusyPanel(const Clock& clock, std::shared_ptr<const Locale> locale,
 
     wait_ = new QLabel(this);
     wait_->setTextFormat(Qt::PlainText);
-    QFont bold;  // only the weight is set: family and size follow the panel (form) font
-    bold.setWeight(QFont::DemiBold);
-    wait_->setFont(bold);
+    // Only the semibold families are set: the size follows the panel (form) font.
+    wait_->setFont(style::semibold_face());
     wait_->setContentsMargins(0, 0, kAutoColumnRightMargin, 0);
 
     cancel_ = new QPushButton(to_qstring(ui::strings::kCancel));
@@ -326,7 +326,8 @@ void BusyPanel::render()
     // The bar moves only while something is being processed (D-34); at rest its fill takes
     // the colour of the outcome.
     bar_->set_live(is_busy());
-    bar_->set_fill(is_busy() ? style::theme().accent : resting_fill(status_colour()));
+    // Busy: the accent (the lighter accent line in dark, 3:1 on the track there too).
+    bar_->set_fill(is_busy() ? style::theme().accent_line : resting_fill(status_colour()));
     if (view.bar_style == ui::BarStyle::marquee) {
         bar_->update();  // the marquee segment advances with the 40 ms timer
     }
@@ -357,6 +358,14 @@ void BusyPanel::apply_metrics()
     if (grid_ == nullptr) {
         return;  // change events sent while the constructor builds the controls
     }
+    // A status too long for the line (the request-cap refusal with its advice) is drawn 1 pt
+    // smaller before it is cut.
+    std::optional<QFont> compact;
+    if (const qreal size = font().pointSizeF(); size > 2.0) {
+        compact = font();
+        compact->setPointSizeF(size - 1.0);
+    }
+    status_->set_compact_font(compact);
     const BusyPanelMetrics metrics = compute_metrics(font(), wait_->font(), elapsed_->font(), this);
     if (metrics == metrics_ && maximumHeight() == metrics.height) {
         return;

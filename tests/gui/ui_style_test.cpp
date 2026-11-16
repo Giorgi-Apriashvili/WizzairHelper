@@ -31,6 +31,11 @@ TEST(UiStyle, Fonts_follow_the_look_with_their_Windows_10_fallbacks)
     EXPECT_EQ(semibold.families(), (QStringList{"Segoe UI Variable Text Semibold", "Segoe UI Semibold"}));
     EXPECT_DOUBLE_EQ(semibold.pointSizeF(), 10.0);
     EXPECT_EQ(style::semibold_font(8.0).families(), semibold.families());
+    // The semibold face alone takes the size of the font it is resolved against (bold grid
+    // cells at 9 pt, the wait note at the panel's size).
+    EXPECT_EQ(style::semibold_face().families(), semibold.families());
+    EXPECT_EQ(style::semibold_face().resolveMask(), QFont::FamiliesResolved);
+    EXPECT_DOUBLE_EQ(style::semibold_face().resolve(style::data_font()).pointSizeF(), 9.0);
     // Grid cells: 9 pt, denser than the UI.
     EXPECT_EQ(style::data_font().families(), form.families());
     EXPECT_DOUBLE_EQ(style::data_font().pointSizeF(), 9.0);
@@ -52,13 +57,12 @@ TEST(UiStyle, Fonts_follow_the_look_with_their_Windows_10_fallbacks)
     EXPECT_EQ(style::mono_font(10.0, true).weight(), QFont::DemiBold);
 }
 
-TEST(UiStyle, Magenta_muted_text_and_the_disabled_search_text)
+TEST(UiStyle, Magenta_and_muted_text)
 {
     EXPECT_EQ(style::wizz_magenta(), QColor(197, 0, 110));
     EXPECT_EQ(style::wizz_magenta(), style::light_theme().accent);
     EXPECT_EQ(style::wizz_magenta(), style::dark_theme().accent);
     EXPECT_EQ(style::gray_text(), style::theme().text_muted) << "secondary text is the theme's muted text";
-    EXPECT_EQ(style::search_button_disabled_text(), QColor(255, 255, 255, 178)) << "white at 70 %";
 }
 
 TEST(UiStyle, The_application_look_is_ModernStyle_with_the_theme_palette_and_the_UI_font)

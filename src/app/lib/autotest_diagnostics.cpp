@@ -265,6 +265,7 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
         writer.key("wizzRequests").integer(search.wizz_requests);
         writer.key("durationMs").number(tenths(search.duration_ms));
         writer.key("finalStatus").string(search.final_status);
+        writer.key("finalStatusCut").boolean(search.final_status_cut);
         writer.end_object();
     }
     writer.end_array();

@@ -251,6 +251,16 @@ void GridTableView::contextMenuEvent(QContextMenuEvent* event)
     Q_EMIT context_menu_requested(global_pos);
 }
 
+void GridTableView::currentChanged(const QModelIndex& current, const QModelIndex& previous)
+{
+    QTableView::currentChanged(current, previous);
+    for (const QModelIndex& row : {previous, current}) {
+        if (row.isValid()) {
+            viewport()->update(QRect(0, rowViewportPosition(row.row()), viewport()->width(), rowHeight(row.row())));
+        }
+    }
+}
+
 void GridTableView::focusInEvent(QFocusEvent* event)
 {
     QTableView::focusInEvent(event);
@@ -267,7 +277,7 @@ void GridTableView::paintEvent(QPaintEvent* event)
 {
     QTableView::paintEvent(event);
     if (hasFocus() && !currentIndex().isValid()) {
-        // No row can carry the accent bar: ring the table instead, so focus stays visible.
+        // No current row can carry the accent bar: ring the table instead, so focus stays visible.
         QPainter painter(viewport());
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(QPen(style::theme().accent_line, 2.0));

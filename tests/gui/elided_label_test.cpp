@@ -31,6 +31,40 @@ TEST(ElidedLabel, Keeps_the_whole_text_and_cuts_only_the_painted_one)
     EXPECT_EQ(label.tooltip_text(), text);  // AutoEllipsis shows the full text on hover
 }
 
+TEST(ElidedLabel, A_compact_font_takes_a_text_too_long_for_the_label_font_before_it_is_cut)
+{
+    ElidedLabel label;
+    QFont regular = label.font();
+    regular.setPointSizeF(10.0);
+    label.setFont(regular);
+    QFont compact = regular;
+    compact.setPointSizeF(9.0);
+    const QString text = QStringLiteral("Use a smaller radius, fewer dates, or a specific destination.");
+    const int full = QFontMetrics(regular).horizontalAdvance(text);
+    const int small = QFontMetrics(compact).horizontalAdvance(text);
+    ASSERT_LT(small, full);
+    label.setText(text);
+    label.resize((full + small) / 2, 20);
+    EXPECT_TRUE(label.is_elided()) << "no compact font: cut";
+    EXPECT_EQ(label.painted_font(), regular);
+
+    label.set_compact_font(compact);
+    EXPECT_FALSE(label.is_elided());
+    EXPECT_EQ(label.elided_text(), text);
+    EXPECT_EQ(label.painted_font(), compact);
+
+    label.resize(full + 4, 20);
+    EXPECT_EQ(label.painted_font(), regular) << "the label's own font while the text fits";
+
+    label.resize(small / 2, 20);
+    EXPECT_TRUE(label.is_elided());
+    EXPECT_LE(QFontMetrics(compact).horizontalAdvance(label.elided_text()), label.width());
+    EXPECT_EQ(label.tooltip_text(), text);
+
+    label.set_compact_font(std::nullopt);
+    EXPECT_EQ(label.painted_font(), regular);
+}
+
 TEST(ElidedLabel, A_text_that_fits_has_no_hover_tooltip)
 {
     ElidedLabel label;

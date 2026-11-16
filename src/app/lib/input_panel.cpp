@@ -142,7 +142,9 @@ void InputPanel::build()
     places->setHorizontalSpacing(kFieldGap);
     places->setVerticalSpacing(SectionCard::kRowGap);
     const auto add_place_row = [&](int row, std::string_view label, PlaceCombo* place, FractionalSpinBox* radius) {
-        places->addWidget(make_label(label, where), row, 0, Qt::AlignLeft | Qt::AlignVCenter);
+        QLabel* name = make_label(label, where);
+        name->setBuddy(place);
+        places->addWidget(name, row, 0, Qt::AlignLeft | Qt::AlignVCenter);
         places->addWidget(place, row, 1);
         places->addWidget(make_label(strings::kLabelWithin, where), row, 2, Qt::AlignRight | Qt::AlignVCenter);
         places->addWidget(radius, row, 3);
@@ -171,10 +173,14 @@ void InputPanel::build()
     who->setContentsMargins(0, 0, 0, 0);
     who->setHorizontalSpacing(kFieldGap);
     who->setVerticalSpacing(SectionCard::kRowGap);
-    who->addWidget(make_label(strings::kLabelAdults, travellers), 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    QLabel* adults_label = make_label(strings::kLabelAdults, travellers);
+    adults_label->setBuddy(adults_);
+    QLabel* currency_label = make_label(strings::kLabelPricesIn, travellers);
+    currency_label->setBuddy(currency_);
+    who->addWidget(adults_label, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
     who->addWidget(adults_, 0, 1, Qt::AlignLeft);
     who->addWidget(fare_, 0, 2, Qt::AlignLeft);
-    who->addWidget(make_label(strings::kLabelPricesIn, travellers), 1, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    who->addWidget(currency_label, 1, 0, Qt::AlignLeft | Qt::AlignVCenter);
     who->addWidget(currency_, 1, 1, 1, 2, Qt::AlignLeft);
     who->setColumnStretch(3, 1);
     travellers->body()->addLayout(who);
@@ -235,6 +241,26 @@ void InputPanel::build()
                             Qt::AlignTop);
     resolved_row->addWidget(resolved_, 1);
     outer->addLayout(resolved_row);
+
+    // Screen readers: every input has a name of its own (the cards carry their captions).
+    const std::array<std::pair<QWidget*, std::string_view>, 13> accessible{{
+        {from_, strings::kLabelFrom},
+        {from_radius_, strings::kNameFromRadius},
+        {to_, strings::kLabelTo},
+        {to_radius_, strings::kNameToRadius},
+        {adults_, strings::kLabelAdults},
+        {fare_, strings::kNameFare},
+        {currency_, strings::kLabelPricesIn},
+        {out_from_, strings::kNameOutboundFirst},
+        {out_to_, strings::kNameOutboundLast},
+        {ret_from_, strings::kNameReturnFirst},
+        {ret_to_, strings::kNameReturnLast},
+        {min_nights_, strings::kNameMinNights},
+        {max_nights_, strings::kNameMaxNights},
+    }};
+    for (const auto& [widget, name] : accessible) {
+        widget->setAccessibleName(to_qstring(name));
+    }
 }
 
 void InputPanel::wire()

@@ -38,9 +38,9 @@ static_assert([] {
 } // namespace
 
 FlightTableModel::FlightTableModel(std::shared_ptr<const Locale> locale, bool offer_plan_return, QObject* parent)
-    : KeyedTableModel(parent), grid_(std::move(locale), offer_plan_return)
+    : KeyedTableModel(parent), grid_(std::move(locale), offer_plan_return), bold_(style::semibold_face())
 {
-    bold_.setWeight(QFont::DemiBold);  // only the weight is set: it resolves against the view's font
+    // bold_ sets only the semibold families: the size resolves against the view's font.
     apply_theme();
     style::on_theme_change(this, [this] { apply_theme(); });  // the views repaint and ask again
 }
@@ -50,6 +50,7 @@ void FlightTableModel::apply_theme()
     gray_text_ = QBrush{grid_colors::gray_text()};
     cheapest_ = QBrush{grid_colors::cheapest_back()};
     cheapest_selection_ = QBrush{grid_colors::cheapest_selection_back()};
+    high_contrast_ = style::theme().high_contrast;
 }
 
 std::size_t FlightTableModel::idx_at(int row) const
@@ -106,7 +107,10 @@ QVariant FlightTableModel::data(const QModelIndex& index, int role) const
     case Qt::TextAlignmentRole:
         return QVariant::fromValue(alignment(column));
     case Qt::FontRole:
-        return column == ui::FlightColumn::total ? QVariant::fromValue(bold_) : QVariant{};
+        // High Contrast has no tint for the cheapest rows (D-55): they are set in semibold.
+        return column == ui::FlightColumn::total || (high_contrast_ && grid_.tone(row) == ui::RowTone::cheapest)
+                   ? QVariant::fromValue(bold_)
+                   : QVariant{};
     case Qt::ForegroundRole:
         return grid_.tone(row) == ui::RowTone::unavailable ? QVariant::fromValue(gray_text_) : QVariant{};
     case Qt::BackgroundRole:

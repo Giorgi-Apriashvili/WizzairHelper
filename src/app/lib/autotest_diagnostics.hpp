@@ -71,6 +71,7 @@ struct SearchDiagnostics {
     std::int64_t wizz_requests = 0;      ///< WizzApiClient::request_count() delta
     double duration_ms = 0;              ///< real time
     std::string final_status;            ///< the busy line when it ended
+    bool final_status_cut = false;       ///< it ended with "…": too long for the status line
 };
 
 struct GridDiagnostics {

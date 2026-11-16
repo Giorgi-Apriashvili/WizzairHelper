@@ -6,6 +6,7 @@
 // menu. en-US.
 
 #include "round_trip_grid.hpp"
+#include "elided_label.hpp"
 #include "round_trip_table_model.hpp"
 #include "grid_colors.hpp"
 #include "grid_table_view.hpp"
@@ -108,7 +109,9 @@ TEST(RoundTripGridWidget, Top_bar_checkboxes_and_summary_label)
     EXPECT_FALSE(f.grid.require_same_home());
     EXPECT_FALSE(f.grid.require_same_away());
     EXPECT_EQ(f.grid.summary_label()->palette().color(QPalette::WindowText), app::grid_colors::gray_text());
-    EXPECT_EQ(f.grid.summary_label()->textFormat(), Qt::PlainText);
+    // A summary longer than the bar (the minimum window) ends with "…" and shows in full as
+    // the tooltip, instead of being clipped through a glyph.
+    EXPECT_EQ(f.grid.summary_label()->sizePolicy().horizontalPolicy(), QSizePolicy::Ignored);
 }
 
 TEST(RoundTripGridWidget, Checkboxes_raise_filters_changed)
@@ -194,7 +197,7 @@ TEST(RoundTripGridWidget, Columns_headers_widths_and_formats)
     EXPECT_EQ(model.headerData(col(TripColumn::total), Qt::Horizontal).toString(), QStringLiteral("Total (HUF)"));
     EXPECT_EQ(text_at(f.grid, 0, TripColumn::total), "25");  // HUF: no minor unit
     const QModelIndex total = model.index(0, col(TripColumn::total));
-    EXPECT_TRUE(total.data(Qt::FontRole).value<QFont>().bold());
+    EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().families(), app::style::semibold_face().families());
     EXPECT_FALSE(model.index(0, col(TripColumn::out_price)).data(Qt::FontRole).isValid());
     EXPECT_FALSE(total.data(Qt::BackgroundRole).isValid());  // no per-row colouring
     EXPECT_FALSE(total.data(Qt::ForegroundRole).isValid());

@@ -66,6 +66,17 @@ inline constexpr std::string_view kSectionTravellers = "Travellers & prices";
 inline constexpr std::string_view kSectionOutbound = "Outbound";
 inline constexpr std::string_view kSectionReturn = "Return";
 inline constexpr std::string_view kLabelBetween = "between";
+// What screen readers announce for the inputs whose visible label ("within", "between",
+// "and", "to") does not tell them apart (DECISIONS D-54); the others take their label.
+inline constexpr std::string_view kNameFromRadius = "From: radius in km";
+inline constexpr std::string_view kNameToRadius = "To: radius in km";
+inline constexpr std::string_view kNameFare = "Fares";
+inline constexpr std::string_view kNameOutboundFirst = "Outbound: earliest date";
+inline constexpr std::string_view kNameOutboundLast = "Outbound: latest date";
+inline constexpr std::string_view kNameReturnFirst = "Return: earliest date";
+inline constexpr std::string_view kNameReturnLast = "Return: latest date";
+inline constexpr std::string_view kNameMinNights = "Round trips: fewest nights";
+inline constexpr std::string_view kNameMaxNights = "Round trips: most nights";
 inline constexpr std::string_view kTooltipFrom =
     "City or airport you start from (any city works — nearby Wizz Air airports are found automatically)";
 inline constexpr std::string_view kTooltipTo = "Destination city or airport. Leave empty to search ANYWHERE Wizz Air flies.";

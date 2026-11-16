@@ -93,7 +93,8 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
                                                       .cancel_requests = 1,
                                                       .status_after_press = "Cancelling…",
                                                       .cancel_enabled_after_press = false};
-    diagnostics.searches.push_back({.name = "outbound", .wizz_requests = 3, .duration_ms = 12.0, .final_status = "x"});
+    diagnostics.searches.push_back(
+        {.name = "outbound", .wizz_requests = 3, .duration_ms = 12.0, .final_status = "x", .final_status_cut = true});
     diagnostics.grids.push_back({.name = "outbound", .rows = 3, .result_flights = 3});
     diagnostics.grids.push_back({.name = "return", .rows = 0, .result_flights = std::nullopt});
     diagnostics.layout = LayoutDiagnostics{.checks = 2, .problems = {}, .cancel_visible = true};
@@ -112,6 +113,7 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
     EXPECT_TRUE(json.contains("\"cancelRequests\": 1"));
     EXPECT_TRUE(json.contains("\"resultFlights\": null"));
     EXPECT_TRUE(json.contains("\"statesChecked\": 2"));
+    EXPECT_TRUE(json.contains("\"finalStatusCut\": true"));
     const wizz::json::Value parsed = wizz::json::parse(json);
     EXPECT_TRUE(parsed.is_object());
 }

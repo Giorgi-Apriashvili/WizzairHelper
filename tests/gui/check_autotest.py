@@ -990,6 +990,13 @@ def main():
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
     checker.look(expected_look(env))
+    if window is None and not args.scale:
+        # At the default window every status a search ends with is shown in full (01 §10.1; the
+        # request-cap refusal of over_500 ends with the advice how to fix the search).
+        for index, search in enumerate(diagnostics.get('searches') or []):
+            checker.expect(search.get('finalStatusCut') is False,
+                           'searches.%d: the status line is cut at the default window: %r' %
+                           (index, search.get('finalStatus')))
     if settings_text is None:
         checker.expect(not os.path.exists(settings_path), 'settings.json written in autotest')
     else:

@@ -6,6 +6,8 @@
 //   │ body rows …                                      │
 //   └──────────────────────────────────────────────────┘
 //
+// The caption row is as tall with a hint as without one, so cards side by side
+// keep their rows on one line.
 // A rounded surface with a 1 px border on the window background; the caption is
 // small, semibold, upper case and tracked, the icon an accent-coloured glyph of
 // the icon font (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10). Colours

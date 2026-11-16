@@ -11,6 +11,7 @@
 #include <QFontMetrics>
 #include <QHeaderView>
 #include <QIconEngine>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
@@ -24,6 +25,12 @@
 
 #include <algorithm>
 #include <climits>
+#include <utility>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace wizz::app {
 
@@ -118,6 +125,24 @@ void draw_field(QPainter* painter, const QRect& rect, const QStyleOption& option
     return button.features.testFlag(QStyleOptionButton::DefaultButton);
 }
 
+[[nodiscard]] bool system_keyboard_cues()
+{
+    BOOL cues = FALSE;
+    return SystemParametersInfoW(SPI_GETKEYBOARDCUES, 0, &cues, 0) != FALSE && cues != FALSE;
+}
+
+[[nodiscard]] ModernStyle::KeyboardCuesProbe& keyboard_cues_probe()
+{
+    static ModernStyle::KeyboardCuesProbe probe;
+    return probe;
+}
+
+[[nodiscard]] bool keyboard_cues()
+{
+    const ModernStyle::KeyboardCuesProbe& probe = keyboard_cues_probe();
+    return probe ? probe() : system_keyboard_cues();
+}
+
 /// The rounded push-button body.
 void draw_button_panel(QPainter* painter, const QStyleOptionButton& button)
 {
@@ -128,13 +153,9 @@ void draw_button_panel(QPainter* painter, const QStyleOptionButton& button)
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing);
     const QRectF box = QRectF(button.rect).adjusted(0.5, 0.5, -0.5, -0.5);
-    if (is_primary(button) && !flat) {
-        QColor fill = pressed ? t().accent_pressed : hovered ? t().accent_hover : t().accent;
-        if (!enabled) {
-            fill = mix(t().surface, t().accent, 0.45);
-        }
+    if (is_primary(button) && !flat && enabled) {
         painter->setPen(Qt::NoPen);
-        painter->setBrush(fill);
+        painter->setBrush(pressed ? t().accent_pressed : hovered ? t().accent_hover : t().accent);
         painter->drawRoundedRect(box, ModernStyle::kRadius, ModernStyle::kRadius);
     } else if (flat) {
         if (enabled && (hovered || pressed)) {
@@ -145,6 +166,8 @@ void draw_button_panel(QPainter* painter, const QStyleOptionButton& button)
             painter->drawRoundedRect(box, ModernStyle::kRadius, ModernStyle::kRadius);
         }
     } else {
+        // A disabled primary button looks like every disabled button (the disabled fill and
+        // text), so it never reads as a pressed accent button.
         const QColor fill = !enabled ? t().input_disabled
                             : pressed ? t().button_pressed
                             : hovered ? t().button_hover
@@ -302,6 +325,11 @@ private:
 
 ModernStyle::ModernStyle(QStyle* base) : QProxyStyle(base) {}
 
+ModernStyle::KeyboardCuesProbe ModernStyle::set_keyboard_cues_probe(KeyboardCuesProbe probe)
+{
+    return std::exchange(keyboard_cues_probe(), std::move(probe));
+}
+
 bool ModernStyle::is_active()
 {
     return dynamic_cast<const ModernStyle*>(QApplication::style()) != nullptr;
@@ -344,6 +372,59 @@ void ModernStyle::polish(QWidget* widget)
 void ModernStyle::unpolish(QWidget* widget)
 {
     QProxyStyle::unpolish(widget);
+}
+
+void ModernStyle::polish(QApplication* application)
+{
+    QProxyStyle::polish(application);
+    if (application != nullptr) {
+        application->installEventFilter(this);
+    }
+}
+
+void ModernStyle::unpolish(QApplication* application)
+{
+    if (application != nullptr) {
+        application->removeEventFilter(this);
+    }
+    set_alt_window(nullptr);
+    QProxyStyle::unpolish(application);
+}
+
+bool ModernStyle::eventFilter(QObject* watched, QEvent* event)
+{
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::KeyRelease:
+        if (static_cast<const QKeyEvent*>(event)->key() == Qt::Key_Alt && watched->isWidgetType()) {
+            set_alt_window(event->type() == QEvent::KeyPress ? static_cast<QWidget*>(watched)->window() : nullptr);
+        }
+        break;
+    case QEvent::WindowDeactivate:
+        if (!alt_window_.isNull()) {
+            set_alt_window(nullptr);  // Alt+Tab: the release goes to another window
+        }
+        break;
+    default:
+        break;
+    }
+    return QProxyStyle::eventFilter(watched, event);
+}
+
+void ModernStyle::set_alt_window(QWidget* window)
+{
+    if (alt_window_ == window) {
+        return;
+    }
+    const QPointer<QWidget> before = std::exchange(alt_window_, window);
+    for (QWidget* changed : {before.data(), window}) {
+        if (changed != nullptr) {
+            changed->update();
+            for (QWidget* child : changed->findChildren<QWidget*>()) {
+                child->update();
+            }
+        }
+    }
 }
 
 int ModernStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, const QWidget* widget) const
@@ -423,7 +504,12 @@ int ModernStyle::styleHint(StyleHint hint, const QStyleOption* option, const QWi
     case SH_DialogButtonBox_ButtonsHaveIcons:
         return 0;
     case SH_UnderlineShortcut:
-        return 0;  // like Windows by default: no mnemonic underlines (the Alt shortcuts still work)
+        // Like Windows: hidden unless "Underline access keys" is on or Alt is held in the
+        // widget's window (the Alt shortcuts work either way).
+        if (keyboard_cues()) {
+            return 1;
+        }
+        return widget != nullptr && !alt_window_.isNull() && widget->window() == alt_window_.data() ? 1 : 0;
     default:
         break;
     }
@@ -832,8 +918,7 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
             const bool primary = is_primary(*button) && !button->features.testFlag(QStyleOptionButton::Flat);
             if (primary) {
                 label.palette.setColor(QPalette::ButtonText, t().on_accent);
-                label.palette.setColor(QPalette::Disabled, QPalette::ButtonText,
-                                       style::search_button_disabled_text());
+                label.palette.setColor(QPalette::Disabled, QPalette::ButtonText, t().text_disabled);
             }
             QProxyStyle::drawControl(CE_PushButtonLabel, &label, painter, widget);
             if (button->state.testFlag(State_HasFocus) && button->state.testFlag(State_KeyboardFocusChange)) {
@@ -992,6 +1077,23 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
     case CE_MenuEmptyArea:
         painter->fillRect(option->rect, t().surface);
         return;
+    case CE_ItemViewItem:
+        if (const auto* item = qstyleoption_cast<const QStyleOptionViewItem*>(option);
+            item != nullptr && (is_list(widget) || in_calendar(widget))) {
+            // The palette's Highlight is for selected text (the accent); a selected list item or
+            // calendar day is the soft tint with the normal text colour, like a grid row.
+            QStyleOptionViewItem tinted = *item;
+            tinted.palette.setColor(QPalette::Highlight, t().selection);
+            tinted.palette.setColor(QPalette::HighlightedText, t().selection_text);
+            if (!item->state.testFlag(State_Enabled)) {
+                // Calendar days outside the allowed dates cannot be picked: the disabled text
+                // colour, whatever their weekday or month format says.
+                tinted.palette.setColor(QPalette::Text, t().text_disabled);
+            }
+            QProxyStyle::drawControl(element, &tinted, painter, widget);
+            return;
+        }
+        break;
     default:
         break;
     }
@@ -1039,6 +1141,17 @@ void ModernStyle::drawComplexControl(ComplexControl control, const QStyleOptionC
             }
         }
         return;
+    case CC_ToolButton:
+        if (const auto* button = qstyleoption_cast<const QStyleOptionToolButton*>(option);
+            button != nullptr && in_calendar(widget) && button->features.testFlag(QStyleOptionToolButton::HasMenu)) {
+            // The calendar's month button: QCommonStyle would draw the menu arrow over the end
+            // of the month name. The name itself opens the menu (and darkens under the mouse).
+            QStyleOptionToolButton plain = *button;
+            plain.features.setFlag(QStyleOptionToolButton::HasMenu, false);
+            QProxyStyle::drawComplexControl(control, &plain, painter, widget);
+            return;
+        }
+        break;
     case CC_ScrollBar:
         if (const auto* bar = qstyleoption_cast<const QStyleOptionSlider*>(option)) {
             painter->fillRect(bar->rect, t().surface);

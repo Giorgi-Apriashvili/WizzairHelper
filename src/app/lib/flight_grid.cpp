@@ -1,5 +1,6 @@
 #include "flight_grid.hpp"
 
+#include "elided_label.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
 #include "modern_style.hpp"

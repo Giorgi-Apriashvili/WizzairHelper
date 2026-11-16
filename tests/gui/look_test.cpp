@@ -79,7 +79,7 @@ void section11_search(WindowRig& rig)
 void expect_window_follows(WindowRig& rig, const style::Theme& expected)
 {
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), expected.window);
-    EXPECT_EQ(QApplication::palette().color(QPalette::Highlight), expected.selection);
+    EXPECT_EQ(QApplication::palette().color(QPalette::Highlight), expected.text_selection);
     EXPECT_EQ(QToolTip::palette().color(QPalette::ToolTipText), expected.text);
     EXPECT_EQ(rig.outbound().table()->palette().color(QPalette::Base), expected.surface);
     EXPECT_EQ(rig.trips().table()->palette().color(QPalette::Text), expected.text);
@@ -253,6 +253,22 @@ TEST(Look, High_contrast_lets_the_system_palette_and_a_plain_style_win)
     EXPECT_EQ(rig.busy().status_colour(), system.color(QPalette::WindowText));
     EXPECT_EQ(rig.outbound().table()->palette().color(QPalette::Base), system.color(QPalette::Window));
     EXPECT_EQ(cheapest_background(rig), system.color(QPalette::Window)) << "no tint";
+    // Instead the cheapest rows are set in semibold (every column; Total is semibold in every
+    // row anyway), a cue that does not depend on colour.
+    const QAbstractItemModel* fares = rig.outbound().table()->model();
+    const int date = wizz::app::FlightTableModel::column_index(wizz::ui::FlightColumn::date);
+    int cheapest_rows = 0;
+    for (int row = 0; row < fares->rowCount(); ++row) {
+        const QModelIndex cell = fares->index(row, date);
+        const bool cheapest = cell.data(wizz::app::FlightTableModel::RowToneRole).toInt() ==
+                              static_cast<int>(wizz::ui::RowTone::cheapest);
+        cheapest_rows += cheapest ? 1 : 0;
+        EXPECT_EQ(cell.data(Qt::FontRole).isValid(), cheapest) << "row " << row;
+        if (cheapest) {
+            EXPECT_EQ(cell.data(Qt::FontRole).value<QFont>().families(), style::semibold_face().families());
+        }
+    }
+    EXPECT_GT(cheapest_rows, 0);
     const QCalendarWidget* calendar = rig.input().out_from_picker()->calendarWidget();
     EXPECT_FALSE(calendar->weekdayTextFormat(Qt::Saturday).hasProperty(QTextFormat::ForegroundBrush));
 
@@ -260,6 +276,7 @@ TEST(Look, High_contrast_lets_the_system_palette_and_a_plain_style_win)
     QEvent change{QEvent::ThemeChange};
     QApplication::sendEvent(&rig.window(), &change);
     ASSERT_TRUE(gui::wait_until([] { return style::appearance() != style::Appearance::high_contrast; }));
+    EXPECT_FALSE(fares->index(0, date).data(Qt::FontRole).isValid()) << "the tint marks them again";
     EXPECT_TRUE(ModernStyle::is_active());
     EXPECT_FALSE(style::theme().high_contrast);
     EXPECT_EQ(QApplication::palette().color(QPalette::Window), style::theme().window);
@@ -288,15 +305,19 @@ TEST(Look, Windows_10_fonts_leave_out_the_Windows_11_families)
     }
 }
 
-TEST(Look, Selections_use_the_tint_with_text_colour)
+TEST(Look, Selected_text_is_the_accent_with_white_text)
 {
+    // The palette's Highlight is for selected text in inputs and the log; item selections
+    // (lists, the calendar, menus, grids) are painted with the tint by the style and the
+    // delegate (ModernStyle.Selected_text_is_the_accent_and_selected_items_the_tint).
     for (const style::Theme& theme : {style::light_theme(), style::dark_theme()}) {
         const QPalette palette = style::make_palette(theme);
-        EXPECT_EQ(palette.color(QPalette::Highlight), theme.selection);
-        EXPECT_EQ(palette.color(QPalette::HighlightedText), theme.selection_text);
-        EXPECT_EQ(palette.color(QPalette::Inactive, QPalette::Highlight), theme.selection);
+        EXPECT_EQ(palette.color(QPalette::Highlight), theme.text_selection);
+        EXPECT_EQ(palette.color(QPalette::HighlightedText), theme.on_accent);
+        EXPECT_EQ(palette.color(QPalette::Inactive, QPalette::Highlight), theme.text_selection);
         EXPECT_EQ(palette.color(QPalette::ToolTipText), theme.text);
     }
+    EXPECT_EQ(style::light_theme().text_selection, style::light_theme().accent);
 }
 
 TEST(Look, The_contrast_ratio_is_WCAG_2s)
@@ -342,11 +363,47 @@ TEST(Look, Token_pairs_meet_WCAG_AA)
         expect_at_least(4.5, t.on_accent, t.accent, "text on the accent");
         expect_at_least(4.5, t.on_accent, t.accent_hover, "text on the hovered accent");
         expect_at_least(4.5, t.on_accent, t.accent_pressed, "text on the pressed accent");
-        // Non-text (3:1): focus rings, selection pills, the selected tab, the input stroke.
-        for (const QColor& back : {t.window, t.surface, t.input, t.selection}) {
+        // Selected text in an input: visible against the input, its text readable.
+        expect_at_least(3.0, t.text_selection, t.input, "selected text against the input");
+        expect_at_least(3.0, t.text_selection, t.surface, "selected text against the log");
+        expect_at_least(4.5, t.on_accent, t.text_selection, "selected text");
+        // Non-text (3:1): focus rings, selection pills, the selected tab, the input stroke, the
+        // focused grid row's bar (also on a selected cheapest row), the unfocused grid's bar,
+        // the busy bar's fill on its track, the scroll bar thumbs.
+        for (const QColor& back : {t.window, t.surface, t.input, t.selection, t.cheapest_selection}) {
             expect_at_least(3.0, t.accent_line, back, "accent line");
         }
+        expect_at_least(3.0, t.text_muted, t.selection, "unfocused grid bar on the selection");
+        expect_at_least(3.0, t.text_muted, t.cheapest_selection, "unfocused grid bar on a selected cheapest row");
+        expect_at_least(3.0, t.accent_line, t.track, "busy bar on its track");
         expect_at_least(3.0, t.input_underline, t.input, "input bottom stroke");
+        expect_at_least(3.0, t.scroll_thumb, t.surface, "scroll bar thumb");
+        expect_at_least(3.0, t.scroll_thumb_hover, t.surface, "hovered scroll bar thumb");
+    }
+}
+
+TEST(Look, Tokens_keep_their_meaning)
+{
+    // What the colours stand for, beyond their contrast (01 §8.3, §10): the cheapest rows are
+    // a visible green tint, a selected cheapest row differs from both a cheapest row and the
+    // normal selection, success is green, failure red, the wait note amber, and none of
+    // them is another.
+    const auto green = [](const QColor& c) { return c.green() > c.red() && c.green() > c.blue(); };
+    const auto red = [](const QColor& c) { return c.red() > c.green() + 40 && c.red() > c.blue() + 40; };
+    const auto amber = [](const QColor& c) { return c.red() > c.blue() + 60 && c.green() > c.blue() + 30; };
+    for (const style::Theme& t : {style::light_theme(), style::dark_theme()}) {
+        const char* const scheme = t.dark ? "dark" : "light";
+        EXPECT_TRUE(green(t.cheapest)) << scheme << " cheapest " << t.cheapest.name().toStdString();
+        EXPECT_TRUE(green(t.cheapest_selection)) << scheme;
+        EXPECT_GE(style::contrast_ratio(t.cheapest, t.surface), 1.08) << scheme << ": a visible tint";
+        EXPECT_NE(t.cheapest_selection, t.cheapest) << scheme;
+        EXPECT_NE(t.cheapest_selection, t.selection) << scheme;
+        EXPECT_NE(t.selection, t.surface) << scheme;
+        EXPECT_TRUE(green(t.success)) << scheme << " success " << t.success.name().toStdString();
+        EXPECT_TRUE(red(t.failure)) << scheme << " failure " << t.failure.name().toStdString();
+        EXPECT_TRUE(amber(t.warning)) << scheme << " warning " << t.warning.name().toStdString();
+        EXPECT_NE(t.success, t.failure) << scheme;
+        EXPECT_NE(t.warning, t.failure) << scheme;
     }
 }
 

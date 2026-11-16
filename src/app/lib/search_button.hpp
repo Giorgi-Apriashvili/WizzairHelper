@@ -2,8 +2,10 @@
 // "Search outbound" / "Search return": the primary action buttons (DECISIONS
 // D-53). A rounded accent (#C5006E) button with white semibold text and
 // an optional icon glyph before the text; lighter under the mouse, darker while
-// pressed. While disabled the face fades towards the surface and the text keeps
-// 70 % white. Keyboard focus shows as a white ring inside the face. Its height
+// pressed. While disabled it looks like every disabled control: the disabled
+// input fill, an input-border outline and the disabled text colour, so it never
+// reads as a pressed accent button. Keyboard focus shows as a white ring inside
+// the face. Its height
 // is the height of every other input (ModernStyle::control_height), so it lines
 // up with the fields next to it. High Contrast paints it in the system
 // Highlight / HighlightedText, and a disabled one as a GrayText outline.

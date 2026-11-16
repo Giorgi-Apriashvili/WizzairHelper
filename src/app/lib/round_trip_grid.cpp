@@ -1,5 +1,6 @@
 #include "round_trip_grid.hpp"
 
+#include "elided_label.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
 
@@ -9,7 +10,6 @@
 #include <QCheckBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
-#include <QLabel>
 #include <QMenu>
 #include <QScopedValueRollback>
 #include <QVBoxLayout>

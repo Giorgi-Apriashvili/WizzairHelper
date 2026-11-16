@@ -11,8 +11,9 @@
 // Layout (01 §10.1) in the look of DECISIONS D-53: the theme's surface colour with
 // a 1 px top border (a status bar), padding (14, 5, 14, 5), a 4 × 2 grid:
 //   col 0: 36 px  spinner (both rows, 6 px right margin)
-//   col 1: 100 %  progress bar (margin 0, 2, 14, 2) / status line (elided)
-//   col 2: auto   elapsed (Cascadia Mono 10 pt semibold) / wait note (warning, semibold)
+//   col 1: 100 %  progress bar (margin 0, 2, 14, 2) / status line (1 pt smaller when
+//                 it does not fit, cut with "…" when it does not fit then either)
+//   col 2: auto   elapsed (Cascadia Mono 10 pt semibold) / wait note (warning, semibold face)
 //   col 3: auto   Cancel (both rows, right, default 3 px button margin)
 // Row heights come from font metrics and are recomputed on font, style and
 // device-pixel-ratio changes (UI-6). Every colour (background, status, wait note,

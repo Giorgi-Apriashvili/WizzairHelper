@@ -27,8 +27,8 @@ namespace wizz::app {
 
 class FontWarmup {
 public:
-    /// The fonts the app draws text in (ui_style.hpp): the UI font and the busy panel's
-    /// semibold wait note first, then the semibold, data, monospace, hint and caption fonts.
+    /// The fonts the app draws text in (ui_style.hpp): the UI font first, then the semibold
+    /// one (also the busy panel's wait note), the data, monospace, hint and caption fonts.
     [[nodiscard]] static std::vector<QFont> default_fonts();
     /// Every character the progress UI can show that Segoe UI may lack, in one sample.
     [[nodiscard]] static QString default_sample();

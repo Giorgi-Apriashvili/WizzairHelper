@@ -1,9 +1,9 @@
 #include "grid_top_bar.hpp"
 
+#include "elided_label.hpp"
 #include "ui_style.hpp"
 
 #include <QHBoxLayout>
-#include <QLabel>
 #include <QPalette>
 #include <QSizePolicy>
 #include <QVBoxLayout>
@@ -29,11 +29,9 @@ void add(QHBoxLayout* row, QWidget* widget, QMargins margin, int stretch)
     row->addLayout(cell, stretch);
 }
 
-QLabel* make_summary_label(QWidget* parent)
+ElidedLabel* make_summary_label(QWidget* parent)
 {
-    auto* label = new QLabel(parent);
-    label->setTextFormat(Qt::PlainText);
-    label->setWordWrap(false);
+    auto* label = new ElidedLabel(parent);
     label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     style::set_text_tone(*label, style::TextTone::muted);

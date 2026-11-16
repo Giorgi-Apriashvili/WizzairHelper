@@ -10,8 +10,11 @@
 #include <string_view>
 
 class QHBoxLayout;
-class QLabel;
 class QWidget;
+
+namespace wizz::app {
+class ElidedLabel;
+} // namespace wizz::app
 
 namespace wizz::app::grid_bar {
 
@@ -21,9 +24,9 @@ inline constexpr QMargins kPadding{12, 4, 12, 4};
 [[nodiscard]] QHBoxLayout* make_row();
 /// Adds `widget` with the outer `margin` (left, top, right, bottom), vertically centred.
 void add(QHBoxLayout* row, QWidget* widget, QMargins margin, int stretch = 0);
-/// The muted `_summary` label: plain text, no wrapping; a long text is clipped by the bar
-/// instead of widening the window.
-[[nodiscard]] QLabel* make_summary_label(QWidget* parent);
+/// The muted `_summary` label: one line of plain text that never widens the window; a text
+/// longer than the bar ends with "…" and shows in full as the tooltip.
+[[nodiscard]] ElidedLabel* make_summary_label(QWidget* parent);
 /// UTF-8 → QString.
 [[nodiscard]] QString text(std::string_view utf8);
 

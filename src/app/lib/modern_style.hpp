@@ -17,12 +17,18 @@
 //     the surface colour with a 1 px border; a selected list or menu item is the
 //     selection tint with a 3 px accent pill at its left, like a focused grid row;
 //   * focus: a visible accent ring on buttons, check boxes, inputs, tabs and
-//     calendar days.
+//     calendar days;
+//   * mnemonic underlines: shown while Alt is held, or always when Windows'
+//     "Underline access keys" setting is on (SPI_GETKEYBOARDCUES), as on Windows.
 // Everything not listed is Fusion with the theme palette. No style sheet is
 // used: QSS needs image files for arrows and slows down large item views. High
 // Contrast does not use this style (ui_style.hpp).
 
+#include <QPointer>
 #include <QProxyStyle>
+#include <QWidget>
+
+#include <functional>
 
 class QComboBox;
 class QFontMetrics;
@@ -52,10 +58,19 @@ public:
     /// corner where two scroll bars meet).
     [[nodiscard]] static QWidget* make_surface_corner(QWidget* parent);
 
+    /// Tells whether Windows' "Underline access keys" setting is on; the default asks
+    /// SystemParametersInfoW(SPI_GETKEYBOARDCUES). Replaces the probe (empty = the default)
+    /// and returns the previous one (tests).
+    using KeyboardCuesProbe = std::function<bool()>;
+    static KeyboardCuesProbe set_keyboard_cues_probe(KeyboardCuesProbe probe);
+
     using QProxyStyle::polish;
     using QProxyStyle::unpolish;
     void polish(QWidget* widget) override;
     void unpolish(QWidget* widget) override;
+    /// Watches the application's Alt key for the mnemonic underlines.
+    void polish(QApplication* application) override;
+    void unpolish(QApplication* application) override;
 
     [[nodiscard]] int pixelMetric(PixelMetric metric, const QStyleOption* option = nullptr,
                                   const QWidget* widget = nullptr) const override;
@@ -75,6 +90,15 @@ public:
                      const QWidget* widget = nullptr) const override;
     void drawComplexControl(ComplexControl control, const QStyleOptionComplex* option, QPainter* painter,
                             const QWidget* widget = nullptr) const override;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    /// Shows the mnemonic underlines of `window` (Alt pressed) or hides them again (null).
+    void set_alt_window(QWidget* window);
+
+    QPointer<QWidget> alt_window_;  ///< the window whose Alt key is held
 };
 
 } // namespace wizz::app

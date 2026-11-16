@@ -76,8 +76,10 @@ struct Theme {
     QColor accent_line;         ///< focus rings, the selected tab, icons (3:1 on every surface)
     QColor accent_text;         ///< accent-coloured text (calendar weekends; 4.5:1 on input and selection)
     QColor on_accent;           ///< text on accent fills
-    QColor selection;           ///< selected rows and items (grids, lists, menus, text)
+    QColor selection;           ///< selected rows and items (grids, lists, menus, calendar days)
     QColor selection_text;
+    QColor text_selection;      ///< selected text in inputs and the log, with on_accent text: the
+                                ///< accent, lighter in dark (3:1 on the input, 4.5:1 for its text)
     QColor hover;               ///< a hovered list item, menu item or header section
     QColor cheapest;            ///< cheapest rows (01 §8.3)
     QColor cheapest_selection;  ///< cheapest row while selected
@@ -86,7 +88,7 @@ struct Theme {
     QColor warning;             ///< wait note ("retrying in …")
     QColor row_separator;       ///< the line under every grid row
     QColor track;               ///< progress track
-    QColor scroll_thumb;
+    QColor scroll_thumb;        ///< 3:1 on the surface
     QColor scroll_thumb_hover;
     QColor button;              ///< secondary button fill
     QColor button_hover;
@@ -102,8 +104,9 @@ struct Theme {
 /// WindowText, Base, Text, Highlight, HighlightedText, Button, GrayText); nothing is
 /// mixed or tinted, and the status colours are the text colour.
 [[nodiscard]] Theme high_contrast_theme(const QPalette& system);
-/// The QPalette of `theme` (Base = input background, Highlight = the selection tint, so
-/// list, menu, calendar and text selections all look like the grids').
+/// The QPalette of `theme` (Base = input background, Highlight = text_selection with
+/// on_accent text, so selected text stands out in an input; ModernStyle gives list and
+/// calendar items the selection tint of the grids instead).
 [[nodiscard]] QPalette make_palette(const Theme& theme);
 /// WCAG 2 contrast ratio of two opaque colours (1..21).
 [[nodiscard]] double contrast_ratio(const QColor& a, const QColor& b);
@@ -181,6 +184,10 @@ void schedule_appearance_refresh();
 [[nodiscard]] QFont bold_form_font();
 /// Segoe UI Variable Text Semibold (Segoe UI Semibold on Windows 10) at `point_size`.
 [[nodiscard]] QFont semibold_font(qreal point_size);
+/// The same families without a size: a font that takes the size of the font it is resolved
+/// against (bold grid cells, the busy panel's wait note). A weight of 600 on "Segoe UI
+/// Variable Text" would give its Bold.
+[[nodiscard]] QFont semibold_face();
 /// Section captions of the input cards: small, semibold, upper case, tracked.
 [[nodiscard]] QFont caption_font();
 /// Hints next to the captions and other secondary text: 9 pt.
@@ -211,7 +218,5 @@ inline constexpr char16_t kInfo = 0xE946;
 [[nodiscard]] QColor wizz_magenta();
 /// Secondary text (hints, `_resolved`, grid summaries): theme().text_muted.
 [[nodiscard]] QColor gray_text();
-/// Search-button text colour while disabled: white at 70 % over the faded magenta.
-[[nodiscard]] QColor search_button_disabled_text();
 
 } // namespace wizz::app::style

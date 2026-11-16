@@ -40,11 +40,11 @@
 
 class QAction;
 class QComboBox;
-class QLabel;
 class QMenu;
 
 namespace wizz::app {
 
+class ElidedLabel;
 class GridTableView;
 
 class FlightGrid final : public QWidget {
@@ -113,7 +113,7 @@ public:
     [[nodiscard]] FlightTableModel* model() const noexcept { return model_; }
     [[nodiscard]] GridTableView* table() const noexcept { return table_; }
     [[nodiscard]] QComboBox* view_combo() const noexcept { return view_; }
-    [[nodiscard]] QLabel* summary_label() const noexcept { return summary_; }
+    [[nodiscard]] ElidedLabel* summary_label() const noexcept { return summary_; }
     [[nodiscard]] QMenu* context_menu() const noexcept { return menu_; }
 
 Q_SIGNALS:
@@ -141,7 +141,7 @@ private:
     FlightTableModel* model_ = nullptr;
     GridTableView* table_ = nullptr;
     QComboBox* view_ = nullptr;
-    QLabel* summary_ = nullptr;
+    ElidedLabel* summary_ = nullptr;
     QMenu* menu_ = nullptr;
     QAction* open_ = nullptr;
     QAction* copy_ = nullptr;

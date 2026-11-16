@@ -68,9 +68,7 @@ QColor SearchButton::background_color() const
         return isEnabled() ? theme.accent : theme.window;  // system Highlight / Window only
     }
     if (!isEnabled()) {
-        QColor faded = theme.accent;
-        faded.setAlphaF(0.45F);
-        return faded;
+        return theme.input_disabled;  // like every disabled control, in both schemes
     }
     if (isDown()) {
         return theme.accent_pressed;
@@ -84,10 +82,7 @@ QColor SearchButton::background_color() const
 QColor SearchButton::text_color() const
 {
     const style::Theme& theme = style::theme();
-    if (theme.high_contrast) {
-        return isEnabled() ? theme.on_accent : theme.text_disabled;  // HighlightedText / GrayText
-    }
-    return isEnabled() ? theme.on_accent : style::search_button_disabled_text();
+    return isEnabled() ? theme.on_accent : theme.text_disabled;  // High Contrast: HighlightedText / GrayText
 }
 
 void SearchButton::paintEvent(QPaintEvent* /*event*/)
@@ -96,8 +91,9 @@ void SearchButton::paintEvent(QPaintEvent* /*event*/)
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF face = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const style::Theme& theme = style::theme();
-    // High Contrast: a disabled button keeps a GrayText outline, so its shape stays visible.
-    painter.setPen(theme.high_contrast && !isEnabled() ? QPen(theme.text_disabled, 1.0) : QPen(Qt::NoPen));
+    // Disabled: an outline keeps the shape visible on the card (High Contrast: GrayText).
+    painter.setPen(isEnabled() ? QPen(Qt::NoPen)
+                               : QPen(theme.high_contrast ? theme.text_disabled : theme.input_border, 1.0));
     painter.setBrush(background_color());
     painter.drawRoundedRect(face, ModernStyle::kRadius, ModernStyle::kRadius);
 

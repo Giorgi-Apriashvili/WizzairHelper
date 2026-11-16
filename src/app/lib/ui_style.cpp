@@ -197,6 +197,7 @@ Theme light_theme()
     t.on_accent = QColor(0xFF, 0xFF, 0xFF);
     t.selection = QColor(0xFB, 0xE2, 0xEF);
     t.selection_text = t.text;
+    t.text_selection = t.accent;
     t.hover = QColor(0xF3, 0xF1, 0xF6);
     t.cheapest = QColor(0xE7, 0xF5, 0xEB);
     t.cheapest_selection = QColor(0xC6, 0xE9, 0xD0);
@@ -205,8 +206,8 @@ Theme light_theme()
     t.warning = QColor(0x9A, 0x5B, 0x00);
     t.row_separator = QColor(0xEE, 0xED, 0xF1);
     t.track = QColor(0xE6, 0xE4, 0xEA);
-    t.scroll_thumb = QColor(0xC9, 0xC5, 0xCF);
-    t.scroll_thumb_hover = QColor(0x9E, 0x99, 0xA7);
+    t.scroll_thumb = t.input_underline;
+    t.scroll_thumb_hover = t.text_muted;
     t.button = QColor(0xFF, 0xFF, 0xFF);
     t.button_hover = QColor(0xF4, 0xF2, 0xF7);
     t.button_pressed = QColor(0xEA, 0xE7, 0xEE);
@@ -239,16 +240,17 @@ Theme dark_theme()
     t.on_accent = QColor(0xFF, 0xFF, 0xFF);
     t.selection = QColor(0x4B, 0x18, 0x34);
     t.selection_text = t.text;
+    t.text_selection = QColor(0xD4, 0x1A, 0x80);  // the brand magenta is 2.6:1 on the dark input
     t.hover = QColor(0x33, 0x31, 0x3B);
     t.cheapest = QColor(0x17, 0x30, 0x22);
-    t.cheapest_selection = QColor(0x22, 0x52, 0x36);
+    t.cheapest_selection = QColor(0x1F, 0x4C, 0x32);  // the focus bar keeps 3:1 on it
     t.success = QColor(0x5C, 0xCB, 0x85);
     t.failure = QColor(0xFF, 0x7A, 0x6E);
     t.warning = QColor(0xF5, 0xB0, 0x4A);
     t.row_separator = QColor(0x2A, 0x29, 0x31);
     t.track = QColor(0x34, 0x32, 0x3C);
-    t.scroll_thumb = QColor(0x4D, 0x4A, 0x56);
-    t.scroll_thumb_hover = QColor(0x6E, 0x6B, 0x79);
+    t.scroll_thumb = t.input_underline;
+    t.scroll_thumb_hover = t.text_muted;
     t.button = QColor(0x2B, 0x2A, 0x32);
     t.button_hover = QColor(0x34, 0x33, 0x3C);
     t.button_pressed = QColor(0x24, 0x23, 0x2A);
@@ -290,6 +292,7 @@ Theme high_contrast_theme(const QPalette& system)
     t.on_accent = highlighted_text;
     t.selection = highlight;
     t.selection_text = highlighted_text;
+    t.text_selection = highlight;
     t.hover = window;
     t.cheapest = window;
     t.cheapest_selection = highlight;
@@ -327,10 +330,12 @@ QPalette make_palette(const Theme& t)
     set_all(QPalette::Mid, t.border);
     set_all(QPalette::Dark, t.input_border);
     set_all(QPalette::Shadow, t.dark ? QColor(0, 0, 0) : QColor(0x8A, 0x86, 0x92));
-    // Every selection is the soft tint with the normal text colour, like the grids': list
-    // items, combo and completer popups, menus, the calendar, selected text.
-    set_all(QPalette::Highlight, t.selection);
-    set_all(QPalette::HighlightedText, t.selection_text);
+    // Selected text in the inputs and the log: the accent with white text, so a selection
+    // (the place box's inline completion, a select-all before typing) stands out from the
+    // input. Item selections (lists, popups, the calendar) are the soft tint of the grids:
+    // ModernStyle paints those (CE_ItemViewItem), menus and the grids paint their own.
+    set_all(QPalette::Highlight, t.text_selection);
+    set_all(QPalette::HighlightedText, t.on_accent);
     set_all(QPalette::Link, t.accent_text);
     set_all(QPalette::LinkVisited, t.accent_text);
     set_all(QPalette::Accent, t.accent);
@@ -506,11 +511,20 @@ QFont data_font()
     return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
 }
 
-QFont semibold_font(qreal point_size)
+QFont semibold_face()
 {
     // The semibold faces are families of their own in Windows' font list; asking for
     // weight 600 of "Segoe UI Variable Text" would give its Bold.
-    return with_families(families({"Segoe UI Variable Text Semibold"}, {"Segoe UI Semibold"}), point_size);
+    QFont font;
+    font.setFamilies(families({"Segoe UI Variable Text Semibold"}, {"Segoe UI Semibold"}));
+    return font;
+}
+
+QFont semibold_font(qreal point_size)
+{
+    QFont font = semibold_face();
+    font.setPointSizeF(point_size);
+    return font;
 }
 
 QFont bold_form_font()
@@ -608,11 +622,6 @@ QColor wizz_magenta()
 QColor gray_text()
 {
     return theme().text_muted;
-}
-
-QColor search_button_disabled_text()
-{
-    return QColor(255, 255, 255, 178);
 }
 
 } // namespace wizz::app::style

@@ -2,9 +2,10 @@
 // Cell painting of both result grids (01 §8.3, §9.1) in the look of DECISIONS
 // D-53: rows are separated by a thin line instead of a cell grid; a
 // selected row takes a soft accent tint (or the model's own selection colour:
-// the cheapest rows' deeper green) whether or not the grid has the focus, and
-// while the grid has the keyboard focus a 3 px accent bar marks the row at the
-// left edge of the view. There is no hover effect. Unselected rows keep the
+// the cheapest rows' deeper green) and a 3 px bar at the left edge of the view:
+// the accent while the grid has the keyboard focus, the muted text colour
+// otherwise. A focused grid's current row has the accent bar even when it is not
+// selected, so the focus always shows. There is no hover effect. Unselected rows keep the
 // model's Background and Foreground roles (the cheapest rows' green, the muted
 // text of unavailable fares). A cell whose text does not fit shows it in a
 // tooltip (DataGridView.ShowCellToolTips). Painting allocates nothing per

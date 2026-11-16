@@ -267,6 +267,47 @@ TEST(InputPanel, Cards_sit_in_a_2_by_2_grid_with_the_card_paddings)
               "Outbound: from Budapest (BUD), Hungary → airports within 250 km: BUD 0 km.   To: anywhere.");
 }
 
+TEST(InputPanel, Every_input_and_card_has_a_name_for_screen_readers)
+{
+    // The visible labels "within", "between", "and" and "to" do not tell the two radii, the two
+    // date windows or the night limits apart; each input has a name of its own, the field
+    // labels are buddies of their inputs, and each card is named after its caption.
+    const auto panel = make_panel();
+    const std::vector<std::pair<const QWidget*, const char*>> expected{
+        {panel->from_box(), "From"},
+        {panel->from_radius_box(), "From: radius in km"},
+        {panel->to_box(), "To"},
+        {panel->to_radius_box(), "To: radius in km"},
+        {panel->adults_box(), "Adults"},
+        {panel->fare_box(), "Fares"},
+        {panel->currency_box(), "Prices in"},
+        {panel->out_from_picker(), "Outbound: earliest date"},
+        {panel->out_to_picker(), "Outbound: latest date"},
+        {panel->ret_from_picker(), "Return: earliest date"},
+        {panel->ret_to_picker(), "Return: latest date"},
+        {panel->min_nights_box(), "Round trips: fewest nights"},
+        {panel->max_nights_box(), "Round trips: most nights"},
+    };
+    for (const auto& [widget, name] : expected) {
+        EXPECT_EQ(widget->accessibleName().toStdString(), name);
+    }
+    const auto buddy_of = [&panel](const QWidget* input) {
+        for (const QLabel* label : panel->findChildren<QLabel*>()) {
+            if (label->buddy() == input) {
+                return label->text().toStdString();
+            }
+        }
+        return std::string{};
+    };
+    EXPECT_EQ(buddy_of(panel->from_box()), "From");
+    EXPECT_EQ(buddy_of(panel->to_box()), "To");
+    EXPECT_EQ(buddy_of(panel->adults_box()), "Adults");
+    EXPECT_EQ(buddy_of(panel->currency_box()), "Prices in");
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(card(*panel, i)->accessibleName(), card(*panel, i)->title_label()->text()) << i;
+    }
+}
+
 TEST(InputPanel, Widths_heights_ranges_steps_and_tooltips_follow_the_table)
 {
     const HostedPanel hosted{1288};
@@ -881,9 +922,24 @@ TEST(InputPanel, The_cards_fit_the_minimum_window)
             const QWidget* section = panel.row(index);
             const QRect rect = rect_in(button, section);
             EXPECT_EQ(rect.right(), section->width() - wizz::app::SectionCard::kPadding.right() - 1) << where;
-            EXPECT_NEAR(rect.bottom(), section->height() - wizz::app::SectionCard::kPadding.bottom() - 1, 1)
+            EXPECT_EQ(rect.bottom(), section->height() - wizz::app::SectionCard::kPadding.bottom() - 1)
                 << where << ": on the card's last row";
             EXPECT_EQ(button->size(), button->sizeHint()) << where << ": never squeezed";
+        }
+        // Cards side by side keep their rows on one line, hint or not: the first and second
+        // inputs of Where and Travellers, the date pickers of Outbound and Return, and the two
+        // search buttons (an aligned pair of primary buttons).
+        const auto top = [&panel](const QWidget* widget) { return rect_in(widget, &panel).top(); };
+        EXPECT_EQ(top(panel.from_box()), top(panel.adults_box())) << where;
+        EXPECT_EQ(top(panel.to_box()), top(panel.currency_box())) << where;
+        EXPECT_EQ(top(panel.out_from_picker()), top(panel.ret_from_picker())) << where;
+        EXPECT_EQ(top(panel.search_outbound_button()), top(panel.search_return_button())) << where;
+        EXPECT_EQ(rect_in(panel.search_outbound_button(), &panel).bottom(),
+                  rect_in(panel.search_return_button(), &panel).bottom()) << where;
+        for (int i = 0; i < 4; ++i) {
+            EXPECT_EQ(panel.row(i)->layout()->itemAt(0)->geometry().height(),
+                      panel.row(0)->layout()->itemAt(0)->geometry().height())
+                << where << ": caption row of card " << i;
         }
     };
 

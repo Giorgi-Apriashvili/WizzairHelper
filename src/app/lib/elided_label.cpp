@@ -31,9 +31,28 @@ void ElidedLabel::setAlignment(Qt::Alignment alignment)
     update();
 }
 
+void ElidedLabel::set_compact_font(const std::optional<QFont>& font)
+{
+    if (compact_ == font) {
+        return;
+    }
+    compact_ = font;
+    update();
+}
+
+QFont ElidedLabel::painted_font() const
+{
+    if (compact_ &&
+        fontMetrics().elidedText(text_, Qt::ElideRight, contentsRect().width(), Qt::TextSingleLine) != text_) {
+        return *compact_;
+    }
+    return font();
+}
+
 QString ElidedLabel::elided_text() const
 {
-    return fontMetrics().elidedText(text_, Qt::ElideRight, contentsRect().width(), Qt::TextSingleLine);
+    return QFontMetrics(painted_font())
+        .elidedText(text_, Qt::ElideRight, contentsRect().width(), Qt::TextSingleLine);
 }
 
 bool ElidedLabel::is_elided() const
@@ -79,6 +98,7 @@ void ElidedLabel::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter(this);
     painter.setPen(palette().color(foregroundRole()));
+    painter.setFont(painted_font());
     painter.drawText(contentsRect(), static_cast<int>(alignment_) | Qt::TextSingleLine, elided_text());
 }
 

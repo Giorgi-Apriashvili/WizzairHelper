@@ -1,10 +1,12 @@
 // SearchButton: 01 §4.5 StyleSearchButton in the look of DECISIONS D-53 — the primary
 // action: the accent (#C5006E) with white semibold text, as tall as the inputs beside it,
-// rounded, lighter under the mouse, darker while pressed, faded while disabled.
+// rounded, lighter under the mouse, darker while pressed; disabled like every other
+// disabled control.
 
 #include "search_button.hpp"
 
 #include "input_test_support.hpp"
+#include "look_test_support.hpp"
 #include "modern_style.hpp"
 #include "ui_style.hpp"
 
@@ -24,17 +26,6 @@ namespace style = wizz::app::style;
 using wizz::app::ModernStyle;
 using wizz::app::SearchButton;
 using namespace wizz::test::gui;
-
-/// `colour` (with its alpha) composited over the opaque `back`.
-[[nodiscard]] QColor over(const QColor& colour, const QColor& back)
-{
-    const double a = colour.alphaF();
-    const auto channel = [a](int fore, int behind) {
-        return static_cast<int>(std::lround(fore * a + behind * (1.0 - a)));
-    };
-    return {channel(colour.red(), back.red()), channel(colour.green(), back.green()),
-            channel(colour.blue(), back.blue())};
-}
 
 void expect_near(const QColor& actual, const QColor& expected, int tolerance, const char* what)
 {
@@ -66,12 +57,36 @@ TEST(SearchButton, Uses_the_semibold_UI_font_the_accent_and_white_text)
     button.setDown(false);
     button.setAttribute(Qt::WA_UnderMouse, false);
 
-    button.setEnabled(false);  // disabled: the accent faded towards the surface, 70 % white text
-    EXPECT_EQ(button.background_color().rgb(), theme.accent.rgb());
-    EXPECT_NEAR(button.background_color().alphaF(), 0.45, 0.01);
-    EXPECT_EQ(button.text_color(), style::search_button_disabled_text());
-    EXPECT_EQ(button.text_color().rgb(), QColor(Qt::white).rgb());
-    EXPECT_EQ(button.text_color().alpha(), 178);
+    button.setEnabled(false);  // disabled: the disabled input fill and text, like every disabled control
+    EXPECT_EQ(button.background_color(), theme.input_disabled);
+    EXPECT_EQ(button.text_color(), theme.text_disabled);
+}
+
+TEST(SearchButton, A_disabled_button_reads_as_disabled_in_both_schemes)
+{
+    // A search disables both buttons: in neither scheme may they look like an enabled (or a
+    // pressed) accent button, and their label is clearly fainter than the enabled one.
+    const wizz::test::look::LookGuard guard;
+    for (const char* scheme : {"light", "dark"}) {
+        qputenv("WIZZ_COLOR_SCHEME", scheme);
+        style::refresh_appearance();
+        const style::Theme& theme = style::theme();
+        SearchButton button(QStringLiteral("Search outbound"));
+        const double enabled = style::contrast_ratio(button.text_color(), button.background_color());
+        button.setEnabled(false);
+        const double disabled = style::contrast_ratio(button.text_color(), button.background_color());
+        EXPECT_GE(enabled, 4.5) << scheme;
+        EXPECT_LT(disabled, 3.0) << scheme << ": a disabled label is faint";
+        EXPECT_GT(enabled - disabled, 2.5) << scheme;
+        for (const QColor& accent : {theme.accent, theme.accent_hover, theme.accent_pressed}) {
+            EXPECT_NE(button.background_color(), accent) << scheme;
+        }
+        EXPECT_LT(style::contrast_ratio(button.background_color(), theme.surface), 1.2)
+            << scheme << ": the disabled face is close to the card, not an accent colour";
+        const QColor face = button.background_color();
+        EXPECT_LE(std::max({face.red(), face.green(), face.blue()}) - std::min({face.red(), face.green(), face.blue()}), 8)
+            << scheme << ": a neutral grey, not magenta";
+    }
 }
 
 TEST(SearchButton, As_tall_as_the_inputs_and_as_wide_as_icon_text_and_padding)
@@ -125,10 +140,11 @@ TEST(SearchButton, Paints_a_rounded_accent_face_without_border)
     EXPECT_EQ(image.pixelColor(5, 1), theme.accent) << "the straight edge starts after the radius";
     save_render(button, QStringLiteral("search-button"));
 
-    // Disabled: the faded face over the window colour behind it.
+    // Disabled: the disabled input fill inside an input-border outline.
     button.setEnabled(false);
     const QImage disabled = button.grab().toImage();
-    expect_near(disabled.pixelColor(2, middle), over(button.background_color(), theme.window), 2, "disabled face");
+    expect_near(disabled.pixelColor(2, middle), theme.input_disabled, 2, "disabled face");
+    expect_near(disabled.pixelColor(0, middle), theme.input_border, 2, "disabled outline");
     save_render(button, QStringLiteral("search-button-disabled"));
 }
 

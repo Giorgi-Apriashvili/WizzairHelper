@@ -114,6 +114,7 @@ private:
     QBrush gray_text_;
     QBrush cheapest_;
     QBrush cheapest_selection_;
+    bool high_contrast_ = false;  ///< the cheapest rows are semibold instead of tinted
     bool keep_horizontal_scroll_ = false;
 };
 

@@ -43,13 +43,26 @@ void GridRowDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     const style::Theme& theme = style::theme();
     painter->fillRect(QRect(r.left(), r.bottom(), r.width(), 1), theme.row_separator);
     const auto* view = qobject_cast<const QAbstractItemView*>(option.widget);
-    if (view != nullptr && option.state.testFlag(QStyle::State_Selected) && view->hasFocus() &&
-        r.left() <= 0 && r.right() >= 0) {
-        // The keyboard focus is on this grid: an accent bar at the row's visible left edge.
-        // High Contrast: the row is the system highlight, so the bar takes its text colour.
-        painter->fillRect(QRect(0, r.top(), ModernStyle::kSelectionBarWidth, r.height()),
-                          theme.high_contrast ? theme.selection_text : theme.accent_line);
+    if (view == nullptr || r.left() > 0 || r.right() < 0) {
+        return;  // the bar belongs to the cell at the view's visible left edge
     }
+    const bool selected = option.state.testFlag(QStyle::State_Selected);
+    const bool focused = view->hasFocus();
+    const QModelIndex current = view->currentIndex();
+    const bool keyboard_row = focused && current.isValid() && current.row() == index.row();
+    if (!selected && !keyboard_row) {
+        return;
+    }
+    // A 3 px bar at the row's left edge: the accent on the selected row of a focused grid and
+    // on its current row even when that is not selected (Ctrl+Space, Ctrl+click), so the
+    // keyboard focus always shows; the muted text colour on the selected row of a grid without
+    // focus, so the row the menu and Copy act on stays marked beyond its tint. High Contrast:
+    // the selected row is the system highlight, so the bar takes its text colour.
+    QColor bar = focused ? theme.accent_line : theme.text_muted;
+    if (theme.high_contrast) {
+        bar = selected ? theme.selection_text : theme.text;
+    }
+    painter->fillRect(QRect(0, r.top(), ModernStyle::kSelectionBarWidth, r.height()), bar);
 }
 
 bool GridRowDelegate::helpEvent(QHelpEvent* event, QAbstractItemView* view, const QStyleOptionViewItem& option,

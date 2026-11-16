@@ -19,6 +19,15 @@ namespace {
 constexpr int kIconGap = 8;
 constexpr int kHintGap = 6;
 
+/// The height a one-line plain label in `font` asks for.
+[[nodiscard]] int label_height(const QFont& font)
+{
+    QLabel probe(QStringLiteral("Ag"));
+    probe.setTextFormat(Qt::PlainText);
+    probe.setFont(font);
+    return probe.sizeHint().height();
+}
+
 } // namespace
 
 GlyphLabel::GlyphLabel(char16_t glyph, bool mirrored, QWidget* parent, Tone tone, qreal point_size)
@@ -45,6 +54,7 @@ void GlyphLabel::paintEvent(QPaintEvent* /*event*/)
 
 SectionCard::SectionCard(const QString& title, char16_t glyph, bool mirror_glyph, QWidget* parent) : QWidget(parent)
 {
+    setAccessibleName(title);  // screen readers name the group the fields are in
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(kPadding);
     outer->setSpacing(kHeaderGap);
@@ -60,6 +70,10 @@ SectionCard::SectionCard(const QString& title, char16_t glyph, bool mirror_glyph
     header_->addWidget(icon, 0, Qt::AlignVCenter);
     header_->addWidget(title_, 0, Qt::AlignVCenter);
     header_->addStretch(1);
+    // Every caption row is as tall as one with a hint, so the bodies of two cards side by
+    // side start on one line (and their search buttons end on one), hint or not.
+    header_->addStrut(std::max({icon->sizeHint().height(), title_->sizeHint().height(),
+                                label_height(style::hint_font())}));
     outer->addLayout(header_);
 
     body_ = new QVBoxLayout;
