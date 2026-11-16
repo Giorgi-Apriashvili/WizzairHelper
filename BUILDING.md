@@ -61,9 +61,12 @@ the configure step after adding files.
   clock, en-US).
 - `wizzairhelper_gui_tests`: widget and flow tests on a `QApplication`, run by CTest with
   `QT_QPA_PLATFORM=minimal` (no window appears). Run the binary directly without that variable to
-  use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots. The
-  `AppIcon` tests also read the committed icon files and the icon group of the
-  `WizzairHelper.exe` of the same configuration, which the build makes first.
+  use the real `windows` platform; `WIZZ_GUI_SNAPSHOT_DIR=<dir>` saves widget snapshots, and
+  `LookSnapshots.*` then renders the whole look for a review: the window at the default and the
+  minimum size and every popup, dialog, hover and focus state in light and dark, the Windows 10
+  fonts and the High Contrast fallback (DECISIONS D-53..D-56), checking their layout and that 14
+  round trips are in view. The `AppIcon` tests also read the committed icon files and the icon
+  group of the `WizzairHelper.exe` of the same configuration, which the build makes first.
 - Label `timing`: the R-03 / 05 §5 timing tests of `wizzairhelper_gui_tests` (`FlightGridPerformance.*`,
   the progress timer under a replay). They run alone (RUN_SERIAL) and check the UI thread's own CPU
   time always and wall-clock time unless other processes held the CPUs (DECISIONS D-50), so they hold
@@ -182,7 +185,9 @@ Example (an isolated profile and a replayed network):
 ```
 
 The checker runs a named scenario and validates everything; `--scale 1.5` / `--scale 2` run it at
-150 % / 200 % (`QT_SCALE_FACTOR`), and `--exe` can point at a packaged exe:
+150 % / 200 % (`QT_SCALE_FACTOR`), `--window 980x600` starts the window at that size (through the
+isolated profile's settings.json), `--color-scheme light|dark`, `--high-contrast` and
+`--fonts windows10` set the look's switches below, and `--exe` can point at a packaged exe:
 
 ```powershell
 python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\WizzairHelper.exe `
@@ -192,3 +197,16 @@ python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\Wizza
 Scenarios: `named_destination`, `anywhere_return_from_top`, `not_served`, `same_area`, `over_500`,
 `cancel_waiting`, `cancel_retrying`, and the generated heavy replays `heavy_cached` and
 `cancel_cached` (every route from Budapest in the frozen live map, about 6500 fares).
+
+### The look's diagnostic switches
+
+The app follows Windows: light or dark from the app mode, High Contrast with the system's colours
+and the plain native style, and it changes along while it runs (DECISIONS D-53..D-56). For tests,
+screenshots and diagnosis these environment variables override what Windows says, like
+`QT_SCALE_FACTOR`; a normal installation never needs them:
+
+| Variable | Effect |
+|---|---|
+| `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
+| `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
+| `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
