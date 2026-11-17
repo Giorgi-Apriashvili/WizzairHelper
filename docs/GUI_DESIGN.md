@@ -98,8 +98,9 @@ has padding (12, 4, 12, 4). Inputs and buttons are `ModernStyle::control_height`
 height + 10) tall, the line as Qt lays it out (`ModernStyle::line_height`: the ascent plus the descent
 rounded up, 18 px for the UI font without hinting, so 28 px at 100 %; D-58); grid rows are the 9 pt
 data font's height + 12 (28 px at 100 %); header cells have 9 / 5 px padding around one line
-(28 px). With these, 14 round trips are in view at the default 1320 x 820 window
-(`MainWindowLayout.*` checks it in CTest, `LookSnapshots` on the real platform); the prototype had 12 and the windowsvista look 19.
+(28 px). With these, 14 round trips are in view at the default 1320 x 820 window, with 2 px to
+spare (`MainWindowLayout.*` checks it in CTest, `LookSnapshots` on the real platform); the prototype
+had 12 and the windowsvista look 19.
 
 **Fonts.** UI: Segoe UI Variable Text 10 pt; grid cells: Segoe UI Variable Text 9 pt with
 semibold 10 pt headers; captions: Segoe UI Variable Small Semibold 8 pt, upper case, +0.8 px;
@@ -119,8 +120,9 @@ ui_style's fonts carry it (hinting and axis set explicitly, so `resolve()` keeps
 font is one of them, and `style::keep_text_rendering()`, an application event filter, fits every
 widget's font on Polish and FontChange in every look: a copy of a font keeps its axis, so a setBold()
 copy (the calendar's month and year buttons) or a QFont built without ui_style would otherwise draw
-at the wrong weight. ModernStyle draws menu items in a fitted font (a default action bold). High
-Contrast keeps the rendering. Unhinted metrics are fractional: lines are measured as Qt lays them out
+at the wrong weight. ModernStyle draws menu items in a fitted font (a default action bold). A font
+the app derives for painting alone, with another weight or family, goes through
+`style::fit_text_rendering()` too. High Contrast keeps the rendering. Unhinted metrics are fractional: lines are measured as Qt lays them out
 (`ModernStyle::line_height`), and widths that Qt elides by a fraction of a pixel unrounded (ElidedLabel,
 the grids' cut-cell tooltips).
 

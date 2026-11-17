@@ -73,16 +73,6 @@ constexpr wizz::Date d(int year, unsigned month, unsigned day)
     return wizz::Date::from_ymd(year, month, day);
 }
 
-/// Draws with `rendering` from now on, as a process started with WIZZ_TEXT_RENDERING would: the
-/// look is installed again (the application font is built anew). LookGuard puts the suite's
-/// rendering back.
-void use(TextRendering rendering)
-{
-    qputenv("WIZZ_TEXT_RENDERING", style::text_rendering_name(rendering));
-    ASSERT_EQ(style::text_rendering(), rendering);
-    ASSERT_TRUE(style::apply_application_look());
-}
-
 [[nodiscard]] std::optional<float> axis_of(const QFont& font)
 {
     return font.isVariableAxisSet(kWeight) ? std::optional<float>(font.variableAxisValue(kWeight)) : std::nullopt;
@@ -649,11 +639,11 @@ TEST(TextRendering, Every_rendering_reaches_every_font_widget_popup_and_dialog)
         check_everything(check);
         EXPECT_GT(check.fonts(), 150);
         EXPECT_EQ(check.problems(), std::vector<std::string>{});
-        if (heavier) {
+        if (c.rendering != TextRendering::natural_heavier || c.windows10) {
+            EXPECT_EQ(check.fonts_with_axis(), 0) << "no weight axis anywhere";
+        } else if (heavier) {
             EXPECT_GT(check.fonts_with_axis(), check.fonts() * 9 / 10) << "nearly every font is a variable face";
-        } else {
-            EXPECT_EQ(check.fonts_with_axis(), 0);
-        }
+        }  // else no Segoe UI Variable here: Cascadia Mono may still have an axis, which font_problem checks
     }
 }
 
