@@ -273,7 +273,7 @@ TEST(SettingsWindow, Enter_clicks_the_focused_button_and_otherwise_Close)
     gui::send_key(dialog.check_now_button(), QEvent::KeyPress, Qt::Key_Return);
     wait_idle(rig);
     EXPECT_EQ(rig.backend->manual_checks(), 1) << "Enter on Check now checks";
-    EXPECT_EQ(rig.window().settings_dialog(), &dialog) << "and leaves the window open";
+    ASSERT_EQ(rig.window().settings_dialog(), &dialog) << "and leaves the window open";
     EXPECT_TRUE(dialog.isVisible());
     EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button());
 
