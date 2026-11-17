@@ -13,6 +13,15 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 |---|---|---|---|
 | [1.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.0.0) | 2026-11-16 | `8dbb08d` | The first release: the app, the per-user installer and portable ZIP, the daily update check and the application icon. |
 | [2.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.0.0) | 2026-11-16 | `3c399d2` | The grouped-cards look: inputs in four titled sections, a modern theme in light and dark that follows Windows, High Contrast respected, a new Tab order (DECISIONS D-53 to D-57). |
+| [2.1.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.1.0) | 2026-11-17 | `935cf43` | Smooth text: natural ClearType rendering, Segoe UI Variable a touch heavier on Windows 11 (DECISIONS D-58). |
+
+v2.1.0 verification: CI run 44076402542 on the merge `e65dcf4` and the tag's run 44080055528 on `935cf43` passed on
+all three legs (msvc-release with the 23 end-to-end runs, msvc-debug, clang-cl-release); the tag's run published the
+release. Locally the release commit passed 1501 / 1501 tests in Release, and the merge 1478 / 1478 in Debug and with
+clang-cl. `tools/release_check.ps1 -Tag v2.1.0`: three assets (installer 10,154,146 bytes, ZIP 11,704,882 bytes,
+`SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints `WizzairHelper 2.1.0`, and
+`releases/latest` is v2.1.0. Not verified: a real Windows 10 (its fonts were simulated with `WIZZ_FONTS=windows10`),
+a real High Contrast theme, physical 150 % / 200 % monitors, and an update run by the installed app.
 
 v2.0.0 verification: the first tag on `903bfad` failed in CI and published nothing: `autotest.cancel_retrying` froze
 the first retry note for 149 ms on the runner, a cold-disk read of the fallback font that the start-up warm-up
