@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -134,6 +135,29 @@ TEST(LayoutCheck, Tabs_that_do_not_fit_are_reported)
     tabs->setFixedWidth(60);
     QApplication::processEvents();
     EXPECT_TRUE(has_problem(layout_problems(window), "QTabBar: tabs do not fit"));
+}
+
+TEST(LayoutCheck, A_tab_corner_widget_must_be_whole_and_clear_of_the_tabs)
+{
+    // The tab widget places its corner widgets itself (the Settings button, D-63), so no
+    // layout check sees them.
+    QTabWidget tabs;
+    tabs.addTab(new QWidget, QStringLiteral("Outbound"));
+    tabs.addTab(new QWidget, QStringLiteral("Return"));
+    auto* corner = new QLabel(QStringLiteral("Settings"));
+    tabs.setCornerWidget(corner, Qt::TopRightCorner);
+    tabs.resize(500, 200);
+    tabs.show();
+    QApplication::processEvents();
+    ASSERT_TRUE(corner->isVisible());
+    EXPECT_EQ(layout_problems(tabs), std::vector<std::string>{});
+
+    corner->move(0, corner->y());  // over the first tab (no relayout before the check)
+    EXPECT_TRUE(has_problem(layout_problems(tabs), "QLabel 'Settings': overlaps the tab 'Outbound'"));
+    corner->setGeometry(tabs.width() - 12, corner->y(), 12, corner->height());
+    EXPECT_TRUE(has_problem(layout_problems(tabs), "QLabel 'Settings': smaller than its text"));
+    corner->setGeometry(tabs.width() - 20, corner->y(), corner->sizeHint().width(), corner->height());
+    EXPECT_TRUE(has_problem(layout_problems(tabs), "QLabel 'Settings': clipped by its parent QTabWidget"));
 }
 
 TEST(LayoutCheck, The_main_window_has_no_problems_and_Cancel_is_visible)

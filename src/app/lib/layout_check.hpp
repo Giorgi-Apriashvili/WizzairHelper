@@ -12,7 +12,9 @@
 //                                elide or wrap by design, and widgets with an
 //                                Ignored size policy, are exempt);
 //   * "overlaps …"             — two visible widgets of the same layout intersect;
-// and for a QTabBar whose tabs do not fit ("tabs do not fit").
+// and for a QTabBar whose tabs do not fit ("tabs do not fit"). A QTabWidget's corner
+// widgets (the Settings button, D-63), which the tab widget places itself, are checked
+// for the first three and for "overlaps the tab '…'".
 //
 // Each problem is one line "<widget>: <problem>", where <widget> is the class name
 // plus the object name or visible text. Test-only diagnostics of --autotest (D-30)
