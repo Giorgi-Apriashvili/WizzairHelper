@@ -12,11 +12,15 @@
 #include "qt_strings.hpp"
 #include "round_trip_grid.hpp"
 #include "search_button.hpp"
+#include "settings_button.hpp"
+#include "settings_dialog.hpp"
 #include "update_bar.hpp"
 #include "ui_style.hpp"
 #include "window_placement.hpp"
 
+#include "wizz/services/updater.hpp"
 #include "wizz/ui/strings.hpp"
+#include "wizz/ui/update_model.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -125,8 +129,10 @@ MainWindow::MainWindow(std::shared_ptr<const AppServices> services, ui::AppSetti
 MainWindow::~MainWindow()
 {
     qApp->removeEventFilter(this);
-    // The flows go first (they reference the widgets), then the widgets, while the
-    // services they use (clock, locale) are still alive.
+    // The Settings window goes first (it follows the updater), then the flows (they
+    // reference the widgets), then the widgets, while the services they use (clock,
+    // locale) are still alive.
+    delete settings_dialog_.data();
     delete updates_;
     updates_ = nullptr;
     delete autotest_runner_;
@@ -156,6 +162,10 @@ void MainWindow::build()
     tabs_->addTab(log_, to_qstring(strings::kTabLog));
     busy_ = new BusyPanel(*services_->clock, locale, central);
     update_bar_ = new UpdateBar(central);  // hidden until an update is offered (D-46)
+    // The gear at the right end of the tab row (D-63): a corner widget is never taller
+    // than the tab bar, so it costs the results no height.
+    settings_button_ = new SettingsButton(tabs_);
+    tabs_->setCornerWidget(settings_button_, Qt::TopRightCorner);
 
     // Dock order (01 §4.2): the busy panel has a fixed height and is laid out first; the
     // input panel takes its height for the width; the tabs fill the rest. The update bar
@@ -176,13 +186,15 @@ void MainWindow::build()
     setCentralWidget(central);
 
     // Tab order (01 §6.3): the input panel's own order, then the result tabs, then Cancel;
-    // the update bar's buttons come between the input panel and the tabs while it shows.
+    // the update bar's buttons come between the input panel and the tabs while it shows,
+    // and Settings right after the tabs, at the end of their row (D-63), before the page.
     const std::vector<QWidget*> inputs = input_->tab_order();
     if (!inputs.empty()) {
         QWidget::setTabOrder(inputs.back(), update_bar_->action_button());
     }
     QWidget::setTabOrder(update_bar_->action_button(), update_bar_->later_button());
     QWidget::setTabOrder(update_bar_->later_button(), tabs_);
+    QWidget::setTabOrder(tabs_->tabBar(), settings_button_);
 }
 
 bool MainWindow::enable_updates(UpdateHooks hooks)
@@ -217,6 +229,7 @@ void MainWindow::wire()
     connect(inbound_, &FlightGrid::contents_changed, controller, [controller] { controller->update_tab_titles(); });
     connect(trips_, &RoundTripGrid::filters_changed, controller, [controller] { controller->recompute_trips(); });
     connect(busy_, &BusyPanel::cancel_requested, controller, &Controller::cancel_work);
+    connect(settings_button_, &QPushButton::clicked, this, [this] { (void)open_settings(); });
     outbound_->set_busy_query([controller] { return controller->is_working(); });
     inbound_->set_busy_query([controller] { return controller->is_working(); });
 }
@@ -315,6 +328,51 @@ void MainWindow::select_page(Page which)
 }
 
 // ---------------------------------------------------------------------------
+// The Settings window (D-62, D-63)
+// ---------------------------------------------------------------------------
+
+SettingsDialog* MainWindow::settings_dialog() const noexcept
+{
+    return settings_dialog_.data();
+}
+
+SettingsDialog* MainWindow::open_settings()
+{
+    if (SettingsDialog* open = settings_dialog_.data(); open != nullptr) {
+        open->raise();
+        open->activateWindow();
+        return open;
+    }
+    const ui::UpdateStatusView status =
+        updates_ != nullptr ? updates_->status_view()
+                            : ui::updates_off_view(update::parse_version(WIZZ_VERSION_STRING).value_or(update::Version{}));
+    auto* dialog = new SettingsDialog(settings_.updates, status, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    settings_dialog_ = dialog;
+    connect(dialog, &SettingsDialog::options_changed, this, &MainWindow::apply_update_options);
+    if (updates_ != nullptr) {
+        UpdateController* const updates = updates_;
+        connect(dialog, &SettingsDialog::check_now_requested, updates, &UpdateController::check_now);
+        // A check or a download shows live, and so does what the bar's buttons did (D-62).
+        connect(updates, &UpdateController::status_changed, dialog,
+                [dialog, updates] { dialog->show_status(updates->status_view()); });
+    }
+    dialog->open();  // window-modal: no nested event loop, the updater keeps running
+    return dialog;
+}
+
+void MainWindow::apply_update_options(const update::UpdateOptions& options)
+{
+    settings_.updates = options;
+    if (updates_ != nullptr) {
+        updates_->set_options(options);  // applies at once (D-61)
+    }
+    if (!is_autotest()) {
+        (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Settings (01 §13)
 // ---------------------------------------------------------------------------
 
@@ -373,6 +431,9 @@ Task<> MainWindow::on_shown()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (SettingsDialog* settings = settings_dialog_.data(); settings != nullptr) {
+        settings->close();  // e.g. "Update now" finished while it was open
+    }
     controller_->cancel_work();  // stop any running work first
     if (!is_autotest()) {
         input_->commit_numeric_edits();  // the X / Alt+F4 move no focus: read the typed number too

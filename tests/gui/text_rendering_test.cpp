@@ -23,6 +23,7 @@
 #include "place_chooser_dialog.hpp"
 #include "place_combo.hpp"
 #include "round_trip_grid.hpp"
+#include "settings_dialog.hpp"
 #include "ui_style.hpp"
 
 #include "wizz/core/locale.hpp"
@@ -293,7 +294,7 @@ void check_everything(Collector& check)
     check.font(QToolTip::font(), "tooltip font");
     for (const char* name : {"QMenu", "QMenuBar", "QMessageBoxLabel", "QTipLabel", "QAbstractItemView", "QListView",
                              "QHeaderView", "QComboBox", "QComboMenuItem", "QLineEdit", "QLabel", "QPushButton",
-                             "QCalendarWidget", "QToolButton", "QTabBar", "QCheckBox", "QDialog"}) {
+                             "QCalendarWidget", "QToolButton", "QTabBar", "QCheckBox", "QRadioButton", "QDialog"}) {
         check.font(QApplication::font(name), std::string{"QApplication::font(\""} + name + "\")");
     }
 
@@ -420,6 +421,17 @@ void check_everything(Collector& check)
         pump();
         check.widgets(chooser, "place chooser");
         chooser.reject();
+    }
+    {
+        // The Settings window (D-63), with the portable note in its 9 pt hint font.
+        wizz::ui::UpdateStatusView status =
+            wizz::ui::updates_off_view(wizz::update::Version{2, 1, 0});
+        status.when_found_note = std::string{wizz::ui::update_strings::kPortableNote};
+        wizz::app::SettingsDialog settings({}, status, &window);
+        settings.show();
+        pump();
+        check.widgets(settings, "settings window");
+        settings.reject();
     }
 }
 

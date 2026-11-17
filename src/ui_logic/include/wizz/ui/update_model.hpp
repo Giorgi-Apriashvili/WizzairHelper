@@ -91,6 +91,8 @@ inline constexpr std::string_view kUpdateNow = "Update now";
 inline constexpr std::string_view kSettingsTitle = "Settings";
 inline constexpr std::string_view kUpdatesSection = "Updates";
 inline constexpr std::string_view kCheckNow = "Check now";
+/// Check now while its check runs (busy and disabled).
+inline constexpr std::string_view kCheckNowBusy = "Checking…";
 inline constexpr std::string_view kClose = "Close";
 inline constexpr std::string_view kCheckAutomatically = "Check for updates automatically";
 /// The frequency drop-down's accessible name.

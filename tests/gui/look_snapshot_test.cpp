@@ -10,6 +10,14 @@
 // -disabled, -hover, -focus-*; win10-light-window*.png (WIZZ_FONTS=windows10) and
 // contrast-window*.png (the High Contrast fallback, probe forced on). Everything is drawn
 // with the run's WIZZ_TEXT_RENDERING (D-58: the default, or hinted / natural to compare).
+//
+// The Settings button and window (D-63) have a test of their own, so they can be rendered
+// alone at 100, 150 and 200 %: <look>-tab-row-settings.png, -focus-settings.png,
+// -hover-settings.png, -window-with-settings.png (the window open over the main window),
+// -settings-<state>.png (with the title bar: never, latest, checking, available,
+// downloading, ready, failed, portable, autotest) and -update-bar-<choice>.png (the bar of
+// each install choice), for light, dark and High Contrast ("contrast"); every window it
+// renders has its layout checked.
 
 #include "app_test_support.hpp"
 #include "busy_panel.hpp"
@@ -28,8 +36,11 @@
 #include "place_chooser_dialog.hpp"
 #include "round_trip_grid.hpp"
 #include "search_button.hpp"
+#include "settings_button.hpp"
+#include "settings_dialog.hpp"
 #include "ui_style.hpp"
 #include "update_bar.hpp"
+#include "update_test_support.hpp"
 #include "window_capture.hpp"
 
 #include "wizz/core/catalog.hpp"
@@ -453,6 +464,176 @@ void render_working(const QString& scheme)
     save(compose(rig.window(), {}), scheme + QStringLiteral("-disabled"));
     rig.controller().cancel_work();
     ASSERT_TRUE(gui::wait_until([&rig] { return !rig.controller().is_working(); }));
+}
+
+// ---------------------------------------------------------------------------
+// The Settings button and window (D-63)
+// ---------------------------------------------------------------------------
+
+/// The Settings window's states for 2.1.0, worded by the update model's texts: the last
+/// successful check today at 15:53 (local time UTC), now 16:20.
+[[nodiscard]] std::vector<std::pair<QString, wizz::ui::UpdateStatusView>> settings_states()
+{
+    namespace text = wizz::ui::update_strings;
+    using wizz::ui::UpdateStatusKind;
+    using wizz::ui::UpdateStatusView;
+    const wizz::update::Version running{2, 1, 0};
+    const wizz::update::Version next{2, 2, 0};
+    const wizz::FixedClock clock{wizz::make_utc(d(2026, 11, 17), 16, 20)};
+    const wizz::Locale& locale = *wizz::Locale::en_us();
+    const std::string line = text::version_line(running, wizz::make_utc(d(2026, 11, 17), 15, 53), clock, locale);
+    const auto view = [&line](UpdateStatusKind kind, std::string status) {
+        const bool busy = kind == UpdateStatusKind::checking || kind == UpdateStatusKind::downloading;
+        return UpdateStatusView{.kind = kind,
+                                .version_line = line,
+                                .status = std::move(status),
+                                .checking = kind == UpdateStatusKind::checking,
+                                .check_now_enabled = !busy,
+                                .options_enabled = true,
+                                .when_found_enabled = true,
+                                .when_found_note = {}};
+    };
+    UpdateStatusView never = view(UpdateStatusKind::not_checked, "");
+    never.version_line = text::version_line(running, std::nullopt, clock, locale);
+    UpdateStatusView portable = view(UpdateStatusKind::available, text::available_text(next));
+    portable.when_found_enabled = false;
+    portable.when_found_note = std::string{text::kPortableNote};
+    const wizz::update::UpdateError offline{.kind = wizz::update::UpdateErrorKind::network,
+                                            .message = "Update check failed: network error: no route to host",
+                                            .http_status = std::nullopt,
+                                            .tries = {}};
+    return {
+        {QStringLiteral("never"), never},
+        {QStringLiteral("latest"), view(UpdateStatusKind::up_to_date, std::string{text::kUpToDate})},
+        {QStringLiteral("checking"), view(UpdateStatusKind::checking, std::string{text::kChecking})},
+        {QStringLiteral("available"), view(UpdateStatusKind::available, text::available_text(next))},
+        {QStringLiteral("downloading"), view(UpdateStatusKind::downloading, text::downloading_text(next))},
+        {QStringLiteral("ready"), view(UpdateStatusKind::ready, text::ready_to_install_text(next))},
+        {QStringLiteral("failed"), view(UpdateStatusKind::failed, text::check_failed_status(offline))},
+        {QStringLiteral("portable"), portable},
+        {QStringLiteral("autotest"), wizz::ui::updates_off_view(running)},
+    };
+}
+
+/// The update bar of each install choice once a check found 2.2.0, from the update model.
+[[nodiscard]] std::vector<std::pair<QString, wizz::ui::UpdateBarView>> update_bars()
+{
+    using wizz::update::InstallKind;
+    using wizz::update::WhenFound;
+    const wizz::update::Version running{2, 1, 0};
+    const wizz::update::Version next{2, 2, 0};
+    const wizz::update::ReleaseInfo release = wizz::test::app::release_info(next);
+    const wizz::update::DownloadedFile file{
+        .path = std::filesystem::path{L"C:\\updates\\downloads"} / wizz::update::UpdateConfig::installer_name(next),
+        .sha256 = std::string(64, 'a'),
+        .reused = false,
+        .tries = {}};
+    const auto model = [&running](InstallKind kind, WhenFound choice) {
+        return wizz::ui::UpdateModel{running, kind, wizz::update::UpdateOptions{.when_found = choice}};
+    };
+    const auto verified = [&](WhenFound choice) {
+        wizz::ui::UpdateModel m = model(InstallKind::installed, choice);
+        (void)m.on_check(release);
+        m.begin_download();
+        (void)m.on_download(file, false);
+        return m;
+    };
+    std::vector<std::pair<QString, wizz::ui::UpdateBarView>> bars;
+    bars.emplace_back(QStringLiteral("install-on-close"), verified(WhenFound::install_on_close).bar(false));
+    bars.emplace_back(QStringLiteral("install-on-close-working"), verified(WhenFound::install_on_close).bar(true));
+    bars.emplace_back(QStringLiteral("download-then-ask"), verified(WhenFound::download_then_ask).bar(false));
+    wizz::ui::UpdateModel notify = model(InstallKind::installed, WhenFound::notify_only);
+    (void)notify.on_check(release);
+    bars.emplace_back(QStringLiteral("notify-only"), notify.bar(false));
+    (void)notify.on_action(false);
+    notify.begin_download();
+    bars.emplace_back(QStringLiteral("notify-only-downloading"), notify.bar(false));
+    wizz::ui::UpdateModel portable = model(InstallKind::portable, WhenFound::install_on_close);
+    (void)portable.on_check(release);
+    bars.emplace_back(QStringLiteral("portable"), portable.bar(false));
+    return bars;
+}
+
+void render_settings(const QString& look)
+{
+    WindowRig rig;
+    rig.start();
+    wizz::app::MainWindow& window = rig.window();
+    QTabWidget& tabs = *window.tabs();
+    wizz::app::SettingsButton& button = *window.settings_button();
+    const auto name = [&look](const QString& what) { return look + QStringLiteral("-") + what; };
+    const std::string where = look.toStdString();
+    EXPECT_EQ(wizz::app::layout_problems(window), std::vector<std::string>{}) << where << " main window";
+
+    // The tab row, then the gear focused from the keyboard and under the mouse.
+    const QRect row{0, in_window(tabs, window).top(), window.width(), tabs.tabBar()->height()};
+    save(compose(window, {}, row), name(QStringLiteral("tab-row-settings")));
+    window.setAttribute(Qt::WA_KeyboardFocusChange);
+    button.setFocus(Qt::TabFocusReason);
+    pump();
+    window.setAttribute(Qt::WA_KeyboardFocusChange);
+    button.update();
+    save(compose(window, {}, in_window(button, window)), name(QStringLiteral("focus-settings")));
+    window.setFocus(Qt::OtherFocusReason);
+    button.setAttribute(Qt::WA_UnderMouse);
+    button.update();
+    save(compose(window, {}, in_window(button, window)), name(QStringLiteral("hover-settings")));
+    button.setAttribute(Qt::WA_UnderMouse, false);
+
+    // The window as the button opens it, over the main window (no updater here: a run without
+    // one), then each state alone with its title bar.
+    button.click();
+    pump();
+    if (wizz::app::SettingsDialog* open = window.settings_dialog(); open != nullptr) {
+        save(compose(window, {open}), name(QStringLiteral("window-with-settings")));
+        open->close();
+    } else {
+        ADD_FAILURE() << "the Settings button opened no window";
+    }
+    pump();
+    for (const auto& [state, status] : settings_states()) {
+        wizz::update::UpdateOptions options;
+        if (state == QStringLiteral("available")) {
+            options.when_found = wizz::update::WhenFound::notify_only;  // an installed copy offers it then
+        }
+        wizz::app::SettingsDialog dialog{options, status, &window};
+        dialog.show();
+        dialog.activateWindow();
+        pump();
+        EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{}) << where << " " << state.toStdString();
+        save(capture_top_level(dialog), name(QStringLiteral("settings-") + state));
+        dialog.close();
+    }
+
+    // The update bar of each choice.
+    wizz::app::UpdateBar& bar = *window.update_bar();
+    for (const auto& [choice, view] : update_bars()) {
+        bar.show_view(view);
+        pump();
+        EXPECT_EQ(wizz::app::layout_problems(window), std::vector<std::string>{}) << where << " bar " << choice.toStdString();
+        save(compose(window, {}, QRect(0, 0, window.width(), in_window(bar, window).bottom() + 60)),
+             name(QStringLiteral("update-bar-") + choice));
+    }
+    bar.show_view(wizz::ui::UpdateBarView{});
+}
+
+TEST(LookSnapshots, Render_the_Settings_button_window_and_update_bars)
+{
+    if (snapshot_dir().isEmpty() || QGuiApplication::platformName() != QStringLiteral("windows")) {
+        GTEST_SKIP() << "set WIZZ_GUI_SNAPSHOT_DIR and run on the windows platform to render the look";
+    }
+    QDir{}.mkpath(snapshot_dir());
+    const wizz::test::look::LookGuard guard;
+    for (const char* scheme : {"light", "dark"}) {
+        qputenv("WIZZ_COLOR_SCHEME", scheme);
+        ASSERT_TRUE(style::apply_application_look());
+        render_settings(QString::fromLatin1(scheme));
+    }
+    qputenv("WIZZ_COLOR_SCHEME", "light");
+    style::set_high_contrast_probe([] { return true; });
+    ASSERT_TRUE(style::apply_application_look());
+    ASSERT_EQ(style::appearance(), style::Appearance::high_contrast);
+    render_settings(QStringLiteral("contrast"));
 }
 
 TEST(LookSnapshots, Render_every_surface_in_both_schemes)
