@@ -15,7 +15,7 @@
 // alone at 100, 150 and 200 %: <look>-tab-row-settings.png, -focus-settings.png,
 // -hover-settings.png, -window-with-settings.png (the window open over the main window),
 // -settings-<state>.png (with the title bar: never, latest, checking, available,
-// downloading, ready, failed, portable, autotest) and -update-bar-<choice>.png (the bar of
+// downloading, ready, failed, failed-never, portable, autotest) and -update-bar-<choice>.png (the bar of
 // each install choice), for light, dark and High Contrast ("contrast"); every window it
 // renders has its layout checked.
 
@@ -504,6 +504,12 @@ void render_working(const QString& scheme)
                                             .message = "Update check failed: network error: no route to host",
                                             .http_status = std::nullopt,
                                             .tries = {}};
+    // A failed check: the version line names the last successful check, or says there was none.
+    UpdateStatusView failed = view(UpdateStatusKind::failed, text::check_failed_status(offline));
+    failed.version_line = text::version_line(running, wizz::make_utc(d(2026, 11, 2), 21, 40), clock, locale,
+                                             text::LastCheck::failed);
+    UpdateStatusView failed_never = failed;
+    failed_never.version_line = text::version_line(running, std::nullopt, clock, locale, text::LastCheck::failed);
     return {
         {QStringLiteral("never"), never},
         {QStringLiteral("latest"), view(UpdateStatusKind::up_to_date, std::string{text::kUpToDate})},
@@ -511,7 +517,8 @@ void render_working(const QString& scheme)
         {QStringLiteral("available"), view(UpdateStatusKind::available, text::available_text(next))},
         {QStringLiteral("downloading"), view(UpdateStatusKind::downloading, text::downloading_text(next))},
         {QStringLiteral("ready"), view(UpdateStatusKind::ready, text::ready_to_install_text(next))},
-        {QStringLiteral("failed"), view(UpdateStatusKind::failed, text::check_failed_status(offline))},
+        {QStringLiteral("failed"), failed},
+        {QStringLiteral("failed-never"), failed_never},
         {QStringLiteral("portable"), portable},
         {QStringLiteral("autotest"), wizz::ui::updates_off_view(running)},
     };

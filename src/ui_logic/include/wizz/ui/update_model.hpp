@@ -23,8 +23,9 @@
 //   * The update bar (UpdateBarView) and what its action does (BarAction); "Later"
 //     hides the bar for the rest of the session.
 //   * The Settings window's "Updates" status (UpdateStatusView): the version and the
-//     last successful check, and checking / up to date / available / downloading /
-//     ready / failed in plain words.
+//     last successful check ("last checked", or "last successful check" after a failed
+//     check), and checking / up to date / available / downloading / ready / failed in
+//     plain words.
 //   * The installer command the app runs when it closes.
 //
 // The Qt side (src/app/lib/update_controller.hpp) runs the core's checks and downloads
@@ -115,11 +116,20 @@ inline constexpr std::string_view kOffInThisRun = "Updates are off in this run."
 /// installing", "Only tell me that an update is available".
 [[nodiscard]] std::string_view when_found_label(update::WhenFound when_found) noexcept;
 
+/// Which check the version line's time belongs to.
+enum class LastCheck : std::uint8_t {
+    succeeded,  ///< no check failed since the last one that worked: "last checked …"
+    failed,     ///< the last check failed: the time is the last *successful* one's
+};
+
 /// "WizzairHelper 2.1.0 · last checked today at 15:53" — "yesterday at 09:05", "on Mon 16
 /// Nov 2026 at 09:05" (`locale`'s "ddd dd MMM yyyy" and "HH:mm") — or "WizzairHelper 2.1.0
-/// · never checked". `last_success` is shown in the local time of `clock`.
+/// · never checked". After a failed check (LastCheck::failed) the time is named for what
+/// it is: "WizzairHelper 2.1.0 · last successful check today at 10:00", or "WizzairHelper
+/// 2.1.0 · no successful check yet". `last_success` is shown in the local time of `clock`.
 [[nodiscard]] std::string version_line(const update::Version& running, std::optional<UtcInstant> last_success,
-                                       const Clock& clock, const Locale& locale);
+                                       const Clock& clock, const Locale& locale,
+                                       LastCheck last_check = LastCheck::succeeded);
 /// A failed check in plain words, e.g. "Could not reach GitHub. Check your internet
 /// connection and try again."
 [[nodiscard]] std::string check_failed_status(const update::UpdateError& error);
@@ -239,7 +249,8 @@ public:
     /// A check finished:
     /// - no_release (nothing published, a draft or a prerelease) or a release that is not
     ///   newer than the running version: nothing visible (the status: up to date);
-    /// - any other error: one check_failed_log line (the status: the failure);
+    /// - any other error: one check_failed_log line (the status: the failure; the version
+    ///   line names the last *successful* check);
     /// - a newer release already ready, offered or being downloaded (or an older one):
     ///   nothing new;
     /// - a newer release: available_log once per version and session; a portable copy
@@ -321,7 +332,9 @@ public:
 
     // --- The Settings window --------------------------------------------------------------
     /// The "Updates" section; `clock` and `locale` format the last successful check of
-    /// saved_state(). The status, first that applies: checking; downloading; ready (a
+    /// saved_state(), named "last successful check" while the last check of this session
+    /// failed (update_strings::LastCheck::failed), else "last checked". The status, first
+    /// that applies: checking; downloading; ready (a
     /// verified installer, unless "Update now" offers a newer release); failed (the last
     /// check or download failed); available; up to date (a check this session found
     /// nothing newer); before any check this session, from saved_state(): available when
@@ -354,6 +367,7 @@ private:
     std::optional<ReadyInstaller> ready_;
     std::optional<AvailableRelease> available_;
     std::optional<std::string> problem_;  ///< the last check or download failure, in plain words
+    bool last_check_failed_ = false;  ///< the last check of this session failed
     bool checking_ = false;
     bool up_to_date_ = false;  ///< the last successful check found nothing newer
     bool dismissed_ = false;

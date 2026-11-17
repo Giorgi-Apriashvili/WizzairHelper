@@ -469,8 +469,8 @@ TEST(SettingsWindow, Check_now_shows_checking_then_each_result_live_like_the_upd
     EXPECT_EQ(text_colour(dialog.status_label()), theme.failure);
     EXPECT_TRUE(dialog.check_now_button()->isEnabled());
     EXPECT_EQ(dialog.check_now_button()->text(), "Check now");
-    EXPECT_EQ(dialog.version_label()->text(), q("WizzairHelper 1.0.0 · last checked today at 10:00"))
-        << "the last check that worked";
+    EXPECT_EQ(dialog.version_label()->text(), q("WizzairHelper 1.0.0 · last successful check today at 10:00"))
+        << "the last check that worked, named as such above the failure";
     EXPECT_EQ(dialog.size(), size) << "the window keeps its size";
 
     // A newer release: downloading (Check now waits), then ready, as the bar says.
@@ -777,6 +777,13 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     portable.when_found_note = std::string{strings::kPortableNote};
     UpdateStatusView never = view(UpdateStatusKind::not_checked, "");
     never.version_line = "WizzairHelper 2.1.0 · never checked";
+    // After a failed check the version line names the last successful one (the longest
+    // version line), or says there was none.
+    UpdateStatusView failed =
+        view(UpdateStatusKind::failed, "Could not reach GitHub. Check your internet connection and try again.");
+    failed.version_line = "WizzairHelper 22.10.10 · last successful check on Wed 30 Sep 2026 at 23:59";
+    UpdateStatusView failed_never = failed;
+    failed_never.version_line = "WizzairHelper 22.10.10 · no successful check yet";
     return {
         {"not checked", never},
         {"latest", view(UpdateStatusKind::up_to_date, std::string{strings::kUpToDate})},
@@ -784,7 +791,8 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
         {"available", view(UpdateStatusKind::available, "WizzairHelper 22.10.10 is available.")},
         {"downloading", view(UpdateStatusKind::downloading, "Downloading WizzairHelper 22.10.10…")},
         {"ready", view(UpdateStatusKind::ready, "WizzairHelper 22.10.10 is ready to install.")},
-        {"failed", view(UpdateStatusKind::failed, "Could not reach GitHub. Check your internet connection and try again.")},
+        {"failed", failed},
+        {"failed, never succeeded", failed_never},
         {"failed long", view(UpdateStatusKind::failed, "The download of WizzairHelper 22.10.10 did not match its "
                                                        "checksum and was deleted. Try again later.")},
         {"portable", portable},

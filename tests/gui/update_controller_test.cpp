@@ -592,7 +592,8 @@ TEST(UpdateController, Check_now_reports_checking_then_the_result_and_counts_as_
     wizz::ui::UpdateStatusView view = rig.controller()->status_view();
     EXPECT_EQ(view.kind, wizz::ui::UpdateStatusKind::failed);
     EXPECT_EQ(view.status, "Could not reach GitHub. Check your internet connection and try again.");
-    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · last checked today at 10:00") << "the last success";
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · last successful check today at 10:00")
+        << "the last success, named as such above the failure";
     EXPECT_EQ(update_lines(rig.window_rig).back(), "Update check failed: network error: no route to host");
     EXPECT_FALSE(rig.bar().isVisible());
 
@@ -607,6 +608,20 @@ TEST(UpdateController, Check_now_reports_checking_then_the_result_and_counts_as_
     EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · last checked today at 10:10");
     EXPECT_EQ(rig.backend->manual_checks(), 2);
     EXPECT_FALSE(rig.backend->schedule().is_check_due()) << "a successful manual check is today's check";
+}
+
+TEST(UpdateController, A_first_check_that_fails_has_no_successful_check_yet)
+{
+    UpdateRig rig;
+    rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::http_status,
+                                                             "Update check failed: GitHub answered HTTP 503."))});
+    ASSERT_TRUE(rig.enable());
+    EXPECT_EQ(rig.controller()->status_view().version_line, "WizzairHelper 1.0.0 · never checked");
+    rig.window_rig.start();
+    rig.wait_for_evaluations(1);
+    const wizz::ui::UpdateStatusView view = rig.controller()->status_view();
+    EXPECT_EQ(view.kind, wizz::ui::UpdateStatusKind::failed);
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · no successful check yet");
 }
 
 TEST(UpdateController, Check_now_during_a_download_runs_after_it)

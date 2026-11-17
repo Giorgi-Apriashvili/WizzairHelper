@@ -3,7 +3,7 @@
 // result means for an installed or a portable copy under each "When an update is found"
 // choice, "Later", "Restart and update", "Update now", changing the options while an
 // update is under way, the installer command run on exit, and the Settings window's
-// "Updates" status.
+// "Updates" status (the version line says "last successful check" after a failed check).
 
 #include "wizz/ui/update_model.hpp"
 
@@ -221,6 +221,35 @@ TEST(UpdateRules, The_version_line_names_the_last_successful_check_in_local_time
     const wizz::FixedClock plus_two = settings_clock(2h);
     EXPECT_EQ(texts::version_line(v, wizz::make_utc(wizz::Date::from_ymd(2026, 11, 16), 22, 30), plus_two, en),
               "WizzairHelper 2.1.0 \u00B7 last checked today at 00:30");
+}
+
+TEST(UpdateRules, After_a_failed_check_the_version_line_names_the_last_successful_check)
+{
+    // The owner's wording (2026-11-17): above the red failure the time is not the last
+    // check's, so the line says whose it is; normally it still says "last checked".
+    using texts::LastCheck;
+    const wizz::Locale& en = *wizz::Locale::en_us();
+    const Version v{2, 1, 0};
+    const wizz::FixedClock clock = settings_clock();
+    const wizz::UtcInstant ten = wizz::make_utc(wizz::Date::from_ymd(2026, 11, 17), 10, 0);
+    EXPECT_EQ(texts::version_line(v, ten, clock, en, LastCheck::failed),
+              "WizzairHelper 2.1.0 \u00B7 last successful check today at 10:00");
+    EXPECT_EQ(texts::version_line(v, wizz::make_utc(wizz::Date::from_ymd(2026, 11, 16), 9, 5), clock, en,
+                                  LastCheck::failed),
+              "WizzairHelper 2.1.0 \u00B7 last successful check yesterday at 09:05");
+    EXPECT_EQ(texts::version_line(v, wizz::make_utc(wizz::Date::from_ymd(2026, 11, 2), 21, 40), clock, en,
+                                  LastCheck::failed),
+              "WizzairHelper 2.1.0 \u00B7 last successful check on Mon 02 Nov 2026 at 21:40");
+    EXPECT_EQ(texts::version_line(v, std::nullopt, clock, en, LastCheck::failed),
+              "WizzairHelper 2.1.0 \u00B7 no successful check yet")
+        << "tried, never worked: not \"never checked\"";
+
+    EXPECT_EQ(texts::version_line(v, ten, clock, en, LastCheck::succeeded),
+              "WizzairHelper 2.1.0 \u00B7 last checked today at 10:00");
+    EXPECT_EQ(texts::version_line(v, std::nullopt, clock, en, LastCheck::succeeded),
+              "WizzairHelper 2.1.0 \u00B7 never checked");
+    EXPECT_EQ(texts::version_line(v, ten, clock, en), texts::version_line(v, ten, clock, en, LastCheck::succeeded))
+        << "the usual wording by default";
 }
 
 TEST(UpdateRules, Failures_in_plain_words)
@@ -936,6 +965,55 @@ TEST(UpdateModel, The_status_before_any_check_comes_from_update_state_json)
     // This session's check wins over the saved state.
     (void)model.on_check(check_error(UpdateErrorKind::no_release, "No release."));
     EXPECT_EQ(status(model).kind, UpdateStatusKind::up_to_date);
+}
+
+TEST(UpdateModel, The_version_line_says_last_successful_check_while_the_last_check_failed)
+{
+    const wizz::UtcInstant ten = wizz::make_utc(wizz::Date::from_ymd(2026, 11, 17), 10, 0);
+    const wizz::UtcInstant later = wizz::make_utc(wizz::Date::from_ymd(2026, 11, 17), 15, 50);
+    const update::UpdateState checked_at_ten{.last_success = ten, .latest_seen = std::nullopt, .last_failure = {}};
+    UpdateModel model{kRunning, InstallKind::installed};
+    model.set_saved_state(checked_at_ten);
+    EXPECT_EQ(status(model).version_line, "WizzairHelper 1.0.0 \u00B7 last checked today at 10:00");
+
+    // A failed check: the red failure under the last *successful* check.
+    (void)model.on_check(check_error(UpdateErrorKind::network, "Update check failed: network error: no route"));
+    model.set_saved_state(update::UpdateState{.last_success = ten, .latest_seen = std::nullopt, .last_failure = later});
+    UpdateStatusView view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::failed);
+    EXPECT_EQ(view.status, "Could not reach GitHub. Check your internet connection and try again.");
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 \u00B7 last successful check today at 10:00");
+
+    // The next check works: the usual wording, with its time.
+    model.set_saved_state(update::UpdateState{.last_success = later, .latest_seen = std::nullopt, .last_failure = {}});
+    (void)model.on_check(check_error(UpdateErrorKind::no_release, "No release is published yet (GitHub answered HTTP 404)."));
+    view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::up_to_date);
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 \u00B7 last checked today at 15:50");
+
+    // A failed download is not a failed check: the check before it worked.
+    (void)model.on_check(found(kNew));
+    (void)run_download(model, download_error(UpdateErrorKind::http_status, "… HTTP 503.", 503));
+    view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::failed);
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 \u00B7 last checked today at 15:50");
+
+    // Check now that ends with an unexpected error failed too.
+    UpdateModel crashed{kRunning, InstallKind::installed};
+    crashed.set_saved_state(checked_at_ten);
+    crashed.begin_manual_check();
+    crashed.on_unexpected_error("bad allocation");
+    EXPECT_EQ(status(crashed).version_line, "WizzairHelper 1.0.0 \u00B7 last successful check today at 10:00");
+}
+
+TEST(UpdateModel, A_first_check_that_fails_has_no_successful_check_yet){
+    UpdateModel model{kRunning, InstallKind::installed};
+    EXPECT_EQ(status(model).version_line, "WizzairHelper 1.0.0 \u00B7 never checked");
+    (void)model.on_check(check_error(UpdateErrorKind::http_status, "Update check failed: GitHub answered HTTP 503.", 503));
+    const UpdateStatusView view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::failed);
+    EXPECT_EQ(view.status, "GitHub could not answer the update check (HTTP 503). Try again later.");
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 \u00B7 no successful check yet");
 }
 
 TEST(UpdateModel, A_portable_copy_disables_the_install_choices_with_a_reason)

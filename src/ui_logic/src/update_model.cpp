@@ -115,23 +115,26 @@ std::string_view when_found_label(update::WhenFound when_found) noexcept
 }
 
 std::string version_line(const update::Version& running, std::optional<UtcInstant> last_success, const Clock& clock,
-                         const Locale& locale)
+                         const Locale& locale, LastCheck last_check)
 {
     const std::string head = std::format("WizzairHelper {} · ", running.to_string());
+    const bool after_failure = last_check == LastCheck::failed;
     if (!last_success) {
-        return head + "never checked";
+        return head + (after_failure ? "no successful check yet" : "never checked");
     }
+    // After a failed check the time is not the last check's: say whose it is.
+    const std::string_view what = after_failure ? "last successful check" : "last checked";
     const LocalDateTime when = clock.to_local(*last_success);
     const Date day = date_of(when);
     const Date today = date_of(clock.to_local(clock.utc_now()));
     const std::string time = locale.format_time(when, "HH:mm");
     if (day == today) {
-        return std::format("{}last checked today at {}", head, time);
+        return std::format("{}{} today at {}", head, what, time);
     }
     if (day == today.add_days(-1)) {
-        return std::format("{}last checked yesterday at {}", head, time);
+        return std::format("{}{} yesterday at {}", head, what, time);
     }
-    return std::format("{}last checked on {} at {}", head, locale.format_date(day, "ddd dd MMM yyyy"), time);
+    return std::format("{}{} on {} at {}", head, what, locale.format_date(day, "ddd dd MMM yyyy"), time);
 }
 
 std::string check_failed_status(const update::UpdateError& error)
@@ -254,13 +257,16 @@ UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, Check
         if (result.error().kind == update::UpdateErrorKind::no_release) {
             up_to_date_ = true;  // nothing is published to update to
             problem_.reset();
+            last_check_failed_ = false;
             return outcome;
         }
         outcome.log.push_back(update_strings::check_failed_log(result.error().message));
         problem_ = update_strings::check_failed_status(result.error());
+        last_check_failed_ = true;  // the version line names the last successful one
         return outcome;
     }
     problem_.reset();
+    last_check_failed_ = false;
     const update::ReleaseInfo& release = *result;
     if (!release.newer || release.version <= running_) {
         up_to_date_ = true;
@@ -337,6 +343,9 @@ UpdateModel::DownloadOutcome UpdateModel::on_download(const DownloadResult& resu
 
 void UpdateModel::on_unexpected_error(std::string_view what)
 {
+    if (checking_) {
+        last_check_failed_ = true;  // a check that was waited for ended without an answer
+    }
     checking_ = false;
     downloading_ = false;
     download_asked_ = false;
@@ -440,7 +449,9 @@ std::optional<update::InstallerCommand> UpdateModel::exit_command() const
 UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& locale) const
 {
     UpdateStatusView view;
-    view.version_line = update_strings::version_line(running_, saved_.last_success, clock, locale);
+    view.version_line = update_strings::version_line(running_, saved_.last_success, clock, locale,
+                                                     last_check_failed_ ? update_strings::LastCheck::failed
+                                                                        : update_strings::LastCheck::succeeded);
     view.checking = checking_;
     view.check_now_enabled = !checking_ && !downloading_;
     view.options_enabled = true;
