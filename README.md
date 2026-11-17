@@ -80,10 +80,22 @@ installed app downloads the installer from GitHub, checks it against the release
 update" in the bar under the search inputs. A portable copy (the ZIP) only shows a link to the
 release page.
 
-Settings (the gear at the right end of the tabs) has "Check now", the choice of checking once a
-day, week or month, or not at all unless you ask, and what to do when an update is found:
-install it when you close the app, download it and ask first, or only say that it is available.
-Details: [DECISIONS D-40..D-49, D-59..D-62](docs/DECISIONS.md#self-updater).
+To change this, click **Settings** (the gear at the right end of the Outbound / Return / Round
+trips / Log tabs). Its "Updates" section shows your version, when it last checked and what it
+found, and has:
+
+- **Check now**, which checks at once, also when automatic checks are off;
+- **Check for updates automatically** with **Once a day**, **Once a week** or **Once a month**
+  (the first time you open the app on a new day, in a new week starting on Monday, or in a new
+  month); clear the box and the app never contacts GitHub unless you press Check now;
+- **When an update is found:** download it and install it when you close the app (the default),
+  download it and then ask before installing ("Restart and update" in the bar; closing the app
+  leaves it), or only say that it is available ("Update now" in the bar downloads it, then
+  restarts the app into the installer).
+
+Changes apply at once and are kept in `settings.json`. A portable copy shows the install choices
+greyed out, since it can only point you to the release page.
+Details: [DECISIONS D-40..D-49, D-59..D-63](docs/DECISIONS.md#self-updater).
 
 ## License
 
