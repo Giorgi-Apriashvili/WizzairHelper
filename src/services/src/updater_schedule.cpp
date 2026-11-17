@@ -112,9 +112,6 @@ bool is_check_due(const UpdateState& state, const CheckPolicy& policy, const Clo
     if (state.last_failure && *state.last_failure <= now && now - *state.last_failure < kFailureRetryInterval) {
         return false;
     }
-    if (policy.recheck_if_newer_than && state.latest_seen && *state.latest_seen > *policy.recheck_if_newer_than) {
-        return true;  // an update seen earlier and not installed: offer it again
-    }
     if (!state.last_success || *state.last_success > now) {
         return true;
     }

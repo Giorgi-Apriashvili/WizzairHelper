@@ -495,7 +495,6 @@ TEST(UpdateController, Takes_the_options_from_settings_json)
     ASSERT_FALSE(policies.empty());
     EXPECT_TRUE(policies.front().automatic);
     EXPECT_EQ(policies.front().frequency, update::CheckFrequency::monthly);
-    EXPECT_EQ(policies.front().recheck_if_newer_than, kRunningVersion) << "a session's first evaluation";
 }
 
 TEST(UpdateController, Turned_off_it_sends_nothing_until_Check_now)
@@ -551,20 +550,26 @@ TEST(UpdateController, Turning_checks_on_or_shortening_the_period_checks_at_once
     EXPECT_FALSE(rig.controller()->is_running()) << "the install choice does not touch the schedule";
 }
 
-TEST(UpdateController, A_new_session_checks_again_for_an_update_seen_earlier)
+TEST(UpdateController, An_update_seen_in_an_earlier_session_waits_for_the_next_period)
 {
+    // The owner's rule is the period alone (D-59): an earlier session of this month saw
+    // 1.2.0 and did not install it; this session sends nothing, and the Settings window
+    // still names the update from update-state.json.
     UpdateRig rig{with_updates(choice(update::WhenFound::notify_only, true, update::CheckFrequency::monthly))};
-    rig.backend->schedule().record_success(kNewVersion);  // an earlier session saw 1.2.0 an hour ago
+    rig.backend->schedule().record_success(kNewVersion);
     rig.backend->script_checks({release_info(kNewVersion)});
+    rig.clock->advance(std::chrono::days{3});
     rig.start();
-    EXPECT_EQ(rig.backend->checks(), 1) << "checked although this month was checked";
-    ASSERT_TRUE(rig.bar().isVisible());
-    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.backend->checks(), 0) << "this month was checked: no extra request";
+    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_EQ(rig.controller()->status_view().status, "WizzairHelper 1.2.0 is available.");
 
+    rig.clock->set_utc_now(wizz::make_utc(wizz::Date::from_ymd(2026, 12, 1), 8, 0));
     rig.controller()->evaluate();
     rig.wait_for_evaluations(2);
-    EXPECT_EQ(rig.backend->checks(), 1) << "once per session";
-    EXPECT_EQ(rig.backend->policies().back().recheck_if_newer_than, std::nullopt);
+    EXPECT_EQ(rig.backend->checks(), 1) << "a new month checks";
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
 }
 
 TEST(UpdateController, Check_now_reports_checking_then_the_result_and_counts_as_the_periods_check)
@@ -625,6 +630,73 @@ TEST(UpdateController, Check_now_during_a_download_runs_after_it)
     ASSERT_TRUE(gui::wait_until([&] { return rig.backend->manual_checks() == 1; })) << "queued, then run";
     wait_idle(rig);
     EXPECT_EQ(rig.controller()->status_view().kind, wizz::ui::UpdateStatusKind::ready);
+}
+
+TEST(UpdateController, Runs_one_piece_of_work_at_a_time_and_queues_the_rest)
+{
+    // While a download is held on its worker, nothing else may start a job: Check now, an
+    // hourly tick and an option change that makes a check due all wait. live_jobs() counts
+    // the jobs the controller started synchronously, so a second job would show at once.
+    UpdateRig rig{with_updates(choice(update::WhenFound::install_on_close, true, update::CheckFrequency::monthly))};
+    rig.backend->hold_downloads();
+    rig.backend->script_checks({release_info(kNewVersion)});
+    ASSERT_TRUE(rig.enable());
+    rig.window_rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    ASSERT_TRUE(rig.controller()->is_running());
+    EXPECT_EQ(rig.controller()->live_jobs(), 1u);
+
+    rig.controller()->check_now();
+    EXPECT_EQ(rig.controller()->live_jobs(), 1u) << "Check now waits for the download";
+    rig.controller()->evaluate();
+    EXPECT_EQ(rig.controller()->live_jobs(), 1u) << "a tick during work is skipped";
+    rig.clock->advance(std::chrono::days{1});
+    rig.controller()->set_options(choice(update::WhenFound::install_on_close, true, update::CheckFrequency::daily));
+    EXPECT_EQ(rig.controller()->live_jobs(), 1u) << "a check that became due waits too";
+    gui::settle();
+    EXPECT_EQ(rig.controller()->live_jobs(), 1u);
+    EXPECT_EQ(rig.backend->manual_checks(), 0);
+    const int evaluations = rig.backend->evaluations();
+
+    rig.backend->release_downloads();
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->manual_checks(), 1) << "queued, then run";
+    EXPECT_EQ(rig.backend->evaluations(), evaluations + 1) << "the queued evaluation, once";
+    EXPECT_EQ(rig.controller()->live_jobs(), 0u);
+    EXPECT_EQ(rig.controller()->status_view().kind, wizz::ui::UpdateStatusKind::ready);
+}
+
+TEST(UpdateController, A_queued_download_is_dropped_when_the_choice_goes_back_to_notify_only)
+{
+    // Only tell me, with 1.2.0 offered. While Check now runs, the user picks a choice that
+    // downloads (the download queues behind the check) and then goes back: nothing is
+    // downloaded, and Update now is offered as before.
+    UpdateRig rig{with_updates(choice(update::WhenFound::notify_only))};
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.start();
+    ASSERT_EQ(rig.bar().action_button()->text(), "Update now");
+
+    rig.controller()->check_now();
+    ASSERT_TRUE(rig.controller()->is_running());
+    rig.controller()->set_options(choice(update::WhenFound::install_on_close));
+    rig.controller()->set_options(choice(update::WhenFound::notify_only));
+    wait_idle(rig);
+    EXPECT_TRUE(rig.backend->downloaded().empty()) << "the saved choice only tells";
+    EXPECT_EQ(rig.backend->downloads_started(), 0);
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Update now");
+
+    // The same with automatic checks switched off before the queued download starts, this
+    // time behind an hourly evaluation (nothing is due: checked today).
+    rig.controller()->evaluate();
+    ASSERT_TRUE(rig.controller()->is_running());
+    rig.controller()->set_options(choice(update::WhenFound::download_then_ask));
+    rig.controller()->set_options(choice(update::WhenFound::download_then_ask, false));
+    wait_idle(rig);
+    EXPECT_TRUE(rig.backend->downloaded().empty()) << "no request on its own while checks are off";
+    EXPECT_EQ(rig.bar().action_button()->text(), "Update now") << "the user can still ask for it";
 }
 
 TEST(UpdateController, An_unexpected_failure_of_Check_now_never_stays_busy)

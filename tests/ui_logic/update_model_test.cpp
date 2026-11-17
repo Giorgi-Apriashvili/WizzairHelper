@@ -700,15 +700,82 @@ TEST(UpdateModel, Switching_from_notify_only_to_a_downloading_choice_downloads_a
     }
 }
 
-TEST(UpdateModel, Switching_with_automatic_checks_off_downloads_nothing)
+TEST(UpdateModel, Switching_with_automatic_checks_off_downloads_nothing_and_keeps_Update_now)
 {
+    // Check now found 1.2.0 while the choice only tells; the user then picks a choice that
+    // downloads. With automatic checks off nothing is sent on its own, so the offer keeps
+    // its action: losing it would leave the update with no way to install it.
     UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::notify_only, false)};
     (void)model.on_check(found(kNew), CheckOrigin::manual);
-    EXPECT_FALSE(model.set_options(with(WhenFound::install_on_close, false)))
-        << "no request to GitHub unless the user presses Check now";
-    EXPECT_FALSE(model.bar(false).visible);
-    // Check now then finds it again and downloads.
-    EXPECT_TRUE(model.on_check(found(kNew), CheckOrigin::manual).download);
+    for (const WhenFound target : {WhenFound::install_on_close, WhenFound::download_then_ask}) {
+        SCOPED_TRACE(std::string{texts::when_found_label(target)});
+        EXPECT_FALSE(model.set_options(with(target, false)))
+            << "no request to GitHub unless the user presses Check now or Update now";
+        EXPECT_FALSE(model.download_wanted());
+        EXPECT_EQ(model.bar(false), (UpdateBarView{.visible = true,
+                                                   .text = "WizzairHelper 1.2.0 is available.",
+                                                   .action = "Update now",
+                                                   .action_enabled = true}));
+        EXPECT_EQ(status(model).status, "WizzairHelper 1.2.0 is available.");
+        EXPECT_FALSE(model.exit_command().has_value()) << "nothing was downloaded, nothing installs";
+    }
+    ASSERT_EQ(model.on_action(false), BarAction::download);
+    EXPECT_TRUE(model.download_wanted());
+    EXPECT_TRUE(run_download(model, downloaded(kNew)).restart) << "Update now: verified, then restart and install";
+
+    // Check now finding it again downloads it with a choice that downloads.
+    UpdateModel again{kRunning, InstallKind::installed, with(WhenFound::notify_only, false)};
+    (void)again.on_check(found(kNew), CheckOrigin::manual);
+    (void)again.set_options(with(WhenFound::install_on_close, false));
+    EXPECT_TRUE(again.on_check(found(kNew), CheckOrigin::manual).download);
+}
+
+TEST(UpdateModel, With_automatic_checks_off_a_failed_download_offers_Update_now)
+{
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::install_on_close, false)};
+    EXPECT_TRUE(model.on_check(found(kNew), CheckOrigin::manual).download) << "Check now asked: it downloads";
+    EXPECT_FALSE(model.bar(false).visible) << "its download is on its way: no Update now in between";
+    model.begin_download();
+    EXPECT_FALSE(model.bar(false).visible) << "install on close shows the bar once verified";
+    (void)model.on_download(download_error(UpdateErrorKind::network, "… timeout …"), false);
+    EXPECT_FALSE(model.download_retry_due()) << "nothing retries it while checks are off";
+    EXPECT_EQ(model.bar(false).action, "Update now") << "so the user can";
+    EXPECT_EQ(status(model).kind, UpdateStatusKind::failed);
+
+    (void)model.set_options(with(WhenFound::install_on_close, true));
+    EXPECT_FALSE(model.bar(false).visible) << "checks on: the hourly retry downloads it";
+    EXPECT_TRUE(model.download_retry_due());
+}
+
+TEST(UpdateModel, A_download_not_started_yet_is_withdrawn_when_the_options_stop_downloading)
+{
+    // The controller queues a download behind running work and asks download_wanted()
+    // before it starts it.
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+    (void)model.on_check(found(kNew));
+    EXPECT_FALSE(model.download_wanted()) << "notify only waits for Update now";
+    ASSERT_TRUE(model.set_options(with(WhenFound::install_on_close)));
+    EXPECT_TRUE(model.download_wanted());
+    EXPECT_FALSE(model.set_options(with(WhenFound::notify_only)));
+    EXPECT_FALSE(model.download_wanted()) << "back to only telling: withdrawn";
+    EXPECT_EQ(model.bar(false).action, "Update now");
+    ASSERT_TRUE(model.set_options(with(WhenFound::download_then_ask)));
+    EXPECT_TRUE(model.download_wanted());
+    EXPECT_FALSE(model.set_options(with(WhenFound::download_then_ask, false)));
+    EXPECT_FALSE(model.download_wanted()) << "automatic checks off: withdrawn too";
+    EXPECT_FALSE(model.set_options(with(WhenFound::download_then_ask, false, CheckFrequency::weekly)));
+    EXPECT_FALSE(model.download_wanted());
+
+    ASSERT_EQ(model.on_action(false), BarAction::download) << "Update now";
+    EXPECT_TRUE(model.download_wanted());
+    model.dismiss();
+    EXPECT_FALSE(model.download_wanted()) << "Later before it started: dropped";
+    ASSERT_EQ(model.set_options(with(WhenFound::install_on_close)), true);
+    model.begin_download();
+    EXPECT_FALSE(model.download_wanted()) << "running: nothing more to start";
+    EXPECT_FALSE(model.set_options(with(WhenFound::notify_only)));
+    (void)model.on_download(downloaded(kNew), false);
+    EXPECT_TRUE(model.ready().has_value()) << "a running download keeps running";
 }
 
 TEST(UpdateModel, Switching_does_not_repeat_a_download_that_already_failed)
@@ -764,25 +831,15 @@ TEST(UpdateModel, Download_retries_follow_the_options)
 // Checks: the policy, manual checks and the Settings window's status
 // =====================================================================================
 
-TEST(UpdateModel, The_check_policy_follows_the_options_and_rechecks_until_a_check_succeeded)
+TEST(UpdateModel, The_check_policy_follows_the_options)
 {
     UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::install_on_close, true, CheckFrequency::weekly)};
-    EXPECT_EQ(model.check_policy(), (update::CheckPolicy{.automatic = true,
-                                                         .frequency = CheckFrequency::weekly,
-                                                         .recheck_if_newer_than = kRunning}));
-    (void)model.on_check(check_error(UpdateErrorKind::network, "x"));
-    EXPECT_EQ(model.check_policy().recheck_if_newer_than, kRunning) << "a failed check does not count";
-    (void)model.on_check(check_error(UpdateErrorKind::no_release, "No release."));
-    EXPECT_EQ(model.check_policy().recheck_if_newer_than, std::nullopt);
-
-    UpdateModel manual{kRunning, InstallKind::portable};
-    (void)manual.on_check(found(kNew), CheckOrigin::manual);
-    EXPECT_EQ(manual.check_policy().recheck_if_newer_than, std::nullopt) << "a successful manual check counts";
-
+    EXPECT_EQ(model.check_policy(), (update::CheckPolicy{.automatic = true, .frequency = CheckFrequency::weekly}));
+    (void)model.on_check(found(kNew));
+    EXPECT_EQ(model.check_policy(), (update::CheckPolicy{.automatic = true, .frequency = CheckFrequency::weekly}))
+        << "the period alone, also with an update found (D-59)";
     (void)model.set_options(with(WhenFound::notify_only, false, CheckFrequency::monthly));
-    EXPECT_EQ(model.check_policy(), (update::CheckPolicy{.automatic = false,
-                                                         .frequency = CheckFrequency::monthly,
-                                                         .recheck_if_newer_than = std::nullopt}));
+    EXPECT_EQ(model.check_policy(), (update::CheckPolicy{.automatic = false, .frequency = CheckFrequency::monthly}));
 }
 
 TEST(UpdateModel, A_manual_check_reports_checking_then_its_result)

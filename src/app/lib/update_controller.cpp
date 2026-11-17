@@ -163,7 +163,9 @@ Task<> UpdateController::run(Work first)
                     co_await manual_check();
                     break;
                 case Work::download:
-                    co_await download();
+                    if (model_.download_wanted()) {  // not withdrawn while it waited (D-61)
+                        co_await download();
+                    }
                     break;
                 }
             } catch (const OperationCancelled&) {

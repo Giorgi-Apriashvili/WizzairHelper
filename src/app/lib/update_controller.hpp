@@ -13,7 +13,8 @@
 //     the Settings window's Check now), or a download (after a check, "Update now", or a
 //     switch to a choice that downloads). Work asked for while another runs is queued and
 //     runs right after it (manual check, then download, then evaluation); an hourly tick
-//     during work is skipped.
+//     during work is skipped. A queued download starts only if the model still wants it
+//     (the choice or the switch changed back, or "Later", meanwhile: it is dropped).
 //   * Checking is silent: a failure is one Log tab line (the core writes update.log);
 //     no boxes, no focus changes. The Settings window reads status_view() and follows
 //     status_changed().
@@ -53,6 +54,7 @@
 #include <QObject>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -121,6 +123,8 @@ public:
     [[nodiscard]] bool is_started() const noexcept { return started_; }
     /// A check or download is running on a worker.
     [[nodiscard]] bool is_running() const noexcept { return running_; }
+    /// Checks and downloads started on workers and not yet completed: never more than one.
+    [[nodiscard]] std::size_t live_jobs() const noexcept { return jobs_->live_count(); }
     [[nodiscard]] bool is_closing() const noexcept { return closing_; }
 
 public Q_SLOTS:

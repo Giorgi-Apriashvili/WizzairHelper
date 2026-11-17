@@ -13,6 +13,9 @@
 //                          closing the app does NOT install it;
 //       notify_only        no download; the bar says it is available and "Update now"
 //                          downloads, verifies, then restarts and installs.
+//     With automatic checks off nothing downloads on its own: a release that waits for
+//     the user keeps "Update now" whatever the choice. A download queued behind other
+//     work starts only if it is still wanted (download_wanted()).
 //     A portable copy cannot install itself: it always offers the release page.
 //   * What a finished check means: nothing visible when it is up to date or no release
 //     is published; one Log line when it failed; for a newer release one "Update
@@ -210,12 +213,12 @@ public:
     /// download should start now: an installed copy switched to a choice that downloads
     /// (install_on_close, download_then_ask) with automatic checks on, while a newer
     /// release is known whose download was never tried in this session (a notify-only
-    /// offer). Switching to install_on_close with a verified installer makes closing the
-    /// app install it; switching away makes closing leave it.
+    /// offer). Options that no longer download on their own (notify_only, or automatic
+    /// checks off) withdraw such a download that has not started yet (download_wanted()).
+    /// Switching to install_on_close with a verified installer makes closing the app
+    /// install it; switching away makes closing leave it.
     [[nodiscard]] bool set_options(const update::UpdateOptions& options) noexcept;
-    /// The automatic check's policy: the options' switch and frequency, and — until a
-    /// check succeeded in this session — a re-check when update-state.json saw a version
-    /// newer than the running one (D-59).
+    /// The automatic check's policy: the options' switch and frequency (D-59).
     [[nodiscard]] update::CheckPolicy check_policy() const;
 
     // --- update-state.json, for the version line --------------------------------------
@@ -270,6 +273,11 @@ public:
 
     /// A newer release whose installer is still to be downloaded and verified.
     [[nodiscard]] const std::optional<update::ReleaseInfo>& pending_download() const noexcept { return pending_; }
+    /// A download of pending_download() that was asked for and has not started is still
+    /// wanted: "Update now" was pressed (and not withdrawn by "Later"), or on_check /
+    /// set_options asked for it and the options still download on their own. The
+    /// controller asks before it starts a queued download.
+    [[nodiscard]] bool download_wanted() const noexcept;
     /// The last automatic download of pending_download() failed for a reason that may heal
     /// (no network, an HTTP status), automatic checks are on and the choice downloads: the
     /// next re-evaluation downloads again instead of checking.
@@ -281,9 +289,11 @@ public:
     // --- The update bar ------------------------------------------------------------------
     /// The bar (hidden after dismiss()):
     /// - portable, a newer release: available_text + "Download";
-    /// - installed, notify_only, a newer release not yet verified: available_text +
-    ///   "Update now" (disabled while `working`); after it was pressed: downloading_text,
-    ///   no action;
+    /// - installed, a newer release not yet verified that waits for the user — the choice
+    ///   is notify_only, or automatic checks are off and no download of it runs or was
+    ///   asked for (a notify-only offer whose choice then changed, or a failed download):
+    ///   available_text + "Update now" (disabled while `working`); after it was pressed:
+    ///   downloading_text, no action;
     /// - installed, a verified installer: ready_text (install_on_close) or
     ///   ready_to_install_text (the other choices, or after "Restart and update") +
     ///   "Restart and update" (disabled while `working`);
@@ -294,8 +304,9 @@ public:
     /// (none when its download is already running: it restarts when verified).
     [[nodiscard]] BarAction on_action(bool working);
     /// "Later": the bar stays hidden for the rest of the session (until a manual check
-    /// finds a newer release) and a pending "Update now" no longer restarts; a ready
-    /// installer still runs on exit with install_on_close.
+    /// finds a newer release) and a pending "Update now" no longer restarts (its download
+    /// still runs if it has started, and is dropped if it has not); a ready installer
+    /// still runs on exit with install_on_close.
     void dismiss() noexcept;
     [[nodiscard]] bool dismissed() const noexcept { return dismissed_; }
     [[nodiscard]] bool restart_requested() const noexcept { return restart_; }
@@ -311,7 +322,7 @@ public:
     // --- The Settings window --------------------------------------------------------------
     /// The "Updates" section; `clock` and `locale` format the last successful check of
     /// saved_state(). The status, first that applies: checking; downloading; ready (a
-    /// verified installer, unless notify_only offers a newer release); failed (the last
+    /// verified installer, unless "Update now" offers a newer release); failed (the last
     /// check or download failed); available; up to date (a check this session found
     /// nothing newer); before any check this session, from saved_state(): available when
     /// it saw a newer version, up to date after a successful check, else not checked.
@@ -327,6 +338,8 @@ private:
     /// pending_ is newer than any ready installer.
     [[nodiscard]] bool newer_pending() const noexcept;
     [[nodiscard]] bool downloads_on_its_own() const noexcept;
+    /// Nothing downloads pending_ unless the user presses "Update now" (see bar()).
+    [[nodiscard]] bool waits_for_user() const noexcept;
 
     update::Version running_;
     update::InstallKind kind_;
@@ -335,14 +348,14 @@ private:
     std::optional<update::Version> announced_;
     std::optional<update::ReleaseInfo> pending_;
     bool download_tried_ = false;  ///< a download of pending_ was started in this session
+    bool download_asked_ = false;  ///< on_check or set_options asked for a download of pending_ not yet started
     bool downloading_ = false;
     bool retry_download_ = false;
     std::optional<ReadyInstaller> ready_;
     std::optional<AvailableRelease> available_;
     std::optional<std::string> problem_;  ///< the last check or download failure, in plain words
     bool checking_ = false;
-    bool session_checked_ = false;  ///< a check succeeded in this session
-    bool up_to_date_ = false;       ///< the last successful check found nothing newer
+    bool up_to_date_ = false;  ///< the last successful check found nothing newer
     bool dismissed_ = false;
     bool restart_ = false;
     bool install_requested_ = false;

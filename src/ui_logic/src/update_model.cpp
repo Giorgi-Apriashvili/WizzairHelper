@@ -212,19 +212,36 @@ bool UpdateModel::newer_pending() const noexcept
     return pending_.has_value() && (!ready_ || pending_->version > ready_->version);
 }
 
+bool UpdateModel::waits_for_user() const noexcept
+{
+    if (options_.when_found == update::WhenFound::notify_only) {
+        return true;
+    }
+    // A choice that downloads, with automatic checks off: nothing downloads it on its own
+    // (D-61), so the offer keeps its "Update now".
+    return !options_.check_automatically && !downloading_ && !download_asked_;
+}
+
 bool UpdateModel::set_options(const update::UpdateOptions& options) noexcept
 {
     options_ = options;
-    return downloads_on_its_own() && options_.check_automatically && newer_pending() && !download_tried_ &&
-           !downloading_ && !install_requested_;
+    const bool downloads = downloads_on_its_own() && options_.check_automatically;
+    if (!downloads) {
+        download_asked_ = false;  // a download asked for and not started yet is withdrawn
+    }
+    const bool now = downloads && newer_pending() && !download_tried_ && !downloading_ && !install_requested_;
+    download_asked_ = download_asked_ || now;
+    return now;
 }
 
 update::CheckPolicy UpdateModel::check_policy() const
 {
-    return update::CheckPolicy{.automatic = options_.check_automatically,
-                               .frequency = options_.check_frequency,
-                               .recheck_if_newer_than = session_checked_ ? std::nullopt
-                                                                         : std::optional<update::Version>{running_}};
+    return update::CheckPolicy{.automatic = options_.check_automatically, .frequency = options_.check_frequency};
+}
+
+bool UpdateModel::download_wanted() const noexcept
+{
+    return pending_.has_value() && !downloading_ && (install_requested_ || download_asked_);
 }
 
 UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, CheckOrigin origin)
@@ -235,8 +252,7 @@ UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, Check
     }
     if (!result) {
         if (result.error().kind == update::UpdateErrorKind::no_release) {
-            session_checked_ = true;  // nothing is published to update to
-            up_to_date_ = true;
+            up_to_date_ = true;  // nothing is published to update to
             problem_.reset();
             return outcome;
         }
@@ -244,7 +260,6 @@ UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, Check
         problem_ = update_strings::check_failed_status(result.error());
         return outcome;
     }
-    session_checked_ = true;
     problem_.reset();
     const update::ReleaseInfo& release = *result;
     if (!release.newer || release.version <= running_) {
@@ -275,6 +290,7 @@ UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, Check
     pending_ = release;
     retry_download_ = false;
     outcome.download = downloads_on_its_own();
+    download_asked_ = outcome.download;
     return outcome;
 }
 
@@ -282,6 +298,7 @@ void UpdateModel::begin_download() noexcept
 {
     downloading_ = true;
     download_tried_ = true;
+    download_asked_ = false;
     problem_.reset();
 }
 
@@ -295,6 +312,7 @@ UpdateModel::DownloadOutcome UpdateModel::on_download(const DownloadResult& resu
 {
     DownloadOutcome outcome;
     downloading_ = false;
+    download_asked_ = false;
     if (!pending_) {
         return outcome;
     }
@@ -321,6 +339,7 @@ void UpdateModel::on_unexpected_error(std::string_view what)
 {
     checking_ = false;
     downloading_ = false;
+    download_asked_ = false;
     install_requested_ = false;
     problem_ = std::format("Something went wrong: {}", what);
 }
@@ -333,7 +352,7 @@ UpdateModel::Offer UpdateModel::offer() const noexcept
     if (newer_pending() && install_requested_) {
         return Offer::downloading_for_install;
     }
-    if (newer_pending() && options_.when_found == update::WhenFound::notify_only) {
+    if (newer_pending() && waits_for_user()) {
         return Offer::update_now;
     }
     return ready_ ? Offer::ready : Offer::none;
@@ -432,12 +451,14 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
         view.kind = kind;
         view.status = std::move(text);
     };
-    const bool notify_offers_newer = options_.when_found == update::WhenFound::notify_only && newer_pending();
+    // "Update now" offers a release newer than a verified one: the status names the newer.
+    const Offer current = offer();
+    const bool offers_newer = current == Offer::update_now || current == Offer::downloading_for_install;
     if (checking_) {
         set(UpdateStatusKind::checking, std::string{update_strings::kChecking});
     } else if (downloading_ && pending_) {
         set(UpdateStatusKind::downloading, update_strings::downloading_text(pending_->version));
-    } else if (ready_ && !notify_offers_newer) {
+    } else if (ready_ && !offers_newer) {
         set(UpdateStatusKind::ready, update_strings::ready_to_install_text(ready_->version));
     } else if (problem_) {
         set(UpdateStatusKind::failed, *problem_);

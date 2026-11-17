@@ -1048,9 +1048,9 @@ using update::CheckPolicy;
 using wizz::Date;
 using wizz::make_utc;
 
-constexpr CheckPolicy kDaily{.automatic = true, .frequency = CheckFrequency::daily, .recheck_if_newer_than = {}};
-constexpr CheckPolicy kWeekly{.automatic = true, .frequency = CheckFrequency::weekly, .recheck_if_newer_than = {}};
-constexpr CheckPolicy kMonthly{.automatic = true, .frequency = CheckFrequency::monthly, .recheck_if_newer_than = {}};
+constexpr CheckPolicy kDaily{.automatic = true, .frequency = CheckFrequency::daily};
+constexpr CheckPolicy kWeekly{.automatic = true, .frequency = CheckFrequency::weekly};
+constexpr CheckPolicy kMonthly{.automatic = true, .frequency = CheckFrequency::monthly};
 
 [[nodiscard]] constexpr Date day(int year, unsigned month, unsigned d) noexcept
 {
@@ -1235,7 +1235,7 @@ TEST(UpdaterSchedule, Times_in_the_future_do_not_block_a_check)
 TEST(UpdaterSchedule, Turned_off_is_never_due)
 {
     for (const CheckFrequency frequency : {CheckFrequency::daily, CheckFrequency::weekly, CheckFrequency::monthly}) {
-        const CheckPolicy off{.automatic = false, .frequency = frequency, .recheck_if_newer_than = Version{1, 0, 0}};
+        const CheckPolicy off{.automatic = false, .frequency = frequency};
         EXPECT_FALSE(due_at(UpdateState{}, off, kT0)) << "not even never checked";
         EXPECT_FALSE(due_at(succeeded_at(kT0 - 24h * 400), off, kT0));
         EXPECT_FALSE(due_at(UpdateState{.last_success = kT0 + 72h, .latest_seen = Version{2, 0, 0}, .last_failure = {}},
@@ -1244,22 +1244,17 @@ TEST(UpdaterSchedule, Turned_off_is_never_due)
     }
 }
 
-TEST(UpdaterSchedule, An_update_seen_in_an_earlier_session_is_checked_again)
+TEST(UpdaterSchedule, An_update_seen_earlier_and_not_installed_waits_for_the_next_period)
 {
-    // Checked an hour ago and saw 1.2.0 while 1.0.0 runs: the new session checks again,
-    // so the update is offered again; later evaluations follow the period.
+    // The owner's rule is the period alone (D-59): a version seen earlier and not
+    // installed (notify only, Later, a portable copy) sends no extra request in a new
+    // session; the next day, week or month checks as usual.
     const UpdateState seen{.last_success = kT0 - 1h, .latest_seen = Version{1, 2, 0}, .last_failure = std::nullopt};
-    CheckPolicy session_start = kMonthly;
-    session_start.recheck_if_newer_than = Version{1, 0, 0};
-    EXPECT_TRUE(due_at(seen, session_start, kT0));
-    EXPECT_FALSE(due_at(seen, kMonthly, kT0));
-
-    session_start.recheck_if_newer_than = Version{1, 2, 0};
-    EXPECT_FALSE(due_at(seen, session_start, kT0)) << "1.2.0 runs: nothing to offer";
-    session_start.recheck_if_newer_than = Version{1, 0, 0};
-    EXPECT_FALSE(due_at(succeeded_at(kT0 - 1h), session_start, kT0)) << "nothing newer was seen";
-    const UpdateState failed{.last_success = kT0 - 2h, .latest_seen = Version{1, 2, 0}, .last_failure = kT0 - 10min};
-    EXPECT_FALSE(due_at(failed, session_start, kT0)) << "the failure hour still holds";
+    for (const CheckPolicy& policy : {kDaily, kWeekly, kMonthly}) {
+        EXPECT_FALSE(due_at(seen, policy, kT0)) << static_cast<int>(policy.frequency);
+    }
+    EXPECT_FALSE(due_at(seen, kMonthly, make_utc(day(2026, 11, 30), 22, 0))) << "the rest of November";
+    EXPECT_TRUE(due_at(seen, kMonthly, make_utc(day(2026, 12, 1), 8, 0))) << "December";
 }
 
 TEST(UpdaterSchedule, A_state_written_by_2_1_is_read_with_the_calendar_rules)
@@ -1405,7 +1400,7 @@ TEST(UpdaterSchedule, Turned_off_sends_no_request_at_all)
 {
     Harness h{[](const RecordedRequest&) { return wizz::test::json_response(ReleaseJson{}.text()); }};
     const update::UpdateSchedule schedule{h.config.updates_dir(), h.clock};
-    const CheckPolicy off{.automatic = false, .frequency = CheckFrequency::daily, .recheck_if_newer_than = {}};
+    const CheckPolicy off{.automatic = false, .frequency = CheckFrequency::daily};
     EXPECT_FALSE(h.updater.check_if_due(schedule, off, {}).has_value()) << "never checked, and still nothing";
     h.clock->advance(24h * 365);
     EXPECT_FALSE(h.updater.check_if_due(schedule, off, {}).has_value());

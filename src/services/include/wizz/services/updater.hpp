@@ -265,11 +265,6 @@ struct CheckPolicy {
     /// settings.json `CheckForUpdates`: false = never due.
     bool automatic = true;
     CheckFrequency frequency = CheckFrequency::daily;
-    /// Set for the evaluations of a session until a check succeeded in it: the check is
-    /// then also due when update-state.json saw a version newer than this one (the
-    /// running version), so an update found in an earlier session and not installed is
-    /// offered again (D-59).
-    std::optional<Version> recheck_if_newer_than;
 
     friend bool operator==(const CheckPolicy&, const CheckPolicy&) = default;
 };
@@ -279,7 +274,6 @@ struct CheckPolicy {
 /// - never due when `!policy.automatic`;
 /// - not due within kFailureRetryInterval after a failed check (a failure in the future,
 ///   after the clock was set back, does not count);
-/// - due when `policy.recheck_if_newer_than` is set and `state.latest_seen` is newer;
 /// - due when no check ever succeeded, when the last success lies in the future (not
 ///   trusted), or when it lies in another local calendar period than now
 ///   (`period_start` of the two local dates differs): another day, ISO week or month.
