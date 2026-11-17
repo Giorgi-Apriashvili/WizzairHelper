@@ -222,6 +222,16 @@ bool UpdateModel::remembered_ready() const noexcept
     return remembered_.has_value() && remembered_->installer.has_value() && downloads_on_its_own();
 }
 
+bool UpdateModel::confirming_offered() const noexcept
+{
+    return confirming_.has_value() && downloads_on_its_own();
+}
+
+bool UpdateModel::has_ready() const noexcept
+{
+    return ready_.has_value() || confirming_offered() || remembered_ready();
+}
+
 update::Version UpdateModel::wanted_version() const noexcept
 {
     if (newer_pending()) {
@@ -234,6 +244,9 @@ std::optional<ReadyInstaller> UpdateModel::ready() const
 {
     if (ready_) {
         return ready_;
+    }
+    if (confirming_offered()) {
+        return confirming_;
     }
     if (remembered_ready()) {
         return ReadyInstaller{.version = remembered_->version, .path = *remembered_->installer};
@@ -249,6 +262,7 @@ std::vector<std::string> UpdateModel::remind(const EarlierUpdate& earlier)
         return log;
     }
     remembered_ = earlier;
+    reminded_ = true;
     if (kind_ == update::InstallKind::portable) {
         remembered_->installer.reset();  // a portable copy never installs
         available_ = AvailableRelease{.version = earlier.version, .page_url = earlier.page_url};
@@ -273,10 +287,17 @@ void UpdateModel::forget_remembered(const update::ReleaseInfo* found)
         }
         return;
     }
-    // What the bar already offered as ready stays ready when the release is still there.
-    if (found != nullptr && earlier.installer && found->version >= earlier.version && downloads_on_its_own() &&
-        !ready_) {
-        ready_ = ReadyInstaller{.version = earlier.version, .path = *earlier.installer};
+    // What the bar already offered as ready stays offered while the release is still there.
+    if (found == nullptr || !earlier.installer || !downloads_on_its_own() || ready_) {
+        return;
+    }
+    const ReadyInstaller installer{.version = earlier.version, .path = *earlier.installer};
+    if (found->version == earlier.version) {
+        // Its release's download (take_check asks for it) confirms it against the
+        // release's SHA256SUMS.txt now; download_verified reuses the file when it matches.
+        confirming_ = installer;
+    } else if (found->version > earlier.version) {
+        ready_ = installer;  // while the newer release downloads
     }
 }
 
@@ -348,7 +369,8 @@ UpdateModel::CheckOutcome UpdateModel::take_check(const CheckResult& result, Che
             return outcome;
         }
         outcome.log.push_back(update_strings::check_failed_log(result.error().message));
-        problem_ = update_strings::check_failed_status(result.error());
+        problem_ = Problem{.text = update_strings::check_failed_status(result.error()),
+                           .answers_check_now = origin == CheckOrigin::manual};
         last_check_failed_ = true;  // the version line names the last successful one; a remembered update stays
         return outcome;
     }
@@ -412,13 +434,15 @@ UpdateModel::DownloadOutcome UpdateModel::on_download(const DownloadResult& resu
         return outcome;
     }
     if (!result) {
+        confirming_.reset();  // its release no longer vouches for it (a file that did not match was deleted)
         outcome.log.push_back(update_strings::download_failed_log(result.error().message));
-        problem_ = update_strings::download_failed_status(pending_->version, result.error());
+        problem_ = Problem{.text = update_strings::download_failed_status(pending_->version, result.error())};
         retry_download_ = may_heal(result.error().kind);
         install_requested_ = false;  // "Update now" is offered again
         return outcome;
     }
     ready_ = ReadyInstaller{.version = pending_->version, .path = result->path};
+    confirming_.reset();
     outcome.log.push_back(update_strings::verified_log(pending_->version));
     pending_.reset();
     retry_download_ = false;
@@ -430,17 +454,18 @@ UpdateModel::DownloadOutcome UpdateModel::on_download(const DownloadResult& resu
     return outcome;
 }
 
-void UpdateModel::on_unexpected_error(std::string_view what)
+void UpdateModel::on_unexpected_error(std::string_view what, bool during_check)
 {
-    if (checking_ || fetching_) {
-        last_check_failed_ = true;  // a check that was waited for ended without an answer
+    if (during_check || checking_ || fetching_) {
+        last_check_failed_ = true;  // a check ended without an answer: logged like a failed one (D-45)
     }
+    problem_ = Problem{.text = std::format("Something went wrong: {}", what), .answers_check_now = checking_};
     checking_ = false;
     fetching_ = false;
     downloading_ = false;
     download_asked_ = false;
     install_requested_ = false;
-    problem_ = std::format("Something went wrong: {}", what);
+    confirming_.reset();  // whatever was confirming it ended without an answer
 }
 
 UpdateModel::Offer UpdateModel::offer() const noexcept
@@ -454,11 +479,16 @@ UpdateModel::Offer UpdateModel::offer() const noexcept
     if (newer_pending() && waits_for_user()) {
         return Offer::update_now;
     }
-    if (ready_ || remembered_ready()) {
+    if (has_ready()) {
         return Offer::ready;
     }
     if (remembered_) {  // an earlier session's update without a verified installer on offer
         return install_requested_ ? Offer::downloading_for_install : Offer::update_now;
+    }
+    if (reminded_ && newer_pending() && (downloading_ || download_asked_)) {
+        // The update offered again at start keeps its place while the release a check
+        // found downloads on its own, instead of vanishing until it is verified.
+        return Offer::downloading_for_install;
     }
     return Offer::none;
 }
@@ -567,16 +597,22 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
     const Offer current = offer();
     const bool offers_newer = current == Offer::update_now || current == Offer::downloading_for_install;
     const std::optional<ReadyInstaller> installer = ready();
+    // The bar offers the very release that downloads as ready: the download only confirms
+    // the installer of an earlier session (confirming_).
+    const bool confirms_ready = downloading_ && pending_ && current == Offer::ready && installer &&
+                                installer->version == pending_->version;
     if (checking_) {
         set(UpdateStatusKind::checking, std::string{update_strings::kChecking});
-    } else if (downloading_ && pending_) {
+    } else if (downloading_ && pending_ && !confirms_ready) {
         set(UpdateStatusKind::downloading, update_strings::downloading_text(pending_->version));
     } else if (fetching_ && remembered_) {
         set(UpdateStatusKind::downloading, update_strings::downloading_text(remembered_->version));
+    } else if (problem_ && problem_->answers_check_now) {
+        set(UpdateStatusKind::failed, problem_->text);  // the user asked: the answer, also over a ready installer
     } else if (installer && !offers_newer) {
         set(UpdateStatusKind::ready, update_strings::ready_to_install_text(installer->version));
     } else if (problem_) {
-        set(UpdateStatusKind::failed, *problem_);
+        set(UpdateStatusKind::failed, problem_->text);
     } else if (pending_ || available_ || remembered_) {
         const update::Version version = pending_     ? pending_->version
                                         : available_ ? available_->version

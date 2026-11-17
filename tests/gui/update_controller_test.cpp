@@ -4,7 +4,10 @@
 // of an installed copy before offering "Restart and update", links a portable copy
 // to the release page, and starts the silent installer when the window closes —
 // through a recording launcher, never a real process. An update put off in an earlier
-// session is offered again at every start without any request (the backend counts them).
+// session is offered again at every start without any request (the backend counts them);
+// the real core offers an installer of an earlier session only when its bytes still match
+// the hash kept when it was verified, and confirms it against its release when a check
+// finds that release.
 
 #include "update_test_support.hpp"
 
@@ -18,6 +21,7 @@
 #include "wizz/services/app_paths.hpp"
 #include "wizz/ui/settings.hpp"
 
+#include <QEvent>
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
@@ -30,7 +34,9 @@
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -77,6 +83,22 @@ void reach_ready(UpdateRig& rig)
     rig.start();
     ASSERT_TRUE(gui::wait_until([&] { return rig.bar().isVisible(); })) << "the ready bar did not appear";
 }
+
+/// Counts the times a widget is hidden (QEvent::Hide) after it was shown.
+class HideCounter final : public QObject {
+public:
+    explicit HideCounter(QWidget* target) { target->installEventFilter(this); }
+    int hides = 0;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::Hide) {
+            ++hides;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
 
 [[nodiscard]] std::wstring expected_command_line(const UpdateRig& rig, bool relaunch)
 {
@@ -595,9 +617,16 @@ void put_off_earlier(UpdateRig& rig, bool installer)
 
 TEST(UpdateController, Reminds_at_start_of_a_verified_installer_as_ready_without_any_request)
 {
-    for (const update::WhenFound when_found : {update::WhenFound::install_on_close, update::WhenFound::download_then_ask}) {
-        SCOPED_TRACE(static_cast<int>(when_found));
-        UpdateRig rig{with_updates(choice(when_found))};
+    struct Case {
+        update::WhenFound when_found;
+        bool automatic;
+    };
+    for (const Case c : {Case{update::WhenFound::install_on_close, true}, Case{update::WhenFound::download_then_ask, true},
+                         Case{update::WhenFound::install_on_close, false},
+                         Case{update::WhenFound::download_then_ask, false}}) {
+        const update::WhenFound when_found = c.when_found;
+        SCOPED_TRACE(std::format("choice {}, automatic {}", static_cast<int>(when_found), c.automatic));
+        UpdateRig rig{with_updates(choice(when_found, c.automatic))};
         put_off_earlier(rig, true);
         rig.start();
         EXPECT_EQ(rig.backend->evaluations(), 1) << "the schedule was asked";
@@ -803,6 +832,83 @@ TEST(UpdateController, The_first_evaluation_reminds_also_after_a_Check_now_that_
     EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
 }
 
+TEST(UpdateController, A_new_period_checks_once_and_confirms_the_reminded_installer_while_offering_it)
+{
+    // An earlier session saw 1.2.0 yesterday and verified its installer; today is a new
+    // period. The start sends the day's check and nothing else of its own; that check finds
+    // the release, whose download confirms the file against its checksums (the real core
+    // reuses it: The_real_core_confirms_a_reminded_installer_against_its_release), and
+    // the bar offers it as ready all along.
+    UpdateRig rig;
+    put_off_earlier(rig, true);
+    rig.clock->advance(std::chrono::days{1});
+    rig.backend->hold_downloads();
+    ASSERT_TRUE(rig.enable());
+    HideCounter bar_hidden{&rig.bar()};
+    rig.window_rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_EQ(rig.backend->checks(), 1) << "the new day's check, nothing more";
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText)) << "still offered while it is confirmed";
+    EXPECT_EQ(rig.bar().action_button()->text(), "Restart and update");
+    EXPECT_EQ(rig.controller()->status_view().kind, wizz::ui::UpdateStatusKind::ready);
+
+    rig.backend->release_downloads();
+    rig.wait_for_evaluations(1);
+    EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
+    EXPECT_EQ(rig.backend->requests(), 2) << "the check and the confirmation";
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
+    EXPECT_EQ(bar_hidden.hides, 0) << "the offer never left the bar";
+    EXPECT_EQ(update_lines(rig.window_rig),
+              (std::vector<std::string>{"Update available: WizzairHelper 1.2.0 (running 1.0.0).",
+                                        "Update 1.2.0 downloaded and verified."}));
+    rig.window().close();
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, false));
+}
+
+TEST(UpdateController, The_reminder_stays_in_the_bar_while_the_new_periods_check_downloads_its_release)
+{
+    UpdateRig rig;
+    put_off_earlier(rig, false);
+    rig.clock->advance(std::chrono::days{1});
+    rig.backend->hold_downloads();
+    ASSERT_TRUE(rig.enable());
+    HideCounter bar_hidden{&rig.bar()};
+    rig.window_rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_EQ(rig.backend->checks(), 1);
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), q("Downloading WizzairHelper 1.2.0…"));
+    EXPECT_FALSE(rig.bar().action_button()->isVisible());
+
+    rig.backend->release_downloads();
+    rig.wait_for_evaluations(1);
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
+    EXPECT_EQ(bar_hidden.hides, 0) << "shown at start, then downloading, then ready: never hidden";
+}
+
+TEST(UpdateController, Update_now_on_a_reminder_still_restarts_when_the_choice_changes_while_it_checks)
+{
+    UpdateRig rig{with_updates(choice(update::WhenFound::notify_only))};
+    put_off_earlier(rig, true);
+    rig.start();
+    ASSERT_EQ(rig.bar().action_button()->text(), "Update now");
+    rig.backend->hold_checks();
+    rig.bar().action_button()->click();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.controller()->model().fetching(); }));
+    rig.controller()->set_options(choice(update::WhenFound::install_on_close));
+    rig.backend->release_checks();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); })) << "Update now ends in its restart";
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, true));
+    EXPECT_EQ(rig.backend->manual_checks(), 1);
+    EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
+}
+
 TEST(UpdateController, Check_now_reports_checking_then_the_result_and_counts_as_the_periods_check)
 {
     UpdateRig rig;
@@ -853,6 +959,22 @@ TEST(UpdateController, A_first_check_that_fails_has_no_successful_check_yet)
     const wizz::ui::UpdateStatusView view = rig.controller()->status_view();
     EXPECT_EQ(view.kind, wizz::ui::UpdateStatusKind::failed);
     EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · no successful check yet");
+}
+
+TEST(UpdateController, An_unexpected_failure_of_the_automatic_check_names_the_last_successful_check)
+{
+    UpdateRig rig;
+    rig.backend->schedule().record_success(std::nullopt);  // checked at 10:00
+    rig.clock->advance(std::chrono::days{1});              // a new day: due
+    rig.backend->set_automatic_checks_throw(true);
+    rig.start();
+    const wizz::ui::UpdateStatusView view = rig.controller()->status_view();
+    EXPECT_EQ(view.kind, wizz::ui::UpdateStatusKind::failed);
+    EXPECT_EQ(view.status, "Something went wrong: scripted failure of the automatic check");
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · last successful check yesterday at 10:00")
+        << "logged like a failed check (D-45), named like one";
+    EXPECT_EQ(update_lines(rig.window_rig).back(), "Update check failed: scripted failure of the automatic check");
+    EXPECT_FALSE(rig.controller()->is_running());
 }
 
 TEST(UpdateController, Check_now_during_a_download_runs_after_it)
@@ -1066,46 +1188,93 @@ TEST(UpdateController, A_portable_copy_shows_the_install_choices_disabled_with_a
 // The real core behind the controller
 // ---------------------------------------------------------------------------
 
-TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_transport)
+/// GitHub as the real core sees it: releases/latest names 1.2.0, its SHA256SUMS.txt lists
+/// the hash of `sums_of` for the installer and the installer's bytes are `installer`;
+/// anything else is a 404. Every request is recorded.
+[[nodiscard]] std::shared_ptr<wizz::test::FakeTransport> github_with(std::string installer, std::string_view sums_of)
 {
-    const std::string installer = "MZ fake installer of 1.2.0";
-    const std::string sums = std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n", update::sha256_hex(installer));
     const auto asset = [](std::string_view name, int id) {
         return std::format(R"({{"url":"https://api.github.com/repos/Giorgi-Apriashvili/WizzairHelper/releases/assets/{}",)"
                            R"("id":{},"name":"{}","state":"uploaded","size":10,)"
                            R"("browser_download_url":"https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/download/v1.2.0/{}"}})",
                            id, id, name, name);
     };
-    const std::string release = std::format(
+    std::string release = std::format(
         R"({{"html_url":"{}","tag_name":"v1.2.0","draft":false,"prerelease":false,"assets":[{},{},{}]}})", kReleasePage,
         asset("WizzairHelper-1.2.0-win64-setup.exe", 1), asset("WizzairHelper-1.2.0-win64.zip", 2),
         asset("SHA256SUMS.txt", 3));
-    const auto transport = std::make_shared<wizz::test::FakeTransport>([&](const wizz::test::RecordedRequest& request) {
-        const auto bytes = [](std::string body) {
-            return wizz::test::ScriptedResponse{.response = wizz::http::Response{.status = 200,
-                                                                                 .headers = {},
-                                                                                 .content_type = "application/octet-stream",
-                                                                                 .body = std::move(body)},
-                                                .body_error = std::nullopt};
-        };
-        if (request.url.ends_with("/releases/latest")) {
-            return wizz::test::json_response(release);
-        }
-        if (request.url.contains("SHA256SUMS.txt")) {
-            return bytes(sums);
-        }
-        if (request.url.contains("-win64-setup.exe")) {
-            return bytes(installer);
-        }
-        return wizz::test::json_response("{}", 404);
-    });
+    std::string sums = std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n", update::sha256_hex(sums_of));
+    return std::make_shared<wizz::test::FakeTransport>(
+        [release = std::move(release), sums = std::move(sums),
+         installer = std::move(installer)](const wizz::test::RecordedRequest& request) {
+            const auto bytes = [](std::string body) {
+                return wizz::test::ScriptedResponse{.response = wizz::http::Response{.status = 200,
+                                                                                     .headers = {},
+                                                                                     .content_type = "application/octet-stream",
+                                                                                     .body = std::move(body)},
+                                                    .body_error = std::nullopt};
+            };
+            if (request.url.ends_with("/releases/latest")) {
+                return wizz::test::json_response(release);
+            }
+            if (request.url.contains("SHA256SUMS.txt")) {
+                return bytes(sums);
+            }
+            if (request.url.contains("-win64-setup.exe")) {
+                return bytes(installer);
+            }
+            return wizz::test::json_response("{}", 404);
+        });
+}
 
+/// A transport that answers every request with HTTP 500 and records it.
+[[nodiscard]] std::shared_ptr<wizz::test::FakeTransport> failing_github()
+{
+    return std::make_shared<wizz::test::FakeTransport>(
+        [](const wizz::test::RecordedRequest&) { return wizz::test::json_response("{}", 500); });
+}
+
+[[nodiscard]] std::shared_ptr<wizz::app::CoreUpdateBackend> real_core(const update::UpdateConfig& config,
+                                                                      std::shared_ptr<wizz::test::FakeTransport> transport,
+                                                                      std::shared_ptr<wizz::FixedClock> clock)
+{
+    return std::make_shared<wizz::app::CoreUpdateBackend>(
+        config, InstallKind::installed, std::move(transport), std::move(clock),
+        [](wizz::Duration, std::stop_token stop) { wizz::throw_if_cancelled(stop); });
+}
+
+void write_bytes(const std::filesystem::path& path, std::string_view bytes)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream{path, std::ios::binary | std::ios::trunc} << bytes;
+}
+
+[[nodiscard]] std::string read_bytes(const std::filesystem::path& path)
+{
+    std::ifstream in{path, std::ios::binary};
+    return {std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+/// An installer an earlier session downloaded and verified: the file of `bytes` and the
+/// hash download_verified kept next to it (`<name>.sha256`), that of `verified` bytes.
+std::filesystem::path place_verified(const update::UpdateConfig& config, std::string_view bytes,
+                                     std::string_view verified)
+{
+    const std::filesystem::path installer = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";
+    write_bytes(installer, bytes);
+    write_bytes(std::filesystem::path{installer} += ".sha256",
+                std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n", update::sha256_hex(verified)));
+    return installer;
+}
+
+TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_transport)
+{
+    const std::string installer = "MZ fake installer of 1.2.0";
+    const auto transport = github_with(installer, installer);
     WindowRig rig;
     const auto clock = std::make_shared<wizz::FixedClock>();
     const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
-    auto backend = std::make_shared<wizz::app::CoreUpdateBackend>(
-        config, InstallKind::installed, transport, clock,
-        [](wizz::Duration, std::stop_token stop) { wizz::throw_if_cancelled(stop); });
+    const auto backend = real_core(config, transport, clock);
     EXPECT_EQ(backend->running_version(), kRunningVersion);
     wizz::test::app::LaunchLog launches;
     ASSERT_TRUE(rig.window().enable_updates(launches.hooks(backend)));
@@ -1115,6 +1284,9 @@ TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_t
     EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
     const std::filesystem::path downloaded = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";
     EXPECT_TRUE(std::filesystem::exists(downloaded));
+    EXPECT_EQ(read_bytes(std::filesystem::path{downloaded} += ".sha256"),
+              std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n", update::sha256_hex(installer)))
+        << "its hash is kept for a later session";
     EXPECT_TRUE(std::filesystem::exists(config.state_file()));
     EXPECT_TRUE(std::filesystem::exists(config.log_file()));
     EXPECT_FALSE(std::filesystem::exists(rig.data_root() / "update.log")) << "nothing of the updater in the data root";
@@ -1134,34 +1306,107 @@ TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_t
 TEST(UpdateController, The_real_core_reminds_from_its_files_without_a_request)
 {
     // update-state.json of an earlier session that saw 1.2.0 today, its verified installer
-    // and a stale one of an older version in the downloads folder; the transport answers
-    // every request with HTTP 500 and records it.
-    const auto transport = std::make_shared<wizz::test::FakeTransport>(
-        [](const wizz::test::RecordedRequest&) { return wizz::test::json_response("{}", 500); });
+    // with its kept hash and a stale one of an older version in the downloads folder; the
+    // transport answers every request with HTTP 500 and records it.
+    const auto transport = failing_github();
     WindowRig rig;
     const auto clock = std::make_shared<wizz::FixedClock>();
     const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
     update::UpdateSchedule{config.updates_dir(), clock}.record_success(kNewVersion);
-    const std::filesystem::path installer = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";
+    const std::filesystem::path installer =
+        place_verified(config, "MZ verified by an earlier session", "MZ verified by an earlier session");
     const std::filesystem::path stale = config.download_dir() / "WizzairHelper-0.9.0-win64-setup.exe";
-    std::filesystem::create_directories(config.download_dir());
-    std::ofstream{installer, std::ios::binary} << "MZ verified by an earlier session";
-    std::ofstream{stale, std::ios::binary} << "MZ";
-    auto backend = std::make_shared<wizz::app::CoreUpdateBackend>(
-        config, InstallKind::installed, transport, clock,
-        [](wizz::Duration, std::stop_token stop) { wizz::throw_if_cancelled(stop); });
+    write_bytes(stale, "MZ");
+    write_bytes(std::filesystem::path{stale} += ".sha256", "the kept hash of an old download");
     wizz::test::app::LaunchLog launches;
-    ASSERT_TRUE(rig.window().enable_updates(launches.hooks(backend)));
+    ASSERT_TRUE(rig.window().enable_updates(launches.hooks(real_core(config, transport, clock))));
     rig.start();
     ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }));
 
     EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
     EXPECT_TRUE(transport->urls().empty()) << "nothing was sent to GitHub";
     EXPECT_FALSE(std::filesystem::exists(stale)) << "old downloads are still cleaned up";
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path{stale} += ".sha256"));
     rig.window().close();
     ASSERT_EQ(launches.commands.size(), 1u);
     EXPECT_EQ(launches.commands.front().program, installer);
     EXPECT_TRUE(transport->urls().empty());
+}
+
+TEST(UpdateController, The_real_core_offers_a_file_it_cannot_vouch_for_only_with_Update_now)
+{
+    // The installer's name alone is no proof: without the hash kept when it was verified,
+    // with bytes that changed since, or with only an unfinished .tmp download, the update
+    // is offered with Update now — still without a request — and closing installs nothing.
+    struct Case {
+        std::string_view name;
+        void (*place)(const update::UpdateConfig&);
+    };
+    const Case cases[] = {
+        {"no kept hash",
+         [](const update::UpdateConfig& config) {
+             write_bytes(config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe", "MZ");
+         }},
+        {"changed since", [](const update::UpdateConfig& config) { (void)place_verified(config, "MZ changed", "MZ"); }},
+        {"only a .tmp",
+         [](const update::UpdateConfig& config) {
+             write_bytes(config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "MZ");
+         }},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.name);
+        const auto transport = failing_github();
+        WindowRig rig;
+        const auto clock = std::make_shared<wizz::FixedClock>();
+        const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
+        update::UpdateSchedule{config.updates_dir(), clock}.record_success(kNewVersion);
+        c.place(config);
+        wizz::test::app::LaunchLog launches;
+        ASSERT_TRUE(rig.window().enable_updates(launches.hooks(real_core(config, transport, clock))));
+        rig.start();
+        ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }));
+        EXPECT_EQ(rig.window().update_bar()->message_label()->text(), "WizzairHelper 1.2.0 is available.");
+        EXPECT_EQ(rig.window().update_bar()->action_button()->text(), "Update now");
+        EXPECT_TRUE(transport->urls().empty());
+        rig.window().close();
+        EXPECT_TRUE(launches.commands.empty()) << "never a file nothing vouches for";
+    }
+}
+
+TEST(UpdateController, The_real_core_confirms_a_reminded_installer_against_its_release)
+{
+    // Yesterday's session verified 1.2.0's installer; today's check finds 1.2.0. Its
+    // SHA256SUMS.txt confirms the file on disk: the check and the checksums are sent, the
+    // installer is not downloaded again. A release whose checksums no longer match the file
+    // (its assets were uploaded again) replaces it before anything installs it.
+    for (const bool reuploaded : {false, true}) {
+        SCOPED_TRACE(reuploaded ? "uploaded again" : "unchanged");
+        const std::string kept = "MZ verified yesterday";
+        const std::string published = reuploaded ? "MZ uploaded again" : kept;
+        const auto transport = github_with(published, published);
+        WindowRig rig;
+        const auto clock = std::make_shared<wizz::FixedClock>();
+        const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
+        update::UpdateSchedule{config.updates_dir(), clock}.record_success(kNewVersion);
+        clock->advance(std::chrono::days{1});
+        const std::filesystem::path installer = place_verified(config, kept, kept);
+        wizz::test::app::LaunchLog launches;
+        ASSERT_TRUE(rig.window().enable_updates(launches.hooks(real_core(config, transport, clock))));
+        rig.start();
+        const wizz::app::UpdateController* controller = rig.window().update_controller();
+        ASSERT_TRUE(gui::wait_until([&] { return transport->urls().size() >= 2 && !controller->is_running(); }));
+        gui::settle();
+
+        const std::vector<std::string> urls = transport->urls();
+        ASSERT_EQ(urls.size(), reuploaded ? 3u : 2u) << "the day's check and the checksums, the installer only if changed";
+        EXPECT_EQ(urls[0], "https://api.github.com/repos/Giorgi-Apriashvili/WizzairHelper/releases/latest");
+        EXPECT_TRUE(urls[1].contains("SHA256SUMS.txt"));
+        EXPECT_EQ(read_bytes(installer), published);
+        EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
+        rig.window().close();
+        ASSERT_EQ(launches.commands.size(), 1u);
+        EXPECT_EQ(launches.commands.front().program, installer);
+    }
 }
 
 TEST(UpdateController, The_system_hooks_use_the_running_version_and_the_updates_folder)

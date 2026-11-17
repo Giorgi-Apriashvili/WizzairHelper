@@ -64,8 +64,9 @@ inline const update::Version kRunningVersion{1, 0, 0};
 /// The core with scripted answers: check_if_due asks the real UpdateSchedule (in
 /// `updates_dir`, on `clock`) with the controller's policy and records the scripted
 /// result in it, like Updater::check_if_due; check_now always answers and records, like
-/// Updater::check_now; downloads answer from their own script; verified_installer finds a
-/// file in `<updates_dir>\downloads` like update::find_verified_download. checks() and
+/// Updater::check_now; downloads answer from their own script; verified_installer takes a
+/// file of the installer's name in `<updates_dir>\downloads` as verified (the real
+/// update::find_verified_download also hashes it against its kept hash). checks() and
 /// downloads_started() count every request the controller makes. Thread-safe.
 class FakeUpdateBackend final : public wizz::app::UpdateBackend {
 public:
@@ -88,6 +89,9 @@ public:
         policies_.push_back(policy);
         if (!schedule_.is_check_due(policy)) {
             return std::nullopt;
+        }
+        if (block_automatic_checks_) {
+            throw std::runtime_error("scripted failure of the automatic check");
         }
         return answer_check();
     }
@@ -172,6 +176,12 @@ public:
     {
         const std::scoped_lock lock{mutex_};
         block_manual_checks_ = on;
+    }
+    /// A due automatic check (check_if_due) throws a std::runtime_error while set.
+    void set_automatic_checks_throw(bool on)
+    {
+        const std::scoped_lock lock{mutex_};
+        block_automatic_checks_ = on;
     }
 
     /// Check now (check_now) waits on its worker until release_checks() (or the window closes).
@@ -288,6 +298,7 @@ private:
     std::vector<std::string> log_;
     std::vector<update::CheckPolicy> policies_;
     bool block_manual_checks_ = false;
+    bool block_automatic_checks_ = false;
     mutable std::mutex gate_mutex_;
     std::condition_variable_any gate_changed_;
     bool downloads_held_ = false;

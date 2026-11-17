@@ -183,6 +183,8 @@ private:
     bool closing_ = false;
     bool working_ = false;
     bool reminded_ = false;
+    /// automatic_check()'s worker runs: an exception now ended a check (D-45, D-62).
+    bool automatic_checking_ = false;
     bool manual_queued_ = false;
     bool fetch_queued_ = false;
     bool download_queued_ = false;

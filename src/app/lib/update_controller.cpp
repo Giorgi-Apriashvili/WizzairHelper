@@ -181,10 +181,11 @@ Task<> UpdateController::run(Work first)
                 }
             } catch (const OperationCancelled&) {
                 // The window is closing.
+                automatic_checking_ = false;
             } catch (const std::exception& error) {
                 // The updater never shows a crash box: one Log line, and nothing stays busy.
                 log_(ui::update_strings::check_failed_log(error.what()));
-                model_.on_unexpected_error(error.what());
+                model_.on_unexpected_error(error.what(), std::exchange(automatic_checking_, false));
                 refresh();
             }
             work.reset();
@@ -238,12 +239,14 @@ Task<> UpdateController::automatic_check()
         std::optional<UpdateCheckResult> result;  // nullopt: no check was due
         update::UpdateState state;
     };
+    automatic_checking_ = true;
     Answer answer = co_await jobs_->run(
         jobs_->new_job_id(), stop_.get_token(),
         [backend = hooks_.backend, policy = model_.check_policy()](const JobChannel& channel) {
             std::optional<UpdateCheckResult> result = backend->check_if_due(policy, channel.stop_token());
             return Answer{.result = std::move(result), .state = backend->load_state()};
         });
+    automatic_checking_ = false;
     model_.set_saved_state(answer.state);
     if (answer.result) {
         co_await apply_check(std::move(*answer.result), ui::CheckOrigin::automatic);

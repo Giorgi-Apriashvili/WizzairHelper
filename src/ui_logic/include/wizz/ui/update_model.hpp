@@ -24,10 +24,12 @@
 //     download_then_ask, a portable copy, an installer that did not start) is offered
 //     again at every start from what the app already knows — update-state.json's
 //     LatestSeenVersion and a verified installer in the downloads folder — without any
-//     request (remind()): a verified installer is ready under install_on_close and
-//     download_then_ask; otherwise, and under notify_only, "Update now" checks for its
-//     release first and then downloads it (the user asked); a portable copy links to its
-//     release page.
+//     request (remind()): a verified installer (hashed again from disk against the hash
+//     kept when it was verified) is ready under install_on_close and download_then_ask;
+//     otherwise, and under notify_only, "Update now" checks for its release first and then
+//     downloads it (the user asked); a portable copy links to its release page. When a
+//     check of the session finds that release, its download confirms the installer
+//     against the release's SHA256SUMS.txt while the bar keeps offering it.
 //   * The update bar (UpdateBarView) and what its action does (BarAction); "Later"
 //     hides the bar for the rest of the session.
 //   * The Settings window's "Updates" status (UpdateStatusView): the version and the
@@ -296,9 +298,12 @@ public:
     ///   remembered() update is dropped;
     /// - any other error: one check_failed_log line (the status: the failure; the version
     ///   line names the last *successful* check); a remembered() update stays offered;
-    /// - a release, after a remembered() update: the check's answer replaces it; its
-    ///   verified installer becomes ready() when the release is that version or a newer
-    ///   one and the choice downloads;
+    /// - a release, after a remembered() update: the check's answer replaces it. Under a
+    ///   choice that downloads its verified installer stays offered as ready(): for that
+    ///   very release while the release's download (asked for as usual) confirms it against
+    ///   the release's SHA256SUMS.txt — download_verified reuses the file when it matches;
+    ///   if that download fails it is no longer offered — and for a newer release while the
+    ///   newer one downloads;
     /// - a newer release already ready, offered or being downloaded (or an older one):
     ///   nothing new;
     /// - a newer release: available_log once per version and session; a portable copy
@@ -339,8 +344,11 @@ public:
 
     /// A check or download ended with an unexpected exception (logged by the caller like a
     /// failed check): nothing is checking or downloading any more, "Update now" is offered
-    /// again, and the status says "Something went wrong: {what}".
-    void on_unexpected_error(std::string_view what);
+    /// again, and the status says "Something went wrong: {what}". It counts as a failed
+    /// check for the version line ("last successful check") when it ended Check now, the
+    /// check of "Update now", or — `during_check`, which the caller knows — an automatic
+    /// check.
+    void on_unexpected_error(std::string_view what, bool during_check = false);
 
     /// A newer release whose installer is still to be downloaded and verified.
     [[nodiscard]] const std::optional<update::ReleaseInfo>& pending_download() const noexcept { return pending_; }
@@ -354,8 +362,9 @@ public:
     /// next re-evaluation downloads again instead of checking.
     [[nodiscard]] bool download_retry_due() const noexcept;
 
-    /// The verified installer on offer: the one verified in this session, else a
-    /// remembered() one while the choice downloads (install_on_close, download_then_ask).
+    /// The verified installer on offer: the one verified in this session, else an earlier
+    /// session's (remembered(), or one whose release's download is confirming it) while
+    /// the choice downloads (install_on_close, download_then_ask).
     [[nodiscard]] std::optional<ReadyInstaller> ready() const;
     [[nodiscard]] const std::optional<AvailableRelease>& available() const noexcept { return available_; }
 
@@ -372,6 +381,9 @@ public:
     ///   "Restart and update" (disabled while `working`);
     /// - installed, a remembered() update without a ready() installer: available_text +
     ///   "Update now" as above; after it was pressed downloading_text, no action;
+    /// - installed, a release downloading on its own (or about to) in a session that offered
+    ///   an update again at start (remind()): downloading_text, no action, so that offer
+    ///   does not vanish until the download is verified;
     /// - otherwise hidden (an installed copy downloading on its own shows nothing yet).
     [[nodiscard]] UpdateBarView bar(bool working) const;
     /// The bar's action button: what bar() offers, unless it is disabled while `working`.
@@ -401,11 +413,13 @@ public:
     /// saved_state(), named "last successful check" while the last check of this session
     /// failed (update_strings::LastCheck::failed), else "last checked". The status, first
     /// that applies: checking; downloading (also the check of "Update now" for a
-    /// remembered update); ready (a verified installer, unless "Update now" offers a newer
-    /// release); failed (the last check or download failed); available (also a remembered
-    /// update); up to date (a check this session found nothing newer); before any check
-    /// this session, from saved_state(): available when it saw a newer version, up to date
-    /// after a successful check, else not checked.
+    /// remembered update; not the download that only confirms the installer the bar offers
+    /// as ready); failed when Check now failed (the user asked: also over a ready
+    /// installer, until anything else happens); ready (a verified installer, unless
+    /// "Update now" offers a newer release); failed (the last check or download failed);
+    /// available (also a remembered update); up to date (a check this session found
+    /// nothing newer); before any check this session, from saved_state(): available when
+    /// it saw a newer version, up to date after a successful check, else not checked.
     [[nodiscard]] UpdateStatusView status_view(const Clock& clock, const Locale& locale) const;
 
     [[nodiscard]] const update::Version& running() const noexcept { return running_; }
@@ -414,6 +428,14 @@ public:
 private:
     enum class Offer : std::uint8_t { none, ready, release_page, update_now, downloading_for_install };
 
+    /// A failed check or download, in plain words.
+    struct Problem {
+        std::string text;
+        /// The failure of Check now: the status shows it also over a ready installer,
+        /// since the user asked (until anything else happens).
+        bool answers_check_now = false;
+    };
+
     [[nodiscard]] Offer offer() const noexcept;
     /// on_check without its bookkeeping of the checks in flight.
     [[nodiscard]] CheckOutcome take_check(const CheckResult& result, CheckOrigin origin);
@@ -421,6 +443,10 @@ private:
     [[nodiscard]] bool newer_pending() const noexcept;
     /// The remembered update's verified installer is on offer as ready().
     [[nodiscard]] bool remembered_ready() const noexcept;
+    /// confirming_ is on offer as ready() (the choice downloads, like remembered_ready()).
+    [[nodiscard]] bool confirming_offered() const noexcept;
+    /// ready() has a value.
+    [[nodiscard]] bool has_ready() const noexcept;
     /// The version "Update now" (or its download) is about: pending_'s when newer_pending(),
     /// else the remembered one's.
     [[nodiscard]] update::Version wanted_version() const noexcept;
@@ -442,9 +468,14 @@ private:
     bool downloading_ = false;
     bool retry_download_ = false;
     std::optional<ReadyInstaller> ready_;
+    /// remembered_'s verified installer after a check found its very release: still offered
+    /// as ready while that release's download confirms it against its SHA256SUMS.txt
+    /// (download_verified reuses a file that matches, D-43); dropped if that fails.
+    std::optional<ReadyInstaller> confirming_;
     std::optional<AvailableRelease> available_;
-    std::optional<std::string> problem_;  ///< the last check or download failure, in plain words
+    std::optional<Problem> problem_;  ///< the last check or download failure
     std::optional<EarlierUpdate> remembered_;  ///< remind()'s update until a check of this session answers
+    bool reminded_ = false;           ///< remind() offered an update in this session
     bool checked_ = false;            ///< a check of this session answered (a release or no_release)
     bool last_check_failed_ = false;  ///< the last check of this session failed
     bool fetching_ = false;           ///< the check of "Update now" for remembered_ runs
