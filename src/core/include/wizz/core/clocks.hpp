@@ -19,6 +19,9 @@ public:
     /// Resolves the machine time zone once. If the time-zone database is
     /// unavailable the local wall clock falls back to UTC.
     SystemClock() noexcept;
+    /// The wall clock of `zone` (nullptr = UTC) instead of the machine's: tests pin a zone
+    /// with daylight saving time whatever zone the machine is in.
+    explicit SystemClock(const std::chrono::time_zone* zone) noexcept;
 
     [[nodiscard]] UtcInstant utc_now() const override;
     [[nodiscard]] LocalDateTime local_now() const override;

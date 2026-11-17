@@ -374,6 +374,30 @@ TEST(SystemClock, To_local_uses_the_machine_zone_rule_of_that_instant)
     }
 }
 
+TEST(SystemClock, To_local_converts_each_instant_with_the_daylight_saving_rule_it_had)
+{
+    // The machine may be in a zone without daylight saving time (a UTC CI runner, say), so
+    // a zone with it is pinned: Berlin is UTC+1 in winter and UTC+2 in summer, and on
+    // 25 Oct 2026 the clocks go back at 01:00 UTC (03:00 summer time becomes 02:00).
+    const std::chrono::time_zone* berlin = nullptr;
+    try {
+        berlin = std::chrono::locate_zone("Europe/Berlin");
+    } catch (const std::runtime_error&) {
+        GTEST_SKIP() << "no time-zone database on this machine";
+    }
+    const wizz::SystemClock clock{berlin};
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 1, 15), 12, 0)), make_local(d(2026, 1, 15), 13, 0)) << "winter";
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 7, 15), 12, 0)), make_local(d(2026, 7, 15), 14, 0)) << "summer";
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 10, 25), 0, 30)), make_local(d(2026, 10, 25), 2, 30))
+        << "summer time, half an hour before the change";
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 10, 25), 1, 30)), make_local(d(2026, 10, 25), 2, 30))
+        << "winter time, half an hour after it";
+
+    const wizz::SystemClock utc{nullptr};
+    EXPECT_EQ(utc.to_local(wizz::make_utc(d(2026, 7, 15), 12, 0)), make_local(d(2026, 7, 15), 12, 0))
+        << "no zone: UTC";
+}
+
 TEST(SystemClock, Monotonic_time_never_goes_back)
 {
     const wizz::SystemClock clock;

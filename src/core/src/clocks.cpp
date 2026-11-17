@@ -20,6 +20,8 @@ namespace {
 
 SystemClock::SystemClock() noexcept : zone_(locate_machine_zone()) {}
 
+SystemClock::SystemClock(const std::chrono::time_zone* zone) noexcept : zone_(zone) {}
+
 UtcInstant SystemClock::utc_now() const
 {
     return std::chrono::time_point_cast<Ticks>(std::chrono::system_clock::now());
