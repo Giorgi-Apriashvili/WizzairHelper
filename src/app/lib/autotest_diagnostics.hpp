@@ -118,8 +118,9 @@ struct EnvironmentDiagnostics {
     std::string look;                         ///< "light", "dark" or "high_contrast" (style::appearance())
     std::string window_colour;                ///< the palette's Window colour, "#rrggbb"
     std::string font_family;                  ///< the family the UI font resolved to
-    std::string text_rendering;               ///< the WIZZ_TEXT_RENDERING candidate (style::text_rendering())
+    std::string text_rendering;               ///< the text rendering (style::text_rendering(), D-58)
     std::string font_hinting;                 ///< the UI font's hinting preference: "default", "none", "vertical", "full"
+    std::optional<double> font_weight_axis;   ///< the UI font's "wght" axis value; none when it has none
 };
 
 struct AutoTestDiagnostics {

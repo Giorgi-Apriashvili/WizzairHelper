@@ -21,6 +21,7 @@
 
 #include <QAction>
 #include <QCheckBox>
+#include <QFontMetricsF>
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
@@ -28,6 +29,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include <gtest/gtest.h>
 
@@ -147,7 +149,8 @@ TEST(RoundTripGridWidget, Booking_notes_fill_the_rest_but_keep_120_and_the_heade
     QHeaderView& header = *table.horizontalHeader();
     EXPECT_EQ(header.minimumHeight(), 0) << "every header text on one line at the default width";
     const int one_line = header.height();
-    EXPECT_EQ(one_line, QFontMetrics(header.font()).height() + 2 * 5) << "one line and the 5 px padding";
+    EXPECT_EQ(one_line, qCeil(QFontMetricsF(header.font()).height()) + 2 * 5)
+        << "one line (ascent and descent, rounded up: D-58) and the 5 px padding";
 
     f.grid.resize(700, 400);
     test::gui::settle();

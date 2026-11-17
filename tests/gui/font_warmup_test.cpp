@@ -14,6 +14,7 @@
 #include <QFontMetrics>
 #include <QImage>
 #include <QLabel>
+#include <QPushButton>
 
 #include <gtest/gtest.h>
 
@@ -36,7 +37,9 @@ TEST(FontWarmup, The_sample_holds_the_wait_notes_and_the_fonts_are_the_ones_the_
     const auto warmed = [&fonts](const QFont& font) { return std::ranges::find(fonts, font) != fonts.end(); };
 
     // Exactly the fonts the busy panel lays its texts out in (each is a font engine of its
-    // own, with its own fallback for the "⏳"), so no busy period meets the cold path.
+    // own, with its own fallback for the "⏳"), so no busy period meets the cold path. QFont's
+    // == compares the text rendering too (D-58: the hinting preference and the weight axis,
+    // which pick the engine): a font warmed as 2.0.0 drew it would warm another engine.
     wizz::FixedClock clock;
     const wizz::app::BusyPanel panel{clock, wizz::Locale::en_us()};
     ASSERT_FALSE(fonts.empty());
@@ -44,6 +47,13 @@ TEST(FontWarmup, The_sample_holds_the_wait_notes_and_the_fonts_are_the_ones_the_
     EXPECT_EQ(panel.status_label()->font(), fonts[0]) << "the status line";
     EXPECT_TRUE(warmed(panel.wait_label()->font())) << "the wait note, where the hourglass appears";
     EXPECT_TRUE(warmed(panel.elapsed_label()->font())) << "the elapsed time";
+    ASSERT_TRUE(panel.status_label()->compact_font().has_value());
+    EXPECT_TRUE(warmed(*panel.status_label()->compact_font())) << "a status line drawn 1 pt smaller";
+    EXPECT_TRUE(warmed(panel.cancel_button()->font())) << "Cancel";
+    for (const QFont& font : fonts) {
+        QFont fitted = font;
+        EXPECT_FALSE(wizz::app::style::fit_text_rendering(fitted)) << "drawn as the app draws it: " << font.toString().toStdString();
+    }
     // And the other texts of the look.
     for (const QFont& font : {wizz::app::style::bold_form_font(), wizz::app::style::data_font(),
                               wizz::app::style::mono_font(9.5), wizz::app::style::hint_font(),

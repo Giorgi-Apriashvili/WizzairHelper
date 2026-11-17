@@ -7,6 +7,7 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QBrush>
+#include <QFontMetricsF>
 #include <QHelpEvent>
 #include <QPainter>
 #include <QStyle>
@@ -86,7 +87,9 @@ bool GridRowDelegate::text_truncated(const QStyleOptionViewItem& option, const Q
     const QStyle* style = widget != nullptr ? widget->style() : QApplication::style();
     // QCommonStyle's item text margin: PM_FocusFrameHMargin + 1 on each side.
     const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, &option, widget) + 1;
-    return option.fontMetrics.horizontalAdvance(option.text) + 2 * margin > option.rect.width();
+    // The text's own width, not rounded: QCommonStyle elides a line wider than its rect by any
+    // fraction of a pixel, and without hinting (D-58) advances are fractional.
+    return QFontMetricsF(option.fontMetrics).horizontalAdvance(option.text) + 2 * margin > option.rect.width();
 }
 
 } // namespace wizz::app

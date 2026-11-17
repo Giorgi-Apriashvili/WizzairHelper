@@ -7,9 +7,12 @@
 // WIZZ_COLOR_SCHEME=dark when the binary starts runs the whole suite in the
 // dark look instead (tests compare with style::theme(), not with fixed colours).
 //
+// WIZZ_TEXT_RENDERING=natural|hinted runs it with that text rendering (D-58).
+//
 // LookGuard is for the tests that change the look (scheme, High Contrast probe,
-// Windows 10 fonts): it clears the switches for the test and puts the suite's
-// look back afterwards, also after a failed ASSERT.
+// Windows 10 fonts, text rendering): it clears the switches for the test (the
+// default rendering, natural-heavier) and puts the suite's look back afterwards,
+// also after a failed ASSERT.
 
 #include "ui_style.hpp"
 
@@ -23,7 +26,8 @@
 namespace wizz::test::look {
 
 /// The environment switches of the look (ui_style.hpp).
-inline constexpr std::array<const char*, 3> kSwitches{"WIZZ_COLOR_SCHEME", "WIZZ_HIGH_CONTRAST", "WIZZ_FONTS"};
+inline constexpr std::array<const char*, 4> kSwitches{"WIZZ_COLOR_SCHEME", "WIZZ_HIGH_CONTRAST", "WIZZ_FONTS",
+                                                      "WIZZ_TEXT_RENDERING"};
 
 /// Installs the suite's look: light unless WIZZ_COLOR_SCHEME says otherwise, High
 /// Contrast off. Called by the test main once the QApplication exists.

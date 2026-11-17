@@ -19,7 +19,9 @@ std::vector<QFont> FontWarmup::default_fonts()
     // The UI fonts plus the monospace and semibold faces the busy panel and the grids use.
     // The busy panel's wait note, where the "⏳" appears, is the semibold face at the UI
     // size (bold_form_font); a status line too long for the UI font is drawn at 9 pt
-    // (hint_font). Each is a font engine of its own.
+    // (hint_font). Each is a font engine of its own, and so is each text rendering (D-58:
+    // the hinting preference and the weight axis are part of the engine's key): ui_style's
+    // fonts carry the one the app draws with.
     return {style::form_font(), style::bold_form_font(), style::data_font(), style::mono_font(10.0, true),
             style::mono_font(9.5), style::hint_font(), style::caption_font()};
 }

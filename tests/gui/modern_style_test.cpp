@@ -16,6 +16,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QHeaderView>
 #include <QImage>
 #include <QKeyEvent>
@@ -31,6 +32,7 @@
 #include <QStyleOptionSlider>
 #include <QStyleOptionViewItem>
 #include <QTabBar>
+#include <QtMath>
 
 #include <gtest/gtest.h>
 
@@ -96,10 +98,17 @@ TEST(ModernStyle, Is_the_application_style)
 
 TEST(ModernStyle, Every_input_and_button_is_one_control_height)
 {
-    // max(26, font height + 10): fields, drop-downs, spin boxes, date pickers and push
+    // max(26, line height + 10): fields, drop-downs, spin boxes, date pickers and push
     // buttons line up in a card row (the search buttons use the same height, SearchButton).
+    // The line is the ascent plus the descent rounded up, as text layout and QComboBox lay it
+    // out; without hinting (D-58) QFontMetrics::height() rounds the two apart and can be a pixel
+    // less (17 instead of 18 for the UI font), which made the drop-downs a pixel taller than
+    // the fields.
     const QFontMetrics metrics(style::form_font());
-    EXPECT_EQ(ModernStyle::control_height(metrics), std::max(26, metrics.height() + 10));
+    const int line = qCeil(QFontMetricsF(style::form_font()).height());
+    EXPECT_EQ(ModernStyle::line_height(metrics), line);
+    EXPECT_GE(line, metrics.height());
+    EXPECT_EQ(ModernStyle::control_height(metrics), std::max(26, line + 10));
     QFont tiny = style::form_font();
     tiny.setPointSizeF(5.0);
     EXPECT_EQ(ModernStyle::control_height(QFontMetrics(tiny)), 26) << "never below 26";
@@ -119,14 +128,17 @@ TEST(ModernStyle, Every_input_and_button_is_one_control_height)
 
 TEST(ModernStyle, Push_buttons_are_text_plus_padding_with_a_minimum_unless_flat)
 {
-    const QFontMetrics metrics(style::form_font());
+    // The text's width rounded up (natural rendering places glyphs at fractional positions,
+    // D-58) and 16 px on either side.
+    const QFontMetricsF metrics(style::form_font());
+    const auto text_width = [&metrics](const QPushButton& button) { return qCeil(metrics.horizontalAdvance(button.text())); };
     QPushButton ok(QStringLiteral("OK"));
     EXPECT_EQ(ok.sizeHint().width(), 88) << "dialog buttons keep a minimum width";
     QPushButton long_text(QStringLiteral("Restart and update now, please"));
-    EXPECT_EQ(long_text.sizeHint().width(), metrics.horizontalAdvance(long_text.text()) + 2 * 16);
+    EXPECT_EQ(long_text.sizeHint().width(), text_width(long_text) + 2 * 16);
     QPushButton flat(QStringLiteral("Later"));
     flat.setFlat(true);
-    EXPECT_EQ(flat.sizeHint().width(), metrics.horizontalAdvance(flat.text()) + 2 * 16) << "flat: as wide as its text";
+    EXPECT_EQ(flat.sizeHint().width(), text_width(flat) + 2 * 16) << "flat: as wide as its text";
     EXPECT_EQ(app_style().pixelMetric(QStyle::PM_ButtonDefaultIndicator), 0);
     EXPECT_EQ(app_style().pixelMetric(QStyle::PM_ButtonShiftHorizontal), 0);
     EXPECT_EQ(app_style().pixelMetric(QStyle::PM_ButtonShiftVertical), 0) << "a pressed button does not move";
@@ -143,7 +155,8 @@ TEST(ModernStyle, Tabs_headers_scroll_bars_and_check_boxes_keep_their_metrics)
     EXPECT_EQ(s.pixelMetric(QStyle::PM_TabBarBaseHeight), 0);
     EXPECT_EQ(s.pixelMetric(QStyle::PM_TabBarTabOverlap), 0);
 
-    // Header sections: one text line plus 5 px above and below (the round-trip header row).
+    // Header sections: one text line (ascent plus descent, rounded up) plus 5 px above and
+    // below (the round-trip header row), the text (rounded up) plus 9 px either side.
     EXPECT_EQ(s.pixelMetric(QStyle::PM_HeaderMargin), 5);
     QHeaderView header(Qt::Horizontal);
     header.setFont(style::bold_form_font());
@@ -151,8 +164,9 @@ TEST(ModernStyle, Tabs_headers_scroll_bars_and_check_boxes_keep_their_metrics)
     option.initFrom(&header);
     option.text = QStringLiteral("Return price");
     const QSize section = s.sizeFromContents(QStyle::CT_HeaderSection, &option, QSize(), &header);
-    EXPECT_EQ(section.height(), QFontMetrics(header.font()).height() + 2 * 5);
-    EXPECT_EQ(section.width(), QFontMetrics(header.font()).horizontalAdvance(option.text) + 2 * 9);
+    const QFontMetricsF header_metrics(header.font());
+    EXPECT_EQ(section.height(), qCeil(header_metrics.height()) + 2 * 5);
+    EXPECT_EQ(section.width(), qCeil(header_metrics.horizontalAdvance(option.text)) + 2 * 9);
     option.sortIndicator = QStyleOptionHeader::SortDown;
     EXPECT_EQ(s.sizeFromContents(QStyle::CT_HeaderSection, &option, QSize(), &header).width(), section.width() + 14)
         << "room for the sort arrow";

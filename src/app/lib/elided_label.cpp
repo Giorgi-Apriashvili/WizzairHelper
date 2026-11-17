@@ -2,9 +2,11 @@
 
 #include <QEvent>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QHelpEvent>
 #include <QPainter>
 #include <QToolTip>
+#include <QtMath>
 
 namespace wizz::app {
 
@@ -67,16 +69,18 @@ QString ElidedLabel::tooltip_text() const
 
 QSize ElidedLabel::sizeHint() const
 {
-    const QFontMetrics metrics = fontMetrics();
+    // Rounded up: without hinting (D-58) glyphs sit at fractional positions, and a width
+    // rounded down would cut the last fraction of a pixel with "…".
+    const QFontMetricsF metrics(font());
     const QMargins margins = contentsMargins();
-    return {metrics.horizontalAdvance(text_) + margins.left() + margins.right(),
-            metrics.height() + margins.top() + margins.bottom()};
+    return {qCeil(metrics.horizontalAdvance(text_)) + margins.left() + margins.right(),
+            qCeil(metrics.height()) + margins.top() + margins.bottom()};
 }
 
 QSize ElidedLabel::minimumSizeHint() const
 {
     const QMargins margins = contentsMargins();
-    return {margins.left() + margins.right(), fontMetrics().height() + margins.top() + margins.bottom()};
+    return {margins.left() + margins.right(), qCeil(QFontMetricsF(font()).height()) + margins.top() + margins.bottom()};
 }
 
 bool ElidedLabel::event(QEvent* event)

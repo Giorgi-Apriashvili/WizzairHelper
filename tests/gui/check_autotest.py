@@ -15,13 +15,15 @@ machine does not fail a run. Run with `python -I` (no site or user
 paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
 QT_SCALE_FACTOR (01 §15, 05 §5). `--window 980x600` starts the window at that size (the whole
 window in logical pixels, like 01 §4.1) through the profile's settings.json, which the app then
-must leave unchanged. `--color-scheme light|dark`, `--high-contrast` and `--fonts windows10` set
-the look's diagnostic switches WIZZ_COLOR_SCHEME, WIZZ_HIGH_CONTRAST and WIZZ_FONTS (DECISIONS
-D-56); without them the run inherits the caller's environment. Every run checks that the app shows
-the look it was asked for (DECISIONS D-53..D-56): High Contrast when Windows (or WIZZ_HIGH_CONTRAST)
-says so, else WIZZ_COLOR_SCHEME, else the Windows app mode (AppsUseLightTheme) - in diagnostics.json
-(the look, its palette's window colour, ModernStyle) and in the first screenshot, whose most common
-colour must be the look's window or surface colour.
+must leave unchanged. `--color-scheme light|dark`, `--high-contrast`, `--fonts windows10` and
+`--text-rendering natural-heavier|natural|hinted` set the look's diagnostic switches WIZZ_COLOR_SCHEME,
+WIZZ_HIGH_CONTRAST, WIZZ_FONTS and WIZZ_TEXT_RENDERING (DECISIONS D-56, D-58); without them the run
+inherits the caller's environment. Every run checks that the app shows the look it was asked for
+(DECISIONS D-53..D-56): High Contrast when Windows (or WIZZ_HIGH_CONTRAST) says so, else
+WIZZ_COLOR_SCHEME, else the Windows app mode (AppsUseLightTheme) - in diagnostics.json (the look, its
+palette's window colour, ModernStyle) and in the first screenshot, whose most common colour must be
+the look's window or surface colour - and draws its text as D-58 says: natural, the UI font 50 units
+heavier on its weight axis where it has one, unless WIZZ_TEXT_RENDERING asks for another rendering.
 
 The replay directory is tests/replay/<scenario>, except for the heavy cached
 replays (heavy_cached, cancel_cached), whose timetables are generated into
@@ -62,6 +64,7 @@ KEY_ORDER = ['startedAt', 'apiUrl', 'airports', 'outbound', 'return', 'roundTrip
 DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'cancel', 'searches', 'grids', 'display', 'layout', 'environment']
 # The window and surface colours of the light and dark looks (style::Theme, DECISIONS D-53).
 LOOK_COLOURS = {'light': ('#f3f2f6', '#ffffff'), 'dark': ('#131217', '#1d1c22')}
+TEXT_RENDERINGS = ('natural-heavier', 'natural', 'hinted')
 CANCELLING = 'Cancelling… (finishing the current request)'
 PRESSES = ['Esc', 'Cancel button', 'Esc', 'Cancel handler']
 
@@ -252,6 +255,16 @@ class Checker:
             return
         self.expect(colour in (window, surface), '1-outbound.png: most common colour %s is neither the %s window %s '
                     'nor its surface %s' % (colour, expected, window, surface))
+
+    def text_rendering(self, expected):
+        """D-58: the run draws its text with `expected` ('natural-heavier', 'natural' or 'hinted'): the UI
+        font has no hinting unless it is 'hinted', and a weight axis 50 units above its regular face only
+        under 'natural-heavier' and only where the UI font is Segoe UI Variable (Windows 10's Segoe UI and
+        WIZZ_FONTS=windows10 have no weight axis: plain natural rendering there)."""
+        self.diag_equal('environment.textRendering', expected)
+        self.diag_equal('environment.fontHinting', 'default' if expected == 'hinted' else 'none')
+        variable = (self.diag('environment.fontFamily') or '').startswith('Segoe UI Variable')
+        self.diag_equal('environment.fontWeightAxis', 450 if expected == 'natural-heavier' and variable else None)
 
     def diagnostics_common(self, max_gap_ms, scale):
         d = self.diagnostics
@@ -779,6 +792,13 @@ def expected_look(env):
     return 'light' if light else 'dark'
 
 
+def expected_text_rendering(env):
+    """The text rendering a run with `env` draws with (D-58): WIZZ_TEXT_RENDERING as the app reads it
+    (trimmed, any case), natural-heavier when it is unset or unknown."""
+    value = (env.get('WIZZ_TEXT_RENDERING') or '').strip().lower()
+    return value if value in TEXT_RENDERINGS else 'natural-heavier'
+
+
 ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -955,6 +975,7 @@ def main():
     parser.add_argument('--color-scheme', choices=['light', 'dark'], help='WIZZ_COLOR_SCHEME for the run')
     parser.add_argument('--high-contrast', action='store_true', help='WIZZ_HIGH_CONTRAST=1 for the run')
     parser.add_argument('--fonts', choices=['windows10'], help='WIZZ_FONTS for the run')
+    parser.add_argument('--text-rendering', choices=TEXT_RENDERINGS, help='WIZZ_TEXT_RENDERING for the run')
     args = parser.parse_args()
     window = None
     if args.window:
@@ -980,6 +1001,8 @@ def main():
         env['WIZZ_HIGH_CONTRAST'] = '1'
     if args.fonts:
         env['WIZZ_FONTS'] = args.fonts
+    if args.text_rendering:
+        env['WIZZ_TEXT_RENDERING'] = args.text_rendering
     if args.scenario in CRASH_SCENARIOS:
         return run_crash(args, env, work_dir, replay_root)
 
@@ -1023,6 +1046,7 @@ def main():
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
     checker.look(expected_look(env))
+    checker.text_rendering(expected_text_rendering(env))
     if window is None and not args.scale and not checker.window_at_default_size():
         # A screen smaller than the default window (GitHub's runners: 1024 x 768) gives a smaller
         # window, where a long status may be cut. MainWindowLayout.The_request_cap_refusal_is_
@@ -1053,7 +1077,7 @@ def main():
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
           'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
-          'work area %s; look %s (%s, %s, text rendering %s, hinting %s); %s' %
+          'work area %s; look %s (%s, %s, text rendering %s, hinting %s, weight axis %s); %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
@@ -1062,6 +1086,7 @@ def main():
            diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('look'),
            diagnostics.get('environment', {}).get('style'), diagnostics.get('environment', {}).get('fontFamily'),
            diagnostics.get('environment', {}).get('textRendering'), diagnostics.get('environment', {}).get('fontHinting'),
+           diagnostics.get('environment', {}).get('fontWeightAxis'),
            diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:

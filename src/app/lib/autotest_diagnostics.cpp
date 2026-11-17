@@ -260,6 +260,9 @@ EnvironmentDiagnostics describe_environment(const Locale& locale)
         environment.font_hinting = "full";
         break;
     }
+    if (const QFont font = QApplication::font(); font.isVariableAxisSet(QFont::Tag("wght"))) {
+        environment.font_weight_axis = font.variableAxisValue(QFont::Tag("wght"));
+    }
     return environment;
 }
 
@@ -349,6 +352,12 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("fontFamily").string(environment.font_family);
     writer.key("textRendering").string(environment.text_rendering);
     writer.key("fontHinting").string(environment.font_hinting);
+    writer.key("fontWeightAxis");
+    if (environment.font_weight_axis) {
+        writer.number(*environment.font_weight_axis);
+    } else {
+        writer.null();
+    }
     writer.end_object();
 
     writer.end_object();

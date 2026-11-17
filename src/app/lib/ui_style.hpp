@@ -24,15 +24,17 @@
 //   captions Segoe UI Variable Small Semibold 8 pt -> Segoe UI Semibold 8 pt
 //   mono     Cascadia Mono (Windows Terminal on Windows 10) -> Consolas -> Courier New
 //   icons    Segoe Fluent Icons            -> Segoe MDL2 Assets (same code points)
+// All text is drawn "natural, slightly heavier" (D-58, TextRendering below): without hinting,
+// the variable faces 50 units heavier on their weight axis.
 //
 // Diagnostic switches (environment, read when the look is evaluated; BUILDING.md):
 //   WIZZ_COLOR_SCHEME=light|dark   forces a colour scheme;
 //   WIZZ_HIGH_CONTRAST=1|0         says High Contrast is on / off instead of asking Windows;
 //   WIZZ_FONTS=windows10           leaves out the Windows 11 families (Segoe UI Variable,
 //                                  Cascadia, Segoe Fluent Icons) to check the fallbacks;
-//   WIZZ_TEXT_RENDERING=<name>     draws all text with one of the TextRendering candidates
-//                                  below, to compare them in the real app. Read when a font is
-//                                  built: set it before the app starts.
+//   WIZZ_TEXT_RENDERING=hinted|natural  draws text as 2.0.0 did (hinted) or without the extra
+//                                  weight (natural), for comparisons and bug reports. Read when
+//                                  a font is built: set it before the app starts.
 
 #include <QByteArrayView>
 #include <QColor>
@@ -179,35 +181,53 @@ void schedule_appearance_refresh();
 /// WIZZ_FONTS=windows10: the Windows 11 font families are left out.
 [[nodiscard]] bool windows10_fonts();
 
-/// How text is drawn: candidates for WIZZ_TEXT_RENDERING. Qt 6.11 draws text through
-/// DirectWrite; a font's hinting preference picks the DirectWrite rendering mode. Every font
-/// below gets the candidate, and so does every widget, popup and dialog through the
-/// application font (QApplication::setFont clears Qt's per-class fonts). Text stays ClearType
-/// in all of them: Qt's DirectWrite engine ignores QFont::NoSubpixelAntialias.
+/// How text is drawn (D-58). Qt 6.11 draws text through DirectWrite, and a font's hinting
+/// preference picks the rendering mode: Qt's default hinting is DirectWrite GDI-classic at
+/// 100 % (glyphs snapped to whole pixels, no vertical smoothing), QFont::PreferNoHinting is
+/// natural symmetric (curves and diagonals smoothed vertically too, fractional positions).
+/// Every font below gets the rendering, and so does every widget, popup and dialog through
+/// the application font (QApplication::setFont clears Qt's per-class fonts); text stays
+/// ClearType (Qt's DirectWrite engine ignores QFont::NoSubpixelAntialias).
 enum class TextRendering {
-    current,          ///< "current": as released. Default hinting = DirectWrite GDI-classic at 100 %
-                      ///< (whole pixels, no vertical smoothing of curves), natural above 100 %
-    natural,          ///< "natural": QFont::PreferNoHinting = DirectWrite natural symmetric (curves
-                      ///< and diagonals smoothed vertically too, fractional glyph positions)
-    classic,          ///< "classic": Segoe UI / Segoe UI Semibold (hinted for GDI) instead of Segoe
-                      ///< UI Variable, default hinting
-    classic_natural,  ///< "classic-natural": Segoe UI with QFont::PreferNoHinting
-    natural_heavier,  ///< "natural-heavier": natural, with the variable faces (Segoe UI Variable,
-                      ///< Cascadia Mono) 50 units heavier on their weight axis for the ink
-                      ///< unhinted strokes lose at 9-10 pt; other faces ignore the axis
+    natural_heavier,  ///< "natural-heavier", the default: natural, and every face with a weight
+                      ///< axis (Segoe UI Variable, Cascadia Mono) kHeavierBy units heavier than the
+                      ///< face it draws, for the ink unhinted 9-10 pt strokes lose. Faces without
+                      ///< one (the Windows 10 fallbacks Segoe UI, Consolas) are plain natural.
+    natural,          ///< "natural": natural, every face at its own weight
+    hinted,           ///< "hinted": Qt's default hinting, the faces' own weights (2.0.0)
 };
-/// A WIZZ_TEXT_RENDERING value (trimmed, any case): the names above; anything else is none.
+/// The units natural-heavier adds to a face's weight: regular 400 -> 450, semibold 600 -> 650
+/// (a bold 700 stays at the axis' maximum, 700, for Segoe UI Variable).
+inline constexpr int kHeavierBy = 50;
+/// A WIZZ_TEXT_RENDERING value (trimmed, any case): "natural-heavier", "natural" or "hinted";
+/// anything else is none.
 [[nodiscard]] std::optional<TextRendering> parse_text_rendering(QByteArrayView value);
-/// The candidate WIZZ_TEXT_RENDERING asks for; current when it is unset or unknown.
+/// The rendering WIZZ_TEXT_RENDERING asks for; natural-heavier when it is unset or unknown.
 [[nodiscard]] TextRendering text_rendering();
-/// The candidate's WIZZ_TEXT_RENDERING name.
+/// Its WIZZ_TEXT_RENDERING name.
 [[nodiscard]] const char* text_rendering_name(TextRendering rendering) noexcept;
-/// The weight-axis value natural-heavier gives a face of `weight`: weight + 50.
-[[nodiscard]] float heavier_weight_axis(int weight) noexcept;
-/// Under natural-heavier, a font that asks for a heavier weight than its weight axis draws
-/// (Qt's own setBold() copies of a widget font, e.g. the calendar's month and year buttons)
-/// gets the axis of its weight; returns whether `font` changed. Other candidates: no change.
-bool keep_requested_weight(QFont& font);
+
+/// The weight-axis ("wght") value `font` draws with under `rendering`: for natural-heavier and a
+/// face with a weight axis, the weight of the face Qt picks for the font's families and weight
+/// (QFontInfo, without any axis) plus kHeavierBy, within the axis' range; else none. So a
+/// regular face gets 450, a semibold family 650 whatever weight the font asks for (it has no
+/// other face), and a bold copy of a regular font (setBold(), weight 700) gets 700.
+[[nodiscard]] std::optional<float> weight_axis_for(const QFont& font, TextRendering rendering);
+/// Gives `font` the hinting preference of the rendering WIZZ_TEXT_RENDERING asks for and the
+/// weight axis of weight_axis_for() (or none), both set explicitly so that they survive
+/// QFont::resolve(); returns whether a value changed. The fonts below come out of it; a copy
+/// of one with another weight (Qt's setBold() copies) needs it again.
+bool fit_text_rendering(QFont& font);
+/// fit_text_rendering() for `widget`'s font: sets it when it changed (making every attribute
+/// the widget inherited its own); returns whether it did.
+bool fit_text_rendering(QWidget& widget);
+/// Keeps every widget's font fitted: an application event filter that runs
+/// fit_text_rendering(widget) on each QEvent::Polish and QEvent::FontChange, in every look
+/// (High Contrast's plain style included). That covers the fonts Qt derives from a widget
+/// font (the calendar's bold month and year buttons) and fonts the app builds without the
+/// functions below (a default-constructed QFont copies the application font, axis included).
+/// apply_application_look() installs it; later calls do nothing.
+void keep_text_rendering();
 /// The UI font: Segoe UI Variable Text 10 pt, Segoe UI 10 pt on Windows 10.
 [[nodiscard]] QFont form_font();
 /// The result grids' cells: Segoe UI Variable Text 9 pt (Segoe UI 9 pt), denser than the

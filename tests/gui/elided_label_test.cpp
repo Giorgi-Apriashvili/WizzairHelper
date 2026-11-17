@@ -5,9 +5,12 @@
 
 #include <QCoreApplication>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QHelpEvent>
 
 #include <gtest/gtest.h>
+
+#include <cmath>
 
 namespace {
 
@@ -29,6 +32,27 @@ TEST(ElidedLabel, Keeps_the_whole_text_and_cuts_only_the_painted_one)
     EXPECT_TRUE(label.elided_text().endsWith(QChar(0x2026)));
     EXPECT_LE(label.fontMetrics().horizontalAdvance(label.elided_text()), label.width());
     EXPECT_EQ(label.tooltip_text(), text);  // AutoEllipsis shows the full text on hover
+}
+
+TEST(ElidedLabel, Its_size_hint_holds_the_whole_text)
+{
+    // Without hinting (D-58) advances are fractional: a width rounded down would cut the last
+    // fraction of a pixel with "…" (a grid summary in a bar that has room for it).
+    ElidedLabel label;
+    int fractional = 0;
+    for (const char* text : {"14 round trips", "66 fares", "No flights found", "Budapest (BUD) → London (LTN)",
+                             "Cheapest per day", "1 fare so far…", "Showing 120 of 6 794 fares", "Any destination",
+                             "Return to the airport I left from", "Prices in HUF", "Wizz Air", "Sun 15 Nov 2026"}) {
+        label.setText(QString::fromUtf8(text));
+        const qreal width = QFontMetricsF(label.font()).horizontalAdvance(label.text());
+        fractional += width != std::floor(width) ? 1 : 0;
+        label.resize(label.sizeHint());
+        EXPECT_FALSE(label.is_elided()) << text << ": " << width << " px in " << label.width();
+        EXPECT_GE(label.height(), QFontMetricsF(label.font()).height()) << text << ": the whole line";
+    }
+    if (label.font().hintingPreference() == QFont::PreferNoHinting) {
+        EXPECT_GT(fractional, 6) << "natural rendering: most advances are fractional";
+    }
 }
 
 TEST(ElidedLabel, A_compact_font_takes_a_text_too_long_for_the_label_font_before_it_is_cut)

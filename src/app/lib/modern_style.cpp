@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QHeaderView>
 #include <QIconEngine>
 #include <QKeyEvent>
@@ -22,6 +23,7 @@
 #include <QStyleOption>
 #include <QStyledItemDelegate>
 #include <QTabBar>
+#include <QtMath>
 
 #include <algorithm>
 #include <climits>
@@ -337,7 +339,27 @@ bool ModernStyle::is_active()
 
 int ModernStyle::control_height(const QFontMetrics& metrics)
 {
-    return std::max(26, metrics.height() + 10);
+    return std::max(26, line_height(metrics) + 10);
+}
+
+int ModernStyle::line_height(const QFontMetrics& metrics)
+{
+    // QFontMetrics::height() rounds the ascent and the descent apart; text layout and
+    // QComboBox's size hint round their sum up. With natural rendering (D-58) the UI font's
+    // line is 14.02 + 3.25 px: 17 one way, 18 the other.
+    return qCeil(QFontMetricsF(metrics).height());
+}
+
+QFont ModernStyle::menu_item_font(const QStyleOptionMenuItem& item)
+{
+    QFont font = item.font;  // the action's own font resolved against the menu's
+    if (item.menuItemType == QStyleOptionMenuItem::DefaultItem) {
+        font.setBold(true);  // a menu's default action, as Windows and Fusion draw it
+    }
+    // A bold copy (or an action font made from one) keeps the weight axis of the font it was
+    // copied from; the bold face needs its own (D-58).
+    style::fit_text_rendering(font);
+    return font;
 }
 
 void ModernStyle::use_styled_popup(QComboBox& combo)
@@ -353,9 +375,6 @@ QWidget* ModernStyle::make_surface_corner(QWidget* parent)
 void ModernStyle::polish(QWidget* widget)
 {
     QProxyStyle::polish(widget);
-    if (QFont font = widget->font(); style::keep_requested_weight(font)) {
-        widget->setFont(font);  // WIZZ_TEXT_RENDERING=natural-heavier: Qt's setBold() copies stay bold
-    }
     if (qobject_cast<QAbstractButton*>(widget) != nullptr || qobject_cast<QComboBox*>(widget) != nullptr ||
         qobject_cast<QAbstractSpinBox*>(widget) != nullptr || qobject_cast<QTabBar*>(widget) != nullptr ||
         qobject_cast<QScrollBar*>(widget) != nullptr || qobject_cast<QLineEdit*>(widget) != nullptr ||
@@ -583,7 +602,7 @@ QSize ModernStyle::sizeFromContents(ContentsType type, const QStyleOption* optio
         if (item->menuItemType == QStyleOptionMenuItem::Separator) {
             return QSize(size.width(), 9);
         }
-        const QFontMetrics metrics(item->font);
+        const QFontMetrics metrics(menu_item_font(*item));
         QString text = item->text;
         QString shortcut;
         if (const qsizetype tab = text.indexOf(u'\t'); tab >= 0) {
@@ -1055,7 +1074,7 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
             if (proxy()->styleHint(SH_UnderlineShortcut, item, widget) == 0) {
                 flags |= Qt::TextHideMnemonic;
             }
-            painter->setFont(item->font);
+            painter->setFont(menu_item_font(*item));
             painter->setPen(!enabled ? t().text_disabled : selected ? t().selection_text : t().text);
             painter->drawText(text_rect, flags | Qt::AlignLeft, text);
             if (!shortcut.isEmpty()) {
