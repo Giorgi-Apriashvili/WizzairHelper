@@ -286,9 +286,20 @@ std::expected<DownloadedFile, UpdateError> Updater::download_verified(const Rele
 
         // 2. An earlier verified download of the same file is kept; anything else there goes.
         const std::filesystem::path target = destination_dir / win32::to_wide(asset->name);
+        const std::filesystem::path kept_hash = detail::kept_hash_path(target);
+        // The hash next to a verified file, so a later session can hash it again without a
+        // request (find_verified_download); without it the file is only never offered so.
+        const auto keep_hash = [&](const std::string& sha256) {
+            if (const DWORD code = win32::write_new_file(kept_hash, std::format("{}  {}\n", sha256, asset->name));
+                code != ERROR_SUCCESS) {
+                ::DeleteFileW(kept_hash.c_str());
+                operation.log(std::format("Could not keep the hash of {}: {}", asset->name, win32::error_text(code)));
+            }
+        };
         std::error_code error;
         if (std::filesystem::is_regular_file(target, error)) {
             if (sha256_file(target) == *expected_hash) {
+                keep_hash(*expected_hash);
                 operation.log(std::format("Kept {}, already downloaded and verified (SHA-256 {}).", asset->name,
                                           *expected_hash));
                 return DownloadedFile{
@@ -296,6 +307,7 @@ std::expected<DownloadedFile, UpdateError> Updater::download_verified(const Rele
             }
             std::filesystem::remove(target, error);
         }
+        std::filesystem::remove(kept_hash, error);  // it vouched for bytes that are gone
 
         // 3. The asset itself.
         auto body = operation.fetch(*asset, kAssetTimeout);
@@ -343,6 +355,7 @@ std::expected<DownloadedFile, UpdateError> Updater::download_verified(const Rele
             return save_failed(code);
         }
         operation.log(std::format("Verified {} (SHA-256 {}).", asset->name, *actual_hash));
+        keep_hash(*actual_hash);
         return DownloadedFile{.path = target, .sha256 = *actual_hash, .reused = false, .tries = operation.take_tries()};
     } catch (const OperationCancelled&) {
         operation.log("Cancelled.");

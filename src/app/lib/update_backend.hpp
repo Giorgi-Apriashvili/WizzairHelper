@@ -3,10 +3,10 @@
 // D-45): an interface, so widget tests script checks and downloads without a
 // network, and CoreUpdateBackend, the real one over wizz::update (D-40..D-44).
 //
-// check_if_due, check_now, download_installer and remove_stale_downloads block and run
-// on a worker thread; the controller never runs two of them at once. load_state,
-// verified_installer, release_page_url and log send nothing and may be called from any
-// thread.
+// check_if_due, check_now, download_installer, remove_stale_downloads and
+// verified_installer (it hashes the installer) block and run on a worker thread; the
+// controller never runs two of them at once. load_state, release_page_url and log send
+// nothing and may be called from any thread; verified_installer sends nothing either.
 
 #include "wizz/core/cancellation.hpp"
 #include "wizz/core/http.hpp"
@@ -51,7 +51,8 @@ public:
     [[nodiscard]] virtual UpdateCheckResult check_now(std::stop_token stop) = 0;
     /// update-state.json as it is now; the empty state when it cannot be read.
     [[nodiscard]] virtual update::UpdateState load_state() const = 0;
-    /// The verified installer of `version` in the downloads folder, without any request
+    /// Worker: the verified installer of `version` in the downloads folder, without any
+    /// request — hashed from disk against the hash kept when it was verified
     /// (update::find_verified_download); nullopt when there is none.
     [[nodiscard]] virtual std::optional<std::filesystem::path> verified_installer(
         const update::Version& version) const = 0;

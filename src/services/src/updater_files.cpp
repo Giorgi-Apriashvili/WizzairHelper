@@ -1,5 +1,6 @@
 // Updater: SHA-256 through Windows CNG, the update log, install-kind detection, the
-// silent installer command line and stale-download cleanup (D-43, D-44).
+// silent installer command line, stale-download cleanup and finding a verified download
+// again (D-43, D-44).
 
 #include "wizz/services/updater.hpp"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -23,6 +25,8 @@ namespace wizz::update {
 namespace {
 
 constexpr DWORD kReadChunk = 1u << 20;
+/// A kept hash is one SHA256SUMS.txt line (64 hex digits, two spaces, the asset name).
+constexpr std::size_t kMaxKeptHashBytes = 4096;
 
 struct AlgorithmCloser {
     void operator()(BCRYPT_ALG_HANDLE handle) const noexcept { ::BCryptCloseAlgorithmProvider(handle, 0); }
@@ -84,12 +88,14 @@ private:
     UniqueHash hash_;
 };
 
-/// `WizzairHelper-<X.Y.Z>-win64-setup.exe` or `-win64.zip`, optionally with `.tmp`:
-/// the version in the name, nullopt for any other name.
+/// `WizzairHelper-<X.Y.Z>-win64-setup.exe` or `-win64.zip`, optionally with `.tmp` or
+/// the kept hash's `.sha256`: the version in the name, nullopt for any other name.
 [[nodiscard]] std::optional<Version> download_version(std::string_view name)
 {
     if (name.ends_with(".tmp")) {
         name.remove_suffix(4);
+    } else if (name.ends_with(kKeptHashSuffix)) {
+        name.remove_suffix(kKeptHashSuffix.size());
     }
     if (!name.starts_with(kAssetPrefix)) {
         return std::nullopt;
@@ -166,6 +172,13 @@ void append_raw_line(const std::filesystem::path& log_file, std::string_view lin
     const win32::UniqueHandle file{raw};
     DWORD written = 0;
     ::WriteFile(raw, text.data(), static_cast<DWORD>(text.size()), &written, nullptr); // errors are ignored
+}
+
+std::filesystem::path kept_hash_path(const std::filesystem::path& file)
+{
+    std::filesystem::path path = file;
+    path += win32::to_wide(kKeptHashSuffix);
+    return path;
 }
 
 } // namespace detail
@@ -267,6 +280,27 @@ std::optional<std::filesystem::path> find_verified_download(const UpdateConfig& 
     std::filesystem::path path = config.download_dir() / win32::to_wide(name);
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error)) {
+        return std::nullopt;
+    }
+    // The hash download_verified kept when it verified the file: one SHA256SUMS.txt line,
+    // a few dozen bytes (anything much larger is not one).
+    std::string kept;
+    {
+        std::ifstream in{detail::kept_hash_path(path), std::ios::binary};
+        if (!in) {
+            return std::nullopt;
+        }
+        kept.resize(kMaxKeptHashBytes + 1);
+        in.read(kept.data(), static_cast<std::streamsize>(kept.size()));
+        kept.resize(static_cast<std::size_t>(in.gcount()));
+    }
+    if (kept.size() > kMaxKeptHashBytes) {
+        return std::nullopt;
+    }
+    const auto lines = parse_sha256sums(kept);
+    const std::optional<std::string> expected = lines ? find_checksum(*lines, name) : std::nullopt;
+    // Hashed from disk now: the bytes the installer would run are the ones that matched.
+    if (!expected || sha256_file(path) != *expected) {
         return std::nullopt;
     }
     return path;

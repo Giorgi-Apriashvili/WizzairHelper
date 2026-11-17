@@ -60,6 +60,10 @@ inline constexpr std::string_view kAssetPrefix = "WizzairHelper-";
 inline constexpr std::string_view kZipSuffix = "-win64.zip";
 inline constexpr std::string_view kInstallerSuffix = "-win64-setup.exe";
 inline constexpr std::string_view kChecksumsName = "SHA256SUMS.txt";
+/// The hash download_verified keeps next to a file it verified: `<name>.sha256`, the
+/// file's SHA256SUMS.txt line, so a later session can hash the file again without a
+/// request (find_verified_download, D-43).
+inline constexpr std::string_view kKeptHashSuffix = ".sha256";
 
 /// An installed copy has the Inno Setup uninstaller next to WizzairHelper.exe.
 inline constexpr std::wstring_view kUninstallerName = L"unins000.exe";
@@ -379,7 +383,7 @@ public:
     /// 1. SHA256SUMS.txt first (same tries as below, kChecksumsTimeout), parsed; the
     ///    asset's line must be there (bad_checksums otherwise; the asset is not fetched);
     /// 2. a file of the asset's name already in `destination_dir` whose SHA-256 matches
-    ///    is kept (`reused`); one that does not match is deleted;
+    ///    is kept (`reused`); one that does not match is deleted with its kept hash;
     /// 3. the asset (kAssetTimeout per try): up to kBrowserTries on browser_download_url
     ///    (User-Agent only), then up to kApiTries on the API asset URL (User-Agent,
     ///    `Accept: application/octet-stream`, `X-GitHub-Api-Version`), every try with a
@@ -388,6 +392,9 @@ public:
     ///    another status ends that URL at once (a browser URL falls back to the API URL);
     /// 4. written to `<name>.tmp` in `destination_dir` (created when missing), hashed
     ///    from disk, deleted on a mismatch (checksum_mismatch), else renamed into place.
+    /// A verified file (also a reused one) gets its hash kept next to it, `<name>.sha256`
+    /// (kKeptHashSuffix: its SHA256SUMS.txt line); a failure to write it is logged and
+    /// only means a later session will not offer the file without asking GitHub.
     /// missing_asset when the release lacks the asset or SHA256SUMS.txt (no request).
     /// Every try is in the result (or the error) and in update.log. Throws
     /// OperationCancelled when `stop` fires; no .tmp file is left behind.
@@ -448,15 +455,16 @@ struct InstallerCommand {
 [[nodiscard]] InstallerCommand silent_install_command(const std::filesystem::path& setup_exe, Relaunch relaunch);
 
 /// Deletes downloaded assets of versions up to `config.current_version` (and their
-/// leftover `.tmp` files) from `config.download_dir()`; other files and newer versions
-/// stay. Returns how many files were deleted; errors are ignored.
+/// leftover `.tmp` files and kept `.sha256` hashes) from `config.download_dir()`; other
+/// files and newer versions stay. Returns how many files were deleted; errors are ignored.
 std::size_t remove_stale_downloads(const UpdateConfig& config);
 
-/// The verified download of `version`'s asset (`kind`) in `config.download_dir()`: the
-/// regular file of the asset's stable name, nullopt when there is none. Nothing is
-/// requested and nothing is hashed: only download_verified gives a file that name, after
-/// it matched SHA256SUMS.txt on disk (a download is written to `<name>.tmp` and renamed;
-/// a mismatching file of that name is deleted), so the name is the proof (D-43, D-61).
+/// The verified download of `version`'s asset (`kind`) in `config.download_dir()`, found
+/// without any request: the regular file of the asset's stable name whose SHA-256, hashed
+/// from disk now, equals the hash download_verified kept next to it (`<name>.sha256`)
+/// when it verified the file against the release's SHA256SUMS.txt. nullopt when there is
+/// no such file, no kept hash (or one without the file's line), or the bytes changed
+/// (D-43, D-61). Throws std::runtime_error when CNG fails.
 [[nodiscard]] std::optional<std::filesystem::path> find_verified_download(const UpdateConfig& config,
                                                                          const Version& version, AssetKind kind);
 

@@ -1505,11 +1505,13 @@ TEST(UpdaterInstall, Removes_only_stale_downloads)
     TempDirectory temp;
     const UpdateConfig config = config_for(temp.path(), "1.2.0");
     const fs::path dir = config.download_dir();
-    const std::vector<std::string> stale{"WizzairHelper-1.1.0-win64-setup.exe", "WizzairHelper-1.2.0-win64.zip",
-                                         "WizzairHelper-0.9.9-win64-setup.exe.tmp", "WizzairHelper-1.2.0-win64.zip.tmp"};
-    const std::vector<std::string> kept{"WizzairHelper-1.3.0-win64-setup.exe", "WizzairHelper-1.10.0-win64.zip",
-                                        "notes.txt", "WizzairHelper-1.0-win64.zip", "SHA256SUMS.txt",
-                                        "WizzairHelper-1.1.0-win64-setup.exe.bak"};
+    const std::vector<std::string> stale{"WizzairHelper-1.1.0-win64-setup.exe",        "WizzairHelper-1.2.0-win64.zip",
+                                         "WizzairHelper-0.9.9-win64-setup.exe.tmp",    "WizzairHelper-1.2.0-win64.zip.tmp",
+                                         "WizzairHelper-1.1.0-win64-setup.exe.sha256", "WizzairHelper-1.2.0-win64.zip.sha256"};
+    const std::vector<std::string> kept{"WizzairHelper-1.3.0-win64-setup.exe",        "WizzairHelper-1.10.0-win64.zip",
+                                        "notes.txt",                                  "WizzairHelper-1.0-win64.zip",
+                                        "SHA256SUMS.txt",                             "WizzairHelper-1.1.0-win64-setup.exe.bak",
+                                        "WizzairHelper-1.3.0-win64-setup.exe.sha256", "WizzairHelper-1.1.0-win64-setup.exe.sha256.tmp"};
     for (const auto& name : stale) {
         write_file(dir / name, "x");
     }
@@ -1531,28 +1533,88 @@ TEST(UpdaterInstall, Removes_only_stale_downloads)
     EXPECT_EQ(update::remove_stale_downloads(config_for(temp.path() / "elsewhere")), 0u);
 }
 
-TEST(UpdaterInstall, Finds_a_verified_download_by_its_stable_name)
+TEST(UpdaterInstall, Finds_a_verified_download_by_hashing_it_against_its_kept_hash)
 {
-    // Only download_verified gives a file its stable name, after the SHA-256 check (D-43):
-    // an update remembered from an earlier session finds its installer without a request.
+    // An update remembered from an earlier session finds its installer without a request:
+    // the file of the stable name whose bytes still match the hash download_verified kept
+    // next to it when it verified them against SHA256SUMS.txt (D-43).
     TempDirectory temp;
     const UpdateConfig config = config_for(temp.path(), "1.0.0");
     const fs::path dir = config.download_dir();
-    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer), std::nullopt)
-        << "no download folder yet";
+    const fs::path installer = dir / "WizzairHelper-1.2.0-win64-setup.exe";
+    const auto keep = [](const fs::path& file, std::string_view bytes, std::string_view name) {
+        write_file(fs::path{file} += ".sha256", std::format("{}  {}\n", wizz::test::sha256_hex(bytes), name));
+    };
+    const auto find = [&](Version version, AssetKind kind = AssetKind::installer) {
+        return update::find_verified_download(config, version, kind);
+    };
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "no download folder yet";
 
+    // Never verified: an unfinished download, another version, a directory, a file without a kept hash.
     write_file(dir / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "an unfinished download");
+    keep(dir / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "an unfinished download", "WizzairHelper-1.2.0-win64-setup.exe");
     write_file(dir / "WizzairHelper-1.1.0-win64-setup.exe", "another version");
-    write_file(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip");
-    fs::create_directories(dir / "WizzairHelper-1.3.0-win64-setup.exe");  // not a file
-    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer), std::nullopt);
-    EXPECT_EQ(update::find_verified_download(config, Version{1, 3, 0}, AssetKind::installer), std::nullopt);
-    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::portable_zip),
-              dir / "WizzairHelper-1.2.0-win64.zip");
+    keep(dir / "WizzairHelper-1.1.0-win64-setup.exe", "another version", "WizzairHelper-1.1.0-win64-setup.exe");
+    fs::create_directories(dir / "WizzairHelper-1.3.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "only the .tmp is there";
+    EXPECT_EQ(find(Version{1, 3, 0}), std::nullopt) << "not a file";
+    write_file(installer, "MZ placed by hand");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "no kept hash: never verified";
 
-    write_file(dir / "WizzairHelper-1.2.0-win64-setup.exe", "MZ");
-    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer),
-              dir / "WizzairHelper-1.2.0-win64-setup.exe");
+    // A kept hash that does not vouch for these bytes.
+    keep(installer, "MZ verified earlier", "WizzairHelper-1.2.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "the bytes changed since they were verified";
+    keep(installer, "MZ placed by hand", "WizzairHelper-1.2.0-win64.zip");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "a line for another file";
+    write_file(fs::path{installer} += ".sha256", "not a checksum line\n");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "malformed";
+    write_file(fs::path{installer} += ".sha256",
+               std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n{}", wizz::test::sha256_hex("MZ placed by hand"),
+                           std::string(5000, '\n')));
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "far too long for a kept hash";
+
+    // Verified and unchanged.
+    keep(installer, "MZ placed by hand", "WizzairHelper-1.2.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), installer);
+    write_file(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip");
+    keep(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip", "WizzairHelper-1.2.0-win64.zip");
+    EXPECT_EQ(find(Version{1, 2, 0}, AssetKind::portable_zip), dir / "WizzairHelper-1.2.0-win64.zip");
+}
+
+TEST(UpdaterDownload, Keeps_the_hash_of_a_verified_file_next_to_it_for_a_later_session)
+{
+    const fs::path kept_name = std::string{kInstaller} + ".sha256";
+    const std::string kept_line = std::format("{}  {}\n", wizz::test::sha256_hex(kInstallerBytes), kInstaller);
+    {
+        // Downloaded and verified: the hash is kept, and a later session finds the file.
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response(kInstallerBytes); })};
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer,
+                                                      h.config.download_dir(), {});
+        ASSERT_TRUE(file.has_value()) << describe(file);
+        EXPECT_EQ(read_file(h.config.download_dir() / kept_name), kept_line);
+        EXPECT_EQ(update::find_verified_download(h.config, Version{1, 2, 0}, AssetKind::installer), file->path);
+    }
+    {
+        // Reused: the hash is kept too (a file verified by an older version had none).
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response(kInstallerBytes); })};
+        write_file(h.downloads() / kInstaller, kInstallerBytes);
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer, h.downloads(), {});
+        ASSERT_TRUE(file.has_value()) << describe(file);
+        EXPECT_TRUE(file->reused);
+        EXPECT_EQ(read_file(h.downloads() / kept_name), kept_line);
+    }
+    {
+        // A file that no longer matches goes with its kept hash; a download that then fails
+        // its check leaves neither.
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response("tampered bytes"); })};
+        write_file(h.downloads() / kInstaller, "changed since");
+        write_file(h.downloads() / kept_name, std::format("{}  {}\n", wizz::test::sha256_hex("changed since"), kInstaller));
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer, h.downloads(), {});
+        ASSERT_FALSE(file.has_value());
+        EXPECT_EQ(file.error().kind, UpdateErrorKind::checksum_mismatch);
+        EXPECT_FALSE(fs::exists(h.downloads() / kInstaller));
+        EXPECT_FALSE(fs::exists(h.downloads() / kept_name));
+    }
 }
 
 } // namespace
