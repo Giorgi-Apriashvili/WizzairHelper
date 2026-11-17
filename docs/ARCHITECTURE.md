@@ -38,8 +38,8 @@ directory needs no CMake edit.
 | Target | Directory | Owns | May depend on |
 |---|---|---|---|
 | `wizzairhelper_core` (`wizz::core`) | `src/core` | Pure logic, no I/O: time, decimal, JSON, Unicode text, locale/formatting, geo, domain values, airport catalog + offline place matching, planner, pricing/FX tables, result views, booking links, round trips; abstract `Clock`, `http::Transport`, cancellation, progress records | C++ std, Windows ICU |
-| `wizzairhelper_services` (`wizz::services`) | `src/services` | Everything that performs I/O or owns threads: libcurl transport, file cache + AppPaths, request gate, Wizz client, currency service, geocoder + place resolver, flight search service, system clock, self-updater core (GitHub release check, verified downloads, update schedule, silent installer command line — D-40..D-44) | core, libcurl, Win32 (incl. CNG) |
-| `wizzairhelper_ui_logic` (`wizz::ui_logic`) | `src/ui_logic` | Qt-free presenter / view-model logic of the desktop app (05 §7.2), namespace `wizz::ui`: string catalogue, leg status / log texts, BusyPanel state machine, date and nights coupling, request building, settings.json, `--autotest` options + replay transport (D-30), summary.json, grid models (sort, selection, streaming), the self-updater's rules and texts (`UpdateModel`, D-45..D-49) | core, services |
+| `wizzairhelper_services` (`wizz::services`) | `src/services` | Everything that performs I/O or owns threads: libcurl transport, file cache + AppPaths, request gate, Wizz client, currency service, geocoder + place resolver, flight search service, system clock, self-updater core (GitHub release check, verified downloads, the update schedule by local calendar periods, silent installer command line — D-40..D-44, D-59) and the user's update options (`update_options.hpp`, D-60) | core, libcurl, Win32 (incl. CNG) |
+| `wizzairhelper_ui_logic` (`wizz::ui_logic`) | `src/ui_logic` | Qt-free presenter / view-model logic of the desktop app (05 §7.2), namespace `wizz::ui`: string catalogue, leg status / log texts, BusyPanel state machine, date and nights coupling, request building, settings.json, `--autotest` options + replay transport (D-30), summary.json, grid models (sort, selection, streaming), the self-updater's rules and texts (`UpdateModel`: the install-choice state machine, the update bar, the Settings window's `Updates` status — D-45..D-49, D-61, D-62); settings.json includes the update options (D-60) | core, services |
 | `WizzairHelper` | `src/app` | Qt 6 Widgets UI (thin widgets over `ui_logic`), diagnostics, crash reporting, `--autotest` driver, the update bar and the updater's lifecycle (worker checks, installer start on exit, AppMutex); the exe's resources and the application icon in `src/app/resources` (below) | core, services, ui_logic, Qt |
 | `wizzairhelper_tests` | `tests` | GoogleTest conformance suite: fake transport, fixed clock, recording delay, fixture replay | core, services, ui_logic, gtest |
 
@@ -116,6 +116,9 @@ of the minimum and default windows).
 - Test names follow the spec IDs: `TEST(Catalog, CT_CAT_01_Parses_map_and_trims_names)`.
 - Fixtures are read from `<test-binary-dir>/Fixtures/<name>` (copied post-build, byte-exact).
 - Tests never touch live hosts or the user profile; caches use temporary directories.
+- The local date of a stored UTC instant comes from `Clock::to_local` (the offset of that instant), never
+  from its UTC date or today's offset; a test that needs daylight saving time injects a clock with a DST
+  rule (`CentralEuropeClock` in `updater_test.cpp`).
 - The suite runs under en-US with a fixed clock (2026-11-02T10:00:00Z, local zone UTC) unless a case
   says SYSTEM.
 - GUI tests run under the app's own look (light, High Contrast off) on the minimal Qt platform

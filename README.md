@@ -78,7 +78,12 @@ request, no personal data; an hour later if it failed). When there is a newer ve
 installed app downloads the installer from GitHub, checks it against the release's
 `SHA256SUMS.txt` and installs it silently when you close the app — or at once with "Restart and
 update" in the bar under the search inputs. A portable copy (the ZIP) only shows a link to the
-release page. Details: [DECISIONS D-40..D-49](docs/DECISIONS.md#self-updater).
+release page.
+
+Settings (the gear at the right end of the tabs) has "Check now", the choice of checking once a
+day, week or month, or not at all unless you ask, and what to do when an update is found:
+install it when you close the app, download it and ask first, or only say that it is available.
+Details: [DECISIONS D-40..D-49, D-59..D-62](docs/DECISIONS.md#self-updater).
 
 ## License
 
