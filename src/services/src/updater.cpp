@@ -230,11 +230,17 @@ std::expected<ReleaseInfo, UpdateError> Updater::check_latest(std::stop_token st
 }
 
 std::optional<std::expected<ReleaseInfo, UpdateError>> Updater::check_if_due(const UpdateSchedule& schedule,
+                                                                            const CheckPolicy& policy,
                                                                             std::stop_token stop) const
 {
-    if (!schedule.is_check_due()) {
+    if (!schedule.is_check_due(policy)) {
         return std::nullopt;
     }
+    return check_now(schedule, std::move(stop));
+}
+
+std::expected<ReleaseInfo, UpdateError> Updater::check_now(const UpdateSchedule& schedule, std::stop_token stop) const
+{
     auto result = check_latest(std::move(stop)); // a cancelled check throws and records nothing
     schedule.record(result);
     return result;

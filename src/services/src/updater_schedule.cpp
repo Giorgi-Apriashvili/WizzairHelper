@@ -1,10 +1,12 @@
-// Updater: the daily check schedule in <data root>\updates\update-state.json (D-40).
+// Updater: the check schedule in <data root>\updates\update-state.json (D-40) and its
+// local calendar periods (D-59).
 
 #include "wizz/services/updater.hpp"
 
 #include "wizz/core/datetime_parse.hpp"
 #include "wizz/core/json.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <utility>
 
@@ -86,16 +88,40 @@ std::string UpdateState::to_json() const
     return writer.take();
 }
 
-bool is_check_due(const UpdateState& state, UtcInstant now) noexcept
+Date period_start(Date day, CheckFrequency frequency) noexcept
 {
+    switch (frequency) {
+    case CheckFrequency::daily:
+        return day;
+    case CheckFrequency::weekly:
+        // ISO 8601: weeks start on Monday (iso_encoding: Monday 1 ... Sunday 7).
+        return day.add_days(-static_cast<std::int64_t>(day.weekday().iso_encoding() - 1));
+    case CheckFrequency::monthly:
+        return Date::from_ymd(day.year(), day.month(), 1);
+    }
+    return day;
+}
+
+bool is_check_due(const UpdateState& state, const CheckPolicy& policy, const Clock& clock)
+{
+    if (!policy.automatic) {
+        return false;  // no request at all unless the user asks (D-59)
+    }
+    const UtcInstant now = clock.utc_now();
     // Times in the future (the clock was set back) are not trusted.
     if (state.last_failure && *state.last_failure <= now && now - *state.last_failure < kFailureRetryInterval) {
         return false;
     }
+    if (policy.recheck_if_newer_than && state.latest_seen && *state.latest_seen > *policy.recheck_if_newer_than) {
+        return true;  // an update seen earlier and not installed: offer it again
+    }
     if (!state.last_success || *state.last_success > now) {
         return true;
     }
-    return now - *state.last_success >= kCheckInterval;
+    // Calendar periods of the local wall clock, each instant with its own offset.
+    const Date last_period = period_start(date_of(clock.to_local(*state.last_success)), policy.frequency);
+    const Date now_period = period_start(date_of(clock.to_local(now)), policy.frequency);
+    return last_period != now_period;
 }
 
 UpdateSchedule::UpdateSchedule(std::filesystem::path updates_dir, std::shared_ptr<const Clock> clock)
@@ -113,9 +139,9 @@ UpdateState UpdateSchedule::load() const
     return text ? UpdateState::parse(*text) : UpdateState{};
 }
 
-bool UpdateSchedule::is_check_due() const
+bool UpdateSchedule::is_check_due(const CheckPolicy& policy) const
 {
-    return update::is_check_due(load(), clock_->utc_now());
+    return update::is_check_due(load(), policy, *clock_);
 }
 
 void UpdateSchedule::record_success(std::optional<Version> latest_seen) const

@@ -11,10 +11,10 @@
 //     string on each try (GitHub's edge caches error answers per URL), then the API
 //     asset URL with `Accept: application/octet-stream`; every error carries the last
 //     HTTP status and every try is logged.
-//   - A daily schedule kept in `<data root>\updates\update-state.json` (settings.json
-//     has a fixed schema), the log in `<data root>\updates\update.log` and downloads in
-//     `<data root>\updates\downloads\` — nothing of the updater lives in the data root
-//     itself.
+//   - A schedule of local calendar periods (once a day, week or month; D-59) kept in
+//     `<data root>\updates\update-state.json`, the log in `<data root>\updates\update.log`
+//     and downloads in `<data root>\updates\downloads\` — nothing of the updater lives in
+//     the data root itself. The user's options live in settings.json (update_options.hpp).
 //   - Installed (unins000.exe next to the exe) or portable, and the silent installer
 //     command line. Starting a process or quitting the app is the UI's job.
 //
@@ -24,6 +24,7 @@
 #include "wizz/core/http.hpp"
 #include "wizz/core/time.hpp"
 #include "wizz/services/file_cache.hpp"
+#include "wizz/services/update_options.hpp"
 
 #include <array>
 #include <chrono>
@@ -233,15 +234,14 @@ struct ChecksumLine {
 /// Lowercase hex SHA-256 of a file's bytes; nullopt when it cannot be read.
 [[nodiscard]] std::optional<std::string> sha256_file(const std::filesystem::path& path);
 
-// --- Daily schedule ------------------------------------------------------------------
+// --- Schedule (D-40, D-59) -----------------------------------------------------------
 
-/// A check is due when the last successful one is at least this old.
-inline constexpr Duration kCheckInterval = std::chrono::hours{24};
-/// After a failed check, the next one waits at least this long.
+/// After a failed check, the next automatic one waits at least this long.
 inline constexpr Duration kFailureRetryInterval = std::chrono::hours{1};
 
 /// `update-state.json`: an object with `LastSuccessfulCheckUtc`, `LatestSeenVersion`
 /// and `LastFailedCheckUtc` (each omitted when unknown; times `yyyy-MM-ddTHH:mm:ssZ`).
+/// The format of 2.0 and 2.1, unchanged: each version reads what the other writes.
 struct UpdateState {
     std::optional<UtcInstant> last_success;
     std::optional<Version> latest_seen;
@@ -256,10 +256,34 @@ struct UpdateState {
     [[nodiscard]] std::string to_json() const;
 };
 
-/// True when no check succeeded in the last kCheckInterval (`now - last_success >=
-/// 24 h`, or never) and no check failed in the last kFailureRetryInterval. A time in
-/// the future (the clock was set back) is not trusted: it does not block a check.
-[[nodiscard]] bool is_check_due(const UpdateState& state, UtcInstant now) noexcept;
+/// The first day of the local calendar period that holds `day`: the day itself
+/// (daily), the Monday of its ISO 8601 week (weekly), the first of its month (monthly).
+[[nodiscard]] Date period_start(Date day, CheckFrequency frequency) noexcept;
+
+/// When the automatic check may run.
+struct CheckPolicy {
+    /// settings.json `CheckForUpdates`: false = never due.
+    bool automatic = true;
+    CheckFrequency frequency = CheckFrequency::daily;
+    /// Set for the evaluations of a session until a check succeeded in it: the check is
+    /// then also due when update-state.json saw a version newer than this one (the
+    /// running version), so an update found in an earlier session and not installed is
+    /// offered again (D-59).
+    std::optional<Version> recheck_if_newer_than;
+
+    friend bool operator==(const CheckPolicy&, const CheckPolicy&) = default;
+};
+
+/// The automatic check's rule (D-59), in the local time of `clock` (`Clock::to_local`,
+/// each instant with its own daylight-saving offset):
+/// - never due when `!policy.automatic`;
+/// - not due within kFailureRetryInterval after a failed check (a failure in the future,
+///   after the clock was set back, does not count);
+/// - due when `policy.recheck_if_newer_than` is set and `state.latest_seen` is newer;
+/// - due when no check ever succeeded, when the last success lies in the future (not
+///   trusted), or when it lies in another local calendar period than now
+///   (`period_start` of the two local dates differs): another day, ISO week or month.
+[[nodiscard]] bool is_check_due(const UpdateState& state, const CheckPolicy& policy, const Clock& clock);
 
 /// The persisted schedule in `<updates dir>\update-state.json`, written atomically
 /// (FileCache). Read and write errors are swallowed: an unreadable file is an empty
@@ -270,16 +294,19 @@ public:
     UpdateSchedule(std::filesystem::path updates_dir, std::shared_ptr<const Clock> clock);
 
     [[nodiscard]] UpdateState load() const;
-    /// `is_check_due(load(), clock.utc_now())`.
-    [[nodiscard]] bool is_check_due() const;
+    /// `is_check_due(load(), policy, clock)`.
+    [[nodiscard]] bool is_check_due(const CheckPolicy& policy = {}) const;
 
     /// A check succeeded now: sets last_success and latest_seen, clears last_failure.
     void record_success(std::optional<Version> latest_seen) const;
     /// A check failed now: sets last_failure, keeps the rest.
     void record_failure() const;
     /// Records a check_latest result: a release or no_release is a success, any other
-    /// error a failure.
+    /// error a failure. A manual check is recorded like an automatic one, so a
+    /// successful Check now is the period's check.
     void record(const std::expected<ReleaseInfo, UpdateError>& result) const;
+
+    [[nodiscard]] const std::shared_ptr<const Clock>& clock() const noexcept { return clock_; }
 
 private:
     void save(const UpdateState& state) const;
@@ -339,10 +366,16 @@ public:
     /// to update.log. Throws OperationCancelled when `stop` fires.
     [[nodiscard]] std::expected<ReleaseInfo, UpdateError> check_latest(std::stop_token stop) const;
 
-    /// The daily check: nullopt without any request when `schedule.is_check_due()` is
-    /// false; otherwise check_latest, recorded in the schedule, and its result.
+    /// The automatic check: nullopt without any request when
+    /// `schedule.is_check_due(policy)` is false; otherwise `check_now`.
     [[nodiscard]] std::optional<std::expected<ReleaseInfo, UpdateError>> check_if_due(const UpdateSchedule& schedule,
+                                                                                     const CheckPolicy& policy,
                                                                                      std::stop_token stop) const;
+
+    /// A check that always runs (Check now, or a due automatic check): check_latest,
+    /// recorded in the schedule, and its result. A cancelled check records nothing.
+    [[nodiscard]] std::expected<ReleaseInfo, UpdateError> check_now(const UpdateSchedule& schedule,
+                                                                    std::stop_token stop) const;
 
     /// Downloads `release.asset(kind)` into `destination_dir` and verifies it:
     /// 1. SHA256SUMS.txt first (same tries as below, kChecksumsTimeout), parsed; the

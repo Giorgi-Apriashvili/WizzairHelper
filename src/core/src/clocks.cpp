@@ -27,11 +27,15 @@ UtcInstant SystemClock::utc_now() const
 
 LocalDateTime SystemClock::local_now() const
 {
-    const UtcInstant now = utc_now();
+    return to_local(utc_now());
+}
+
+LocalDateTime SystemClock::to_local(UtcInstant instant) const
+{
     if (zone_ == nullptr) {
-        return LocalDateTime{now.time_since_epoch()};
+        return LocalDateTime{instant.time_since_epoch()};
     }
-    return zone_->to_local(now);
+    return zone_->to_local(instant);
 }
 
 Ticks SystemClock::monotonic_now() const
@@ -51,7 +55,12 @@ UtcInstant FixedClock::utc_now() const
 
 LocalDateTime FixedClock::local_now() const
 {
-    return LocalDateTime{utc_now().time_since_epoch() + local_offset()};
+    return to_local(utc_now());
+}
+
+LocalDateTime FixedClock::to_local(UtcInstant instant) const
+{
+    return LocalDateTime{instant.time_since_epoch() + local_offset()};
 }
 
 Ticks FixedClock::monotonic_now() const

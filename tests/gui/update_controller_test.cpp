@@ -126,8 +126,8 @@ TEST(UpdateController, Checks_on_a_worker_after_the_window_is_shown_when_a_check
 TEST(UpdateController, Does_not_check_when_no_check_is_due)
 {
     UpdateRig rig;
-    rig.backend->schedule().record_success(std::nullopt);  // checked just now
-    rig.clock->advance(std::chrono::hours{23});
+    rig.backend->schedule().record_success(std::nullopt);  // checked at 10:00 today
+    rig.clock->advance(std::chrono::hours{13} + std::chrono::minutes{59});  // 23:59, the same day
     rig.start();
     EXPECT_EQ(rig.backend->evaluations(), 1);
     EXPECT_EQ(rig.backend->checks(), 0) << "no request when the core says no check is due";

@@ -296,6 +296,28 @@ TEST(FixedClock, Constructor_takes_an_instant_and_an_offset)
     EXPECT_EQ(clock.local_today(), d(2027, 1, 1));
 }
 
+TEST(FixedClock, To_local_applies_the_fixed_offset_to_any_instant)
+{
+    wizz::FixedClock clock{wizz::make_utc(d(2026, 11, 2), 10, 0), 4h};
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 12, 31), 21, 30)), make_local(d(2027, 1, 1), 1, 30));
+    EXPECT_EQ(clock.to_local(clock.utc_now()), clock.local_now());
+    clock.set_local_offset(-5h);
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 7, 1), 3, 0)), make_local(d(2026, 6, 30), 22, 0));
+}
+
+TEST(Clock, The_default_to_local_applies_the_current_offset)
+{
+    // A clock that only says what time it is: UTC 10:00, local 12:00.
+    class TwoHoursAhead final : public wizz::Clock {
+    public:
+        [[nodiscard]] wizz::UtcInstant utc_now() const override { return wizz::make_utc(d(2026, 11, 2), 10, 0); }
+        [[nodiscard]] LocalDateTime local_now() const override { return make_local(d(2026, 11, 2), 12, 0); }
+        [[nodiscard]] Ticks monotonic_now() const override { return Ticks::zero(); }
+    };
+    const TwoHoursAhead clock;
+    EXPECT_EQ(clock.to_local(wizz::make_utc(d(2026, 3, 1), 23, 15)), make_local(d(2026, 3, 2), 1, 15));
+}
+
 TEST(FixedClock, Concurrent_advances_are_not_lost)
 {
     wizz::FixedClock clock;
@@ -338,6 +360,18 @@ TEST(SystemClock, Local_now_is_utc_shifted_by_the_machine_zone_offset)
     const auto expected = std::chrono::current_zone()->get_info(utc).offset;
     EXPECT_LE(offset - expected, std::chrono::ceil<Ticks>(between) + Ticks{1ms});
     EXPECT_GE(offset - expected, Ticks::zero());
+}
+
+TEST(SystemClock, To_local_uses_the_machine_zone_rule_of_that_instant)
+{
+    // A winter and a summer instant: in a zone with daylight saving time the two offsets
+    // differ, and each must be the one the zone had at that instant, not today's.
+    const wizz::SystemClock clock;
+    const std::chrono::time_zone* zone = std::chrono::current_zone();
+    for (const wizz::UtcInstant instant : {wizz::make_utc(d(2026, 1, 15), 12, 0), wizz::make_utc(d(2026, 7, 15), 12, 0),
+                                           wizz::make_utc(d(2026, 10, 25), 0, 30), wizz::make_utc(d(2026, 10, 25), 1, 30)}) {
+        EXPECT_EQ(clock.to_local(instant), zone->to_local(instant)) << wizz::format_iso_utc(instant);
+    }
 }
 
 TEST(SystemClock, Monotonic_time_never_goes_back)

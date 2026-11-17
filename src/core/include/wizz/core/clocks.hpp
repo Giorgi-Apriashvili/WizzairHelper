@@ -23,6 +23,8 @@ public:
     [[nodiscard]] UtcInstant utc_now() const override;
     [[nodiscard]] LocalDateTime local_now() const override;
     [[nodiscard]] Ticks monotonic_now() const override;
+    /// The machine zone's wall clock at `instant`, with the DST rule of that instant.
+    [[nodiscard]] LocalDateTime to_local(UtcInstant instant) const override;
 
 private:
     const std::chrono::time_zone* zone_ = nullptr;  ///< nullptr = UTC fallback
@@ -42,6 +44,8 @@ public:
     /// `utc_now() + local_offset()` as a naive wall-clock value.
     [[nodiscard]] LocalDateTime local_now() const override;
     [[nodiscard]] Ticks monotonic_now() const override;
+    /// `instant + local_offset()`: the fixed zone has no daylight saving time.
+    [[nodiscard]] LocalDateTime to_local(UtcInstant instant) const override;
 
     [[nodiscard]] Duration local_offset() const noexcept;
 

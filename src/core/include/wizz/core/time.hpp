@@ -108,6 +108,15 @@ public:
     [[nodiscard]] virtual LocalDateTime local_now() const = 0;
     /// Monotonic time since an arbitrary epoch, for elapsed durations.
     [[nodiscard]] virtual Ticks monotonic_now() const = 0;
+    /// The local wall clock at `instant` in the clock's time zone, with the offset that
+    /// zone had at that instant (daylight saving time included). This default applies
+    /// the zone's current offset; SystemClock and FixedClock override it.
+    [[nodiscard]] virtual LocalDateTime to_local(UtcInstant instant) const
+    {
+        const UtcInstant utc = utc_now();
+        const LocalDateTime local = local_now();
+        return LocalDateTime{instant.time_since_epoch() + (local.time_since_epoch() - utc.time_since_epoch())};
+    }
 
     /// "today" = DateOnly.FromDateTime(GetLocalNow().DateTime).
     [[nodiscard]] Date local_today() const { return date_of(local_now()); }

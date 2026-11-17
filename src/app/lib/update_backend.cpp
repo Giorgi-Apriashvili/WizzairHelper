@@ -34,7 +34,7 @@ update::Version CoreUpdateBackend::running_version() const
 
 std::optional<UpdateCheckResult> CoreUpdateBackend::check_if_due(std::stop_token stop)
 {
-    return updater_.check_if_due(schedule_, std::move(stop));
+    return updater_.check_if_due(schedule_, update::CheckPolicy{}, std::move(stop));
 }
 
 UpdateDownloadResult CoreUpdateBackend::download_installer(const update::ReleaseInfo& release, std::stop_token stop)
