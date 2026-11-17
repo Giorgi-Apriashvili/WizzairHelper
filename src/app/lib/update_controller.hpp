@@ -7,14 +7,17 @@
 //     tick. Each evaluation runs on a JobRunner worker: the core's check_if_due with the
 //     model's policy (no request when no check is due or automatic checks are off; the
 //     calendar periods and the 1 h failure floor are the core's), or, after a download
-//     failure that may heal, the download again. The first one also deletes downloads of
-//     old versions.
+//     failure that may heal, the download again. The first one first deletes downloads
+//     of old versions and offers again an update put off in an earlier session, from
+//     update-state.json and the downloads folder alone — no request (the model's remind).
 //   * One piece of work at a time: an automatic evaluation, a manual check (check_now,
-//     the Settings window's Check now), or a download (after a check, "Update now", or a
-//     switch to a choice that downloads). Work asked for while another runs is queued and
-//     runs right after it (manual check, then download, then evaluation); an hourly tick
-//     during work is skipped. A queued download starts only if the model still wants it
-//     (the choice or the switch changed back, or "Later", meanwhile: it is dropped).
+//     the Settings window's Check now), the check of "Update now" for a remembered update,
+//     or a download (after a check, "Update now", or a switch to a choice that downloads).
+//     Work asked for while another runs is queued and runs right after it (manual check,
+//     then "Update now"'s check, then download, then evaluation); an hourly tick during
+//     work is skipped. A queued download or "Update now" check starts only if the model
+//     still wants it (the choice or the switch changed back, "Later", or another check
+//     answered meanwhile: it is dropped).
 //   * Checking is silent: a failure is one Log tab line (the core writes update.log);
 //     no boxes, no focus changes. The Settings window reads status_view() and follows
 //     status_changed().
@@ -132,7 +135,8 @@ public Q_SLOTS:
     void evaluate();
     /// Controller::working_changed: "Restart and update" and "Update now" wait while work runs.
     void set_working(bool working);
-    /// The bar's action: "Restart and update", "Update now" or "Download".
+    /// The bar's action: "Restart and update", "Update now" (for a remembered update: a
+    /// check for its release first, then the download) or "Download".
     void trigger_action();
     /// "Later".
     void dismiss();
@@ -152,13 +156,16 @@ Q_SIGNALS:
     void status_changed();
 
 private:
-    enum class Work : std::uint8_t { automatic, manual, download };
+    enum class Work : std::uint8_t { automatic, manual, fetch, download };
 
     /// Runs `work` now, or after the running work.
     void start_work(Work work);
     [[nodiscard]] Task<> run(Work first);
+    /// The first evaluation: old downloads go, an earlier session's update is offered again.
+    [[nodiscard]] Task<> remind();
     [[nodiscard]] Task<> automatic_check();
-    [[nodiscard]] Task<> manual_check();
+    /// A check that always runs: Check now (manual) or "Update now"'s (update_now).
+    [[nodiscard]] Task<> check_now_work(ui::CheckOrigin origin);
     [[nodiscard]] Task<> apply_check(ui::CheckResult result, ui::CheckOrigin origin);
     [[nodiscard]] Task<> download();
     void log_lines(const std::vector<std::string>& lines);
@@ -175,8 +182,9 @@ private:
     bool running_ = false;
     bool closing_ = false;
     bool working_ = false;
-    bool cleaned_up_ = false;
+    bool reminded_ = false;
     bool manual_queued_ = false;
+    bool fetch_queued_ = false;
     bool download_queued_ = false;
     bool automatic_queued_ = false;
     std::stop_source stop_;

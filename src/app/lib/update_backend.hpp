@@ -4,8 +4,9 @@
 // network, and CoreUpdateBackend, the real one over wizz::update (D-40..D-44).
 //
 // check_if_due, check_now, download_installer and remove_stale_downloads block and run
-// on a worker thread; the controller never runs two of them at once. load_state and
-// log may be called from any thread.
+// on a worker thread; the controller never runs two of them at once. load_state,
+// verified_installer, release_page_url and log send nothing and may be called from any
+// thread.
 
 #include "wizz/core/cancellation.hpp"
 #include "wizz/core/http.hpp"
@@ -13,9 +14,11 @@
 #include "wizz/services/updater.hpp"
 
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <string>
 #include <string_view>
 
 namespace wizz::app {
@@ -48,6 +51,12 @@ public:
     [[nodiscard]] virtual UpdateCheckResult check_now(std::stop_token stop) = 0;
     /// update-state.json as it is now; the empty state when it cannot be read.
     [[nodiscard]] virtual update::UpdateState load_state() const = 0;
+    /// The verified installer of `version` in the downloads folder, without any request
+    /// (update::find_verified_download); nullopt when there is none.
+    [[nodiscard]] virtual std::optional<std::filesystem::path> verified_installer(
+        const update::Version& version) const = 0;
+    /// The release page of `version` (update::UpdateConfig::release_page_url).
+    [[nodiscard]] virtual std::string release_page_url(const update::Version& version) const = 0;
     /// Worker: downloads and verifies `release`'s installer into the downloads folder.
     /// Throws OperationCancelled.
     [[nodiscard]] virtual UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
@@ -73,6 +82,9 @@ public:
                                                                 std::stop_token stop) override;
     [[nodiscard]] UpdateCheckResult check_now(std::stop_token stop) override;
     [[nodiscard]] update::UpdateState load_state() const override;
+    [[nodiscard]] std::optional<std::filesystem::path> verified_installer(
+        const update::Version& version) const override;
+    [[nodiscard]] std::string release_page_url(const update::Version& version) const override;
     [[nodiscard]] UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
                                                           std::stop_token stop) override;
     void remove_stale_downloads() override;

@@ -3,7 +3,8 @@
 // result means for an installed or a portable copy under each "When an update is found"
 // choice, "Later", "Restart and update", "Update now", changing the options while an
 // update is under way, the installer command run on exit, and the Settings window's
-// "Updates" status (the version line says "last successful check" after a failed check).
+// "Updates" status (the version line says "last successful check" after a failed check),
+// and the reminder at start-up of an update put off in an earlier session.
 
 #include "wizz/ui/update_model.hpp"
 
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <string>
 #include <vector>
@@ -1006,7 +1008,8 @@ TEST(UpdateModel, The_version_line_says_last_successful_check_while_the_last_che
     EXPECT_EQ(status(crashed).version_line, "WizzairHelper 1.0.0 \u00B7 last successful check today at 10:00");
 }
 
-TEST(UpdateModel, A_first_check_that_fails_has_no_successful_check_yet){
+TEST(UpdateModel, A_first_check_that_fails_has_no_successful_check_yet)
+{
     UpdateModel model{kRunning, InstallKind::installed};
     EXPECT_EQ(status(model).version_line, "WizzairHelper 1.0.0 \u00B7 never checked");
     (void)model.on_check(check_error(UpdateErrorKind::http_status, "Update check failed: GitHub answered HTTP 503.", 503));
@@ -1055,6 +1058,313 @@ TEST(UpdateModel, A_failed_automatic_download_shows_in_the_status)
     EXPECT_EQ(view.status, "The download of WizzairHelper 1.2.0 did not match its checksum and was deleted. Try again later.");
     model.begin_download();
     EXPECT_EQ(status(model).kind, UpdateStatusKind::downloading) << "a new try replaces the failure";
+}
+
+// =====================================================================================
+// The reminder at start-up: an update put off in an earlier session (D-61)
+// =====================================================================================
+
+/// What the controller finds at start-up: update-state.json saw `version`; with
+/// `installer`, its verified installer is in the downloads folder.
+[[nodiscard]] wizz::ui::EarlierUpdate earlier(Version version, bool installer)
+{
+    return wizz::ui::EarlierUpdate{
+        .version = version,
+        .page_url = "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v" + version.to_string(),
+        .installer = installer ? std::optional<std::filesystem::path>{installer_path(version)} : std::nullopt};
+}
+
+const UpdateBarView kAvailableWithUpdateNow{.visible = true,
+                                            .text = "WizzairHelper 1.2.0 is available.",
+                                            .action = "Update now",
+                                            .action_enabled = true};
+
+TEST(UpdateReminder, A_verified_installer_is_ready_again_under_the_choices_that_download)
+{
+    for (const WhenFound when_found : {WhenFound::install_on_close, WhenFound::download_then_ask}) {
+        SCOPED_TRACE(std::string{texts::when_found_label(when_found)});
+        UpdateModel model{kRunning, InstallKind::installed, with(when_found)};
+        EXPECT_EQ(model.remind(earlier(kNew, true)), lines({"Update available: WizzairHelper 1.2.0 (running 1.0.0)."}));
+        const bool on_close = when_found == WhenFound::install_on_close;
+        EXPECT_EQ(model.bar(false),
+                  (UpdateBarView{.visible = true,
+                                 .text = on_close ? "WizzairHelper 1.2.0 is ready to install. It will be installed when "
+                                                    "you close WizzairHelper."
+                                                  : "WizzairHelper 1.2.0 is ready to install.",
+                                 .action = "Restart and update",
+                                 .action_enabled = true}));
+        EXPECT_FALSE(model.bar(true).action_enabled) << "waits while a search works";
+        ASSERT_TRUE(model.ready().has_value());
+        EXPECT_EQ(*model.ready(), (wizz::ui::ReadyInstaller{.version = kNew, .path = installer_path(kNew)}));
+        EXPECT_EQ(model.exit_command().has_value(), on_close) << "installed on close as today";
+        if (on_close) {
+            EXPECT_EQ(model.exit_command()->program, installer_path(kNew));
+            EXPECT_EQ(model.exit_command()->arguments, relaunch_args(false));
+        }
+        EXPECT_EQ(status(model).kind, UpdateStatusKind::ready);
+        EXPECT_EQ(status(model).status, "WizzairHelper 1.2.0 is ready to install.");
+        EXPECT_FALSE(model.pending_download().has_value()) << "nothing to download";
+        EXPECT_FALSE(model.download_wanted());
+        EXPECT_FALSE(model.download_retry_due());
+        EXPECT_FALSE(model.fetch_wanted());
+
+        EXPECT_EQ(model.on_action(false), BarAction::restart) << "verified already: no request, it installs";
+        ASSERT_TRUE(model.exit_command().has_value());
+        EXPECT_EQ(model.exit_command()->arguments, relaunch_args(true));
+    }
+}
+
+TEST(UpdateReminder, Without_a_verified_installer_or_under_notify_only_it_offers_Update_now)
+{
+    struct Case {
+        WhenFound when_found;
+        bool automatic;
+        bool installer;
+    };
+    for (const Case c : {Case{WhenFound::install_on_close, true, false}, Case{WhenFound::download_then_ask, true, false},
+                         Case{WhenFound::notify_only, true, false}, Case{WhenFound::notify_only, true, true},
+                         Case{WhenFound::install_on_close, false, false}}) {
+        SCOPED_TRACE(std::format("{}, automatic {}, installer {}", texts::when_found_label(c.when_found), c.automatic,
+                                 c.installer));
+        UpdateModel model{kRunning, InstallKind::installed, with(c.when_found, c.automatic)};
+        EXPECT_EQ(model.remind(earlier(kNew, c.installer)),
+                  lines({"Update available: WizzairHelper 1.2.0 (running 1.0.0)."}));
+        EXPECT_EQ(model.bar(false), kAvailableWithUpdateNow);
+        EXPECT_FALSE(model.bar(true).action_enabled) << "Update now ends in a restart: it waits while a search works";
+        EXPECT_FALSE(model.ready().has_value());
+        EXPECT_FALSE(model.exit_command().has_value()) << "closing installs nothing";
+        EXPECT_EQ(status(model).kind, UpdateStatusKind::available);
+        EXPECT_EQ(status(model).status, "WizzairHelper 1.2.0 is available.");
+        EXPECT_FALSE(model.download_wanted()) << "nothing downloads on its own";
+        EXPECT_FALSE(model.download_retry_due());
+        EXPECT_FALSE(model.fetch_wanted()) << "nothing checks on its own";
+        EXPECT_EQ(model.on_action(true), BarAction::none);
+        EXPECT_FALSE(model.install_requested());
+    }
+}
+
+TEST(UpdateReminder, Update_now_checks_for_the_release_then_downloads_and_restarts)
+{
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+    (void)model.remind(earlier(kNew, true));
+    ASSERT_EQ(model.on_action(false), BarAction::check_then_download) << "the release first: the update-state.json "
+                                                                         "version has no download URLs";
+    EXPECT_TRUE(model.install_requested());
+    EXPECT_TRUE(model.fetch_wanted());
+    EXPECT_FALSE(model.download_wanted());
+    EXPECT_EQ(model.bar(false), (UpdateBarView{.visible = true,
+                                               .text = "Downloading WizzairHelper 1.2.0\u2026",
+                                               .action = "",
+                                               .action_enabled = false}));
+    EXPECT_EQ(model.on_action(false), BarAction::none) << "already on its way";
+
+    model.begin_fetch();
+    EXPECT_TRUE(model.fetching());
+    EXPECT_FALSE(model.fetch_wanted()) << "running";
+    UpdateStatusView view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::downloading);
+    EXPECT_EQ(view.status, "Downloading WizzairHelper 1.2.0\u2026");
+    EXPECT_FALSE(view.check_now_enabled);
+
+    const UpdateModel::CheckOutcome outcome = model.on_check(found(kNew), CheckOrigin::update_now);
+    EXPECT_TRUE(outcome.log.empty()) << "announced at start-up already";
+    EXPECT_TRUE(outcome.download) << "the user asked for it";
+    EXPECT_FALSE(model.fetching());
+    EXPECT_FALSE(model.remembered().has_value()) << "the check's answer replaces the reminder";
+    ASSERT_TRUE(model.pending_download().has_value());
+    EXPECT_EQ(model.pending_download()->version, kNew);
+    EXPECT_TRUE(model.download_wanted());
+    EXPECT_EQ(model.bar(false).text, "Downloading WizzairHelper 1.2.0\u2026");
+
+    const UpdateModel::DownloadOutcome done = run_download(model, downloaded(kNew));
+    EXPECT_TRUE(done.restart) << "verified: restart and install";
+    ASSERT_TRUE(model.exit_command().has_value());
+    EXPECT_EQ(model.exit_command()->program, installer_path(kNew));
+    EXPECT_EQ(model.exit_command()->arguments, relaunch_args(true));
+}
+
+TEST(UpdateReminder, Update_now_gets_the_newest_release_its_check_finds)
+{
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    (void)model.remind(earlier(kNew, false));
+    ASSERT_EQ(model.on_action(false), BarAction::check_then_download);
+    model.begin_fetch();
+    const UpdateModel::CheckOutcome outcome = model.on_check(found(Version{1, 3, 0}), CheckOrigin::update_now);
+    EXPECT_EQ(outcome.log, lines({"Update available: WizzairHelper 1.3.0 (running 1.0.0)."}));
+    EXPECT_TRUE(outcome.download);
+    EXPECT_EQ(model.bar(false).text, "Downloading WizzairHelper 1.3.0\u2026");
+    EXPECT_TRUE(run_download(model, downloaded(Version{1, 3, 0})).restart);
+    EXPECT_EQ(model.exit_command()->program, installer_path(Version{1, 3, 0}));
+}
+
+TEST(UpdateReminder, A_failed_or_empty_check_of_Update_now_ends_it)
+{
+    {
+        UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::download_then_ask)};
+        (void)model.remind(earlier(kNew, false));
+        ASSERT_EQ(model.on_action(false), BarAction::check_then_download);
+        model.begin_fetch();
+        const UpdateModel::CheckOutcome outcome = model.on_check(
+            check_error(UpdateErrorKind::network, "Update check failed: network error: no route"), CheckOrigin::update_now);
+        EXPECT_EQ(outcome.log, lines({"Update check failed: network error: no route"}));
+        EXPECT_FALSE(outcome.download);
+        EXPECT_FALSE(model.install_requested());
+        EXPECT_EQ(model.bar(false), kAvailableWithUpdateNow) << "offered again";
+        const UpdateStatusView view = status(model);
+        EXPECT_EQ(view.kind, UpdateStatusKind::failed);
+        EXPECT_EQ(view.status, "Could not reach GitHub. Check your internet connection and try again.");
+        EXPECT_TRUE(view.check_now_enabled);
+        EXPECT_EQ(model.on_action(false), BarAction::check_then_download) << "the user may try again";
+    }
+    for (const wizz::ui::CheckResult& nothing :
+         {found(kRunning, false), check_error(UpdateErrorKind::no_release, "No release is published yet (GitHub answered HTTP 404).")}) {
+        UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+        (void)model.remind(earlier(kNew, true));
+        ASSERT_EQ(model.on_action(false), BarAction::check_then_download);
+        model.begin_fetch();
+        const UpdateModel::CheckOutcome outcome = model.on_check(nothing, CheckOrigin::update_now);
+        EXPECT_TRUE(outcome.log.empty());
+        EXPECT_FALSE(outcome.download);
+        EXPECT_FALSE(model.install_requested());
+        EXPECT_FALSE(model.remembered().has_value()) << "GitHub has nothing newer: the reminder goes";
+        EXPECT_FALSE(model.bar(false).visible);
+        EXPECT_FALSE(model.exit_command().has_value());
+        EXPECT_EQ(status(model).kind, UpdateStatusKind::up_to_date);
+    }
+}
+
+TEST(UpdateReminder, A_version_that_is_not_newer_is_never_offered)
+{
+    for (const InstallKind kind : {InstallKind::installed, InstallKind::portable}) {
+        for (const Version seen : {kRunning, Version{0, 9, 0}}) {
+            SCOPED_TRACE(seen.to_string());
+            UpdateModel model{kRunning, kind};
+            EXPECT_TRUE(model.remind(earlier(seen, true)).empty()) << "no Log line";
+            EXPECT_FALSE(model.remembered().has_value());
+            EXPECT_FALSE(model.bar(false).visible);
+            EXPECT_FALSE(model.ready().has_value());
+            EXPECT_FALSE(model.available().has_value());
+            EXPECT_FALSE(model.exit_command().has_value()) << "an installer of the running version never runs";
+        }
+    }
+}
+
+TEST(UpdateReminder, A_portable_copy_is_reminded_with_its_release_page)
+{
+    for (const WhenFound when_found : {WhenFound::install_on_close, WhenFound::download_then_ask, WhenFound::notify_only}) {
+        SCOPED_TRACE(std::string{texts::when_found_label(when_found)});
+        UpdateModel model{kRunning, InstallKind::portable, with(when_found)};
+        EXPECT_EQ(model.remind(earlier(kNew, true)), lines({"Update available: WizzairHelper 1.2.0 (running 1.0.0)."}));
+        const UpdateBarView expected{.visible = true,
+                                     .text = "WizzairHelper 1.2.0 is available.",
+                                     .action = "Download",
+                                     .action_enabled = true};
+        EXPECT_EQ(model.bar(false), expected);
+        EXPECT_EQ(model.bar(true), expected);
+        ASSERT_TRUE(model.available().has_value());
+        EXPECT_EQ(model.available()->page_url, "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.2.0");
+        EXPECT_EQ(model.on_action(false), BarAction::open_release_page);
+        EXPECT_FALSE(model.ready().has_value()) << "a portable copy never installs";
+        EXPECT_FALSE(model.exit_command().has_value());
+        EXPECT_EQ(status(model).status, "WizzairHelper 1.2.0 is available.");
+    }
+}
+
+TEST(UpdateReminder, Later_hides_it_for_the_session_and_the_next_start_reminds_again)
+{
+    UpdateModel session{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    (void)session.remind(earlier(kNew, true));
+    session.dismiss();
+    EXPECT_FALSE(session.bar(false).visible);
+    ASSERT_TRUE(session.exit_command().has_value()) << "install on close still installs it";
+    (void)session.on_check(found(kNew));
+    EXPECT_FALSE(session.bar(false).visible) << "an automatic check respects Later";
+
+    UpdateModel next_start{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    EXPECT_FALSE(next_start.remind(earlier(kNew, true)).empty());
+    EXPECT_TRUE(next_start.bar(false).visible) << "Later is not kept: the next start reminds again";
+
+    // Later before the queued check of Update now started drops it.
+    UpdateModel queued{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+    (void)queued.remind(earlier(kNew, false));
+    ASSERT_EQ(queued.on_action(false), BarAction::check_then_download);
+    queued.dismiss();
+    EXPECT_FALSE(queued.fetch_wanted());
+    EXPECT_FALSE(queued.install_requested());
+    EXPECT_FALSE(queued.bar(false).visible);
+}
+
+TEST(UpdateReminder, A_check_of_the_session_replaces_it_with_what_it_found)
+{
+    // The same release with its verified installer and a choice that downloads: it stays
+    // ready, nothing is downloaded again.
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    (void)model.remind(earlier(kNew, true));
+    UpdateModel::CheckOutcome outcome = model.on_check(found(kNew));
+    EXPECT_TRUE(outcome.log.empty());
+    EXPECT_FALSE(outcome.download);
+    EXPECT_FALSE(model.remembered().has_value());
+    EXPECT_EQ(*model.ready(), (wizz::ui::ReadyInstaller{.version = kNew, .path = installer_path(kNew)}));
+    EXPECT_EQ(model.exit_command()->arguments, relaunch_args(false));
+    // A newer one downloads as usual; the verified one stays offered meanwhile.
+    outcome = model.on_check(found(Version{1, 3, 0}));
+    EXPECT_EQ(outcome.log, lines({"Update available: WizzairHelper 1.3.0 (running 1.0.0)."}));
+    EXPECT_TRUE(outcome.download);
+    EXPECT_EQ(model.bar(false).text,
+              "WizzairHelper 1.2.0 is ready to install. It will be installed when you close WizzairHelper.");
+
+    // Notify only: the found release is offered with Update now, which downloads it.
+    UpdateModel notify{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+    (void)notify.remind(earlier(kNew, true));
+    EXPECT_FALSE(notify.on_check(found(kNew)).download);
+    EXPECT_EQ(notify.bar(false), kAvailableWithUpdateNow);
+    EXPECT_EQ(notify.on_action(false), BarAction::download) << "its release is known now: no check first";
+
+    // Nothing newer any more: the reminder goes; a failed check keeps it.
+    UpdateModel gone{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    (void)gone.remind(earlier(kNew, true));
+    (void)gone.on_check(check_error(UpdateErrorKind::network, "Update check failed: network error: x"));
+    EXPECT_TRUE(gone.bar(false).visible) << "a failed check knows nothing new";
+    (void)gone.on_check(check_error(UpdateErrorKind::no_release, "No release is published yet (GitHub answered HTTP 404)."));
+    EXPECT_FALSE(gone.bar(false).visible);
+    EXPECT_FALSE(gone.exit_command().has_value());
+
+    // A portable copy takes the release page the check found.
+    UpdateModel portable{kRunning, InstallKind::portable};
+    (void)portable.remind(wizz::ui::EarlierUpdate{.version = kNew, .page_url = "https://example.invalid/old", .installer = {}});
+    EXPECT_TRUE(portable.on_check(found(kNew)).log.empty());
+    EXPECT_EQ(portable.available()->page_url, "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.2.0");
+
+    // After a check of this session the reminder has nothing to add.
+    UpdateModel checked{kRunning, InstallKind::installed};
+    (void)checked.on_check(found(kRunning, false));
+    EXPECT_TRUE(checked.remind(earlier(kNew, true)).empty());
+    EXPECT_FALSE(checked.bar(false).visible);
+}
+
+TEST(UpdateReminder, The_offer_follows_the_choice_and_never_downloads_on_its_own)
+{
+    UpdateModel model{kRunning, InstallKind::installed, with(WhenFound::install_on_close)};
+    (void)model.remind(earlier(kNew, true));
+    EXPECT_FALSE(model.set_options(with(WhenFound::notify_only)));
+    EXPECT_EQ(model.bar(false), kAvailableWithUpdateNow) << "notify only: Update now";
+    EXPECT_FALSE(model.exit_command().has_value());
+    EXPECT_FALSE(model.set_options(with(WhenFound::download_then_ask)));
+    EXPECT_EQ(model.bar(false).text, "WizzairHelper 1.2.0 is ready to install.");
+    EXPECT_FALSE(model.exit_command().has_value());
+    EXPECT_FALSE(model.set_options(with(WhenFound::install_on_close)));
+    ASSERT_TRUE(model.exit_command().has_value());
+    EXPECT_EQ(model.exit_command()->arguments, relaunch_args(false));
+
+    UpdateModel bare{kRunning, InstallKind::installed, with(WhenFound::notify_only)};
+    (void)bare.remind(earlier(kNew, false));
+    for (const WhenFound target : {WhenFound::install_on_close, WhenFound::download_then_ask}) {
+        SCOPED_TRACE(std::string{texts::when_found_label(target)});
+        EXPECT_FALSE(bare.set_options(with(target))) << "no download: its release is not even known";
+        EXPECT_FALSE(bare.download_wanted());
+        EXPECT_FALSE(bare.fetch_wanted());
+        EXPECT_EQ(bare.bar(false), kAvailableWithUpdateNow);
+    }
 }
 
 } // namespace

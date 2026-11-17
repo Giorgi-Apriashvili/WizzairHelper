@@ -18,6 +18,7 @@
 #include <deque>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -63,7 +64,9 @@ inline const update::Version kRunningVersion{1, 0, 0};
 /// The core with scripted answers: check_if_due asks the real UpdateSchedule (in
 /// `updates_dir`, on `clock`) with the controller's policy and records the scripted
 /// result in it, like Updater::check_if_due; check_now always answers and records, like
-/// Updater::check_now; downloads answer from their own script. Thread-safe.
+/// Updater::check_now; downloads answer from their own script; verified_installer finds a
+/// file in `<updates_dir>\downloads` like update::find_verified_download. checks() and
+/// downloads_started() count every request the controller makes. Thread-safe.
 class FakeUpdateBackend final : public wizz::app::UpdateBackend {
 public:
     FakeUpdateBackend(update::InstallKind kind, std::filesystem::path updates_dir, std::shared_ptr<FixedClock> clock)
@@ -92,6 +95,12 @@ public:
     [[nodiscard]] wizz::app::UpdateCheckResult check_now(std::stop_token stop) override
     {
         throw_if_cancelled(stop);
+        {
+            // hold_checks(): wait until release_checks() or the stop (the window closes).
+            std::unique_lock gate{gate_mutex_};
+            gate_changed_.wait(gate, stop, [this] { return !checks_held_; });
+        }
+        throw_if_cancelled(stop);
         const std::scoped_lock lock{mutex_};
         worker_threads_.push_back(std::this_thread::get_id());
         ++manual_checks_;
@@ -102,6 +111,21 @@ public:
     }
 
     [[nodiscard]] update::UpdateState load_state() const override { return schedule_.load(); }
+
+    [[nodiscard]] std::optional<std::filesystem::path> verified_installer(const update::Version& version) const override
+    {
+        std::filesystem::path path = installer_path(version);
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(path, error)) {
+            return std::nullopt;
+        }
+        return path;
+    }
+
+    [[nodiscard]] std::string release_page_url(const update::Version& version) const override
+    {
+        return "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v" + version.to_string();
+    }
 
     [[nodiscard]] wizz::app::UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
                                                                      std::stop_token stop) override
@@ -148,6 +172,21 @@ public:
     {
         const std::scoped_lock lock{mutex_};
         block_manual_checks_ = on;
+    }
+
+    /// Check now (check_now) waits on its worker until release_checks() (or the window closes).
+    void hold_checks()
+    {
+        const std::scoped_lock gate{gate_mutex_};
+        checks_held_ = true;
+    }
+    void release_checks()
+    {
+        {
+            const std::scoped_lock gate{gate_mutex_};
+            checks_held_ = false;
+        }
+        gate_changed_.notify_all();
     }
 
     /// Downloads wait on their worker until release_downloads() (or the window closes).
@@ -197,9 +236,17 @@ public:
         const std::scoped_lock lock{mutex_};
         return log_;
     }
+    /// Requests to GitHub of any kind: release checks and downloads (held or not).
+    [[nodiscard]] int requests() const { return checks() + downloads_started(); }
     [[nodiscard]] std::filesystem::path installer_path(update::Version version) const
     {
         return downloads_dir_ / update::UpdateConfig::installer_name(version);
+    }
+    /// An installer an earlier session downloaded and verified (download_verified's name).
+    void place_verified_installer(update::Version version) const
+    {
+        std::filesystem::create_directories(downloads_dir_);
+        std::ofstream{installer_path(version), std::ios::binary} << "MZ";
     }
     [[nodiscard]] const update::UpdateSchedule& schedule() const noexcept { return schedule_; }
 
@@ -244,6 +291,7 @@ private:
     mutable std::mutex gate_mutex_;
     std::condition_variable_any gate_changed_;
     bool downloads_held_ = false;
+    bool checks_held_ = false;
     int downloads_started_ = 0;
     std::atomic<int> evaluations_{0};
     std::atomic<int> checks_{0};

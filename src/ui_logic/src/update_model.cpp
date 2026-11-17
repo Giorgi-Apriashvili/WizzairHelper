@@ -215,6 +215,77 @@ bool UpdateModel::newer_pending() const noexcept
     return pending_.has_value() && (!ready_ || pending_->version > ready_->version);
 }
 
+bool UpdateModel::remembered_ready() const noexcept
+{
+    // A verified installer of an earlier session is offered as ready only under a choice
+    // that downloads; notify only offers "Update now" (the owner's rule, D-61).
+    return remembered_.has_value() && remembered_->installer.has_value() && downloads_on_its_own();
+}
+
+update::Version UpdateModel::wanted_version() const noexcept
+{
+    if (newer_pending()) {
+        return pending_->version;
+    }
+    return remembered_ ? remembered_->version : update::Version{};
+}
+
+std::optional<ReadyInstaller> UpdateModel::ready() const
+{
+    if (ready_) {
+        return ready_;
+    }
+    if (remembered_ready()) {
+        return ReadyInstaller{.version = remembered_->version, .path = *remembered_->installer};
+    }
+    return std::nullopt;
+}
+
+std::vector<std::string> UpdateModel::remind(const EarlierUpdate& earlier)
+{
+    std::vector<std::string> log;
+    // A version that is not newer is never offered; a check of this session knows better.
+    if (earlier.version <= running_ || checked_ || remembered_) {
+        return log;
+    }
+    remembered_ = earlier;
+    if (kind_ == update::InstallKind::portable) {
+        remembered_->installer.reset();  // a portable copy never installs
+        available_ = AvailableRelease{.version = earlier.version, .page_url = earlier.page_url};
+    }
+    if (!announced_ || earlier.version > *announced_) {
+        announced_ = earlier.version;
+        log.push_back(update_strings::available_log(earlier.version, running_));
+    }
+    return log;
+}
+
+void UpdateModel::forget_remembered(const update::ReleaseInfo* found)
+{
+    checked_ = true;
+    if (!remembered_) {
+        return;
+    }
+    const EarlierUpdate earlier = *std::exchange(remembered_, std::nullopt);
+    if (kind_ == update::InstallKind::portable) {
+        if (available_ && available_->version == earlier.version) {
+            available_.reset();  // the check's answer decides what is offered now
+        }
+        return;
+    }
+    // What the bar already offered as ready stays ready when the release is still there.
+    if (found != nullptr && earlier.installer && found->version >= earlier.version && downloads_on_its_own() &&
+        !ready_) {
+        ready_ = ReadyInstaller{.version = earlier.version, .path = *earlier.installer};
+    }
+}
+
+bool UpdateModel::fetch_wanted() const noexcept
+{
+    return kind_ == update::InstallKind::installed && remembered_.has_value() && install_requested_ && !fetching_ &&
+           !newer_pending();
+}
+
 bool UpdateModel::waits_for_user() const noexcept
 {
     if (options_.when_found == update::WhenFound::notify_only) {
@@ -249,26 +320,44 @@ bool UpdateModel::download_wanted() const noexcept
 
 UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, CheckOrigin origin)
 {
-    CheckOutcome outcome;
     if (origin == CheckOrigin::manual) {
         checking_ = false;
     }
+    if (origin == CheckOrigin::update_now) {
+        fetching_ = false;
+    }
+    CheckOutcome outcome = take_check(result, origin);
+    if (origin == CheckOrigin::update_now && !outcome.download) {
+        install_requested_ = false;  // failed or nothing newer: "Update now" is offered again, or nothing
+    }
+    if (install_requested_ && !remembered_ && !newer_pending()) {
+        install_requested_ = false;  // nothing is left for "Update now" to download
+    }
+    return outcome;
+}
+
+UpdateModel::CheckOutcome UpdateModel::take_check(const CheckResult& result, CheckOrigin origin)
+{
+    CheckOutcome outcome;
     if (!result) {
         if (result.error().kind == update::UpdateErrorKind::no_release) {
             up_to_date_ = true;  // nothing is published to update to
             problem_.reset();
             last_check_failed_ = false;
+            forget_remembered(nullptr);
             return outcome;
         }
         outcome.log.push_back(update_strings::check_failed_log(result.error().message));
         problem_ = update_strings::check_failed_status(result.error());
-        last_check_failed_ = true;  // the version line names the last successful one
+        last_check_failed_ = true;  // the version line names the last successful one; a remembered update stays
         return outcome;
     }
     problem_.reset();
     last_check_failed_ = false;
     const update::ReleaseInfo& release = *result;
-    if (!release.newer || release.version <= running_) {
+    const bool newer = release.newer && release.version > running_;
+    forget_remembered(newer ? &release : nullptr);
+    if (!newer) {
         up_to_date_ = true;
         return outcome;
     }
@@ -295,8 +384,8 @@ UpdateModel::CheckOutcome UpdateModel::on_check(const CheckResult& result, Check
     }
     pending_ = release;
     retry_download_ = false;
-    outcome.download = downloads_on_its_own();
-    download_asked_ = outcome.download;
+    download_asked_ = downloads_on_its_own();
+    outcome.download = download_asked_ || install_requested_;  // "Update now" of a remembered update asked for it
     return outcome;
 }
 
@@ -343,10 +432,11 @@ UpdateModel::DownloadOutcome UpdateModel::on_download(const DownloadResult& resu
 
 void UpdateModel::on_unexpected_error(std::string_view what)
 {
-    if (checking_) {
+    if (checking_ || fetching_) {
         last_check_failed_ = true;  // a check that was waited for ended without an answer
     }
     checking_ = false;
+    fetching_ = false;
     downloading_ = false;
     download_asked_ = false;
     install_requested_ = false;
@@ -364,7 +454,13 @@ UpdateModel::Offer UpdateModel::offer() const noexcept
     if (newer_pending() && waits_for_user()) {
         return Offer::update_now;
     }
-    return ready_ ? Offer::ready : Offer::none;
+    if (ready_ || remembered_ready()) {
+        return Offer::ready;
+    }
+    if (remembered_) {  // an earlier session's update without a verified installer on offer
+        return install_requested_ ? Offer::downloading_for_install : Offer::update_now;
+    }
+    return Offer::none;
 }
 
 UpdateBarView UpdateModel::bar(bool working) const
@@ -376,10 +472,11 @@ UpdateBarView UpdateModel::bar(bool working) const
     case Offer::none:
         return {};
     case Offer::ready: {
+        const update::Version version = ready()->version;
         const bool on_close = options_.when_found == update::WhenFound::install_on_close && !restart_;
         return UpdateBarView{.visible = true,
-                             .text = on_close ? update_strings::ready_text(ready_->version)
-                                              : update_strings::ready_to_install_text(ready_->version),
+                             .text = on_close ? update_strings::ready_text(version)
+                                              : update_strings::ready_to_install_text(version),
                              .action = std::string{update_strings::kRestartAndUpdate},
                              .action_enabled = !working};
     }
@@ -390,12 +487,12 @@ UpdateBarView UpdateModel::bar(bool working) const
                              .action_enabled = true};
     case Offer::update_now:
         return UpdateBarView{.visible = true,
-                             .text = update_strings::available_text(pending_->version),
+                             .text = update_strings::available_text(wanted_version()),
                              .action = std::string{update_strings::kUpdateNow},
                              .action_enabled = !working};
     case Offer::downloading_for_install:
         return UpdateBarView{.visible = true,
-                             .text = update_strings::downloading_text(pending_->version),
+                             .text = update_strings::downloading_text(wanted_version()),
                              .action = {},
                              .action_enabled = false};
     }
@@ -418,6 +515,9 @@ BarAction UpdateModel::on_action(bool working)
             return BarAction::none;
         }
         install_requested_ = true;
+        if (!newer_pending()) {
+            return BarAction::check_then_download;  // a remembered update: its release is checked for first
+        }
         return downloading_ ? BarAction::none : BarAction::download;  // a running download restarts when verified
     case Offer::none:
     case Offer::downloading_for_install:
@@ -434,14 +534,15 @@ void UpdateModel::dismiss() noexcept
 
 std::optional<update::InstallerCommand> UpdateModel::exit_command() const
 {
-    if (!ready_ || kind_ != update::InstallKind::installed) {
+    const std::optional<ReadyInstaller> installer = ready();
+    if (!installer || kind_ != update::InstallKind::installed) {
         return std::nullopt;
     }
     if (restart_) {
-        return update::silent_install_command(ready_->path, update::Relaunch::yes);
+        return update::silent_install_command(installer->path, update::Relaunch::yes);
     }
     if (options_.when_found == update::WhenFound::install_on_close) {
-        return update::silent_install_command(ready_->path, update::Relaunch::no);
+        return update::silent_install_command(installer->path, update::Relaunch::no);
     }
     return std::nullopt;
 }
@@ -453,7 +554,7 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
                                                      last_check_failed_ ? update_strings::LastCheck::failed
                                                                         : update_strings::LastCheck::succeeded);
     view.checking = checking_;
-    view.check_now_enabled = !checking_ && !downloading_;
+    view.check_now_enabled = !checking_ && !downloading_ && !fetching_;
     view.options_enabled = true;
     view.when_found_enabled = kind_ == update::InstallKind::installed;
     view.when_found_note = kind_ == update::InstallKind::portable ? std::string{update_strings::kPortableNote} : "";
@@ -465,17 +566,22 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
     // "Update now" offers a release newer than a verified one: the status names the newer.
     const Offer current = offer();
     const bool offers_newer = current == Offer::update_now || current == Offer::downloading_for_install;
+    const std::optional<ReadyInstaller> installer = ready();
     if (checking_) {
         set(UpdateStatusKind::checking, std::string{update_strings::kChecking});
     } else if (downloading_ && pending_) {
         set(UpdateStatusKind::downloading, update_strings::downloading_text(pending_->version));
-    } else if (ready_ && !offers_newer) {
-        set(UpdateStatusKind::ready, update_strings::ready_to_install_text(ready_->version));
+    } else if (fetching_ && remembered_) {
+        set(UpdateStatusKind::downloading, update_strings::downloading_text(remembered_->version));
+    } else if (installer && !offers_newer) {
+        set(UpdateStatusKind::ready, update_strings::ready_to_install_text(installer->version));
     } else if (problem_) {
         set(UpdateStatusKind::failed, *problem_);
-    } else if (pending_ || available_) {
-        set(UpdateStatusKind::available,
-            update_strings::available_text(pending_ ? pending_->version : available_->version));
+    } else if (pending_ || available_ || remembered_) {
+        const update::Version version = pending_     ? pending_->version
+                                        : available_ ? available_->version
+                                                     : remembered_->version;
+        set(UpdateStatusKind::available, update_strings::available_text(version));
     } else if (up_to_date_) {
         set(UpdateStatusKind::up_to_date, std::string{update_strings::kUpToDate});
     } else if (saved_.latest_seen && *saved_.latest_seen > running_) {

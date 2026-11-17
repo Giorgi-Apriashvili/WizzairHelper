@@ -3,7 +3,8 @@
 // runs in self-test runs, stays silent apart from Log lines, downloads the installer
 // of an installed copy before offering "Restart and update", links a portable copy
 // to the release page, and starts the silent installer when the window closes —
-// through a recording launcher, never a real process.
+// through a recording launcher, never a real process. An update put off in an earlier
+// session is offered again at every start without any request (the backend counts them).
 
 #include "update_test_support.hpp"
 
@@ -550,18 +551,20 @@ TEST(UpdateController, Turning_checks_on_or_shortening_the_period_checks_at_once
     EXPECT_FALSE(rig.controller()->is_running()) << "the install choice does not touch the schedule";
 }
 
-TEST(UpdateController, An_update_seen_in_an_earlier_session_waits_for_the_next_period)
+TEST(UpdateController, An_update_seen_in_an_earlier_session_is_offered_again_but_checked_only_in_the_next_period)
 {
-    // The owner's rule is the period alone (D-59): an earlier session of this month saw
-    // 1.2.0 and did not install it; this session sends nothing, and the Settings window
-    // still names the update from update-state.json.
+    // The owner's rules: the period alone decides when GitHub is asked (D-59), and an
+    // update put off earlier is offered again at every start from what the app knows
+    // (D-61). An earlier session of this month saw 1.2.0 and did not install it.
     UpdateRig rig{with_updates(choice(update::WhenFound::notify_only, true, update::CheckFrequency::monthly))};
     rig.backend->schedule().record_success(kNewVersion);
     rig.backend->script_checks({release_info(kNewVersion)});
     rig.clock->advance(std::chrono::days{3});
     rig.start();
-    EXPECT_EQ(rig.backend->checks(), 0) << "this month was checked: no extra request";
-    EXPECT_FALSE(rig.bar().isVisible());
+    EXPECT_EQ(rig.backend->requests(), 0) << "this month was checked: no extra request";
+    ASSERT_TRUE(rig.bar().isVisible()) << "but the update is offered again";
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Update now");
     EXPECT_EQ(rig.controller()->status_view().status, "WizzairHelper 1.2.0 is available.");
 
     rig.clock->set_utc_now(wizz::make_utc(wizz::Date::from_ymd(2026, 12, 1), 8, 0));
@@ -570,6 +573,234 @@ TEST(UpdateController, An_update_seen_in_an_earlier_session_waits_for_the_next_p
     EXPECT_EQ(rig.backend->checks(), 1) << "a new month checks";
     ASSERT_TRUE(rig.bar().isVisible());
     EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(update_lines(rig.window_rig),
+              std::vector<std::string>{"Update available: WizzairHelper 1.2.0 (running 1.0.0)."})
+        << "announced once in the session";
+}
+
+// ---------------------------------------------------------------------------
+// The reminder at start-up: an update put off in an earlier session (D-61)
+// ---------------------------------------------------------------------------
+
+/// An earlier session today saw 1.2.0 (no check is due today) and did not install it;
+/// with `installer` its verified installer is still in the downloads folder.
+void put_off_earlier(UpdateRig& rig, bool installer)
+{
+    rig.backend->schedule().record_success(kNewVersion);
+    if (installer) {
+        rig.backend->place_verified_installer(kNewVersion);
+    }
+    rig.backend->script_checks({release_info(kNewVersion)});  // answered only if something asks
+}
+
+TEST(UpdateController, Reminds_at_start_of_a_verified_installer_as_ready_without_any_request)
+{
+    for (const update::WhenFound when_found : {update::WhenFound::install_on_close, update::WhenFound::download_then_ask}) {
+        SCOPED_TRACE(static_cast<int>(when_found));
+        UpdateRig rig{with_updates(choice(when_found))};
+        put_off_earlier(rig, true);
+        rig.start();
+        EXPECT_EQ(rig.backend->evaluations(), 1) << "the schedule was asked";
+        EXPECT_EQ(rig.backend->requests(), 0) << "no check is due, and the reminder asks nothing";
+        EXPECT_EQ(rig.backend->cleanups(), 1) << "old downloads are still cleaned up";
+        ASSERT_TRUE(rig.bar().isVisible());
+        const bool on_close = when_found == update::WhenFound::install_on_close;
+        EXPECT_EQ(rig.bar().message_label()->text(),
+                  on_close ? q(kReadyText) : QStringLiteral("WizzairHelper 1.2.0 is ready to install."));
+        EXPECT_EQ(rig.bar().action_button()->text(), "Restart and update");
+        EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+        EXPECT_EQ(rig.controller()->status_view().status, "WizzairHelper 1.2.0 is ready to install.");
+        EXPECT_EQ(update_lines(rig.window_rig),
+                  std::vector<std::string>{"Update available: WizzairHelper 1.2.0 (running 1.0.0)."});
+
+        rig.window().close();
+        EXPECT_EQ(rig.backend->requests(), 0);
+        if (on_close) {
+            ASSERT_EQ(rig.launches.commands.size(), 1u) << "installed on close, as today";
+            EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, false));
+            EXPECT_EQ(rig.launches.released_before_launch, std::vector<bool>{true});
+        } else {
+            EXPECT_TRUE(rig.launches.commands.empty()) << "download then ask: only Restart and update installs";
+        }
+    }
+}
+
+TEST(UpdateController, Restart_and_update_on_a_reminder_installs_without_any_request)
+{
+    UpdateRig rig{with_updates(choice(update::WhenFound::download_then_ask))};
+    put_off_earlier(rig, true);
+    rig.start();
+    ASSERT_TRUE(rig.bar().isVisible());
+    rig.bar().action_button()->click();
+    EXPECT_FALSE(rig.window().isVisible());
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, true));
+    EXPECT_EQ(rig.backend->requests(), 0);
+}
+
+TEST(UpdateController, Reminds_at_start_with_Update_now_without_a_verified_installer_or_under_notify_only)
+{
+    struct Case {
+        update::WhenFound when_found;
+        bool automatic;
+        bool installer;
+    };
+    for (const Case c : {Case{update::WhenFound::install_on_close, true, false},
+                         Case{update::WhenFound::download_then_ask, true, false},
+                         Case{update::WhenFound::notify_only, true, false}, Case{update::WhenFound::notify_only, true, true},
+                         Case{update::WhenFound::install_on_close, false, false}}) {
+        SCOPED_TRACE(std::format("choice {}, automatic {}, installer {}", static_cast<int>(c.when_found), c.automatic,
+                                 c.installer));
+        UpdateRig rig{with_updates(choice(c.when_found, c.automatic))};
+        put_off_earlier(rig, c.installer);
+        rig.start();
+        EXPECT_EQ(rig.backend->requests(), 0) << "the reminder asks nothing";
+        ASSERT_TRUE(rig.bar().isVisible());
+        EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+        EXPECT_EQ(rig.bar().action_button()->text(), "Update now");
+        EXPECT_TRUE(rig.bar().action_button()->isEnabled());
+        EXPECT_EQ(rig.controller()->status_view().kind, wizz::ui::UpdateStatusKind::available);
+
+        rig.controller()->evaluate();  // an hourly tick: still nothing is due, nothing is fetched
+        rig.wait_for_evaluations(2);
+        EXPECT_EQ(rig.backend->requests(), 0);
+        rig.window().close();
+        EXPECT_TRUE(rig.launches.commands.empty()) << "closing installs nothing";
+        EXPECT_EQ(rig.backend->requests(), 0);
+    }
+}
+
+TEST(UpdateController, Update_now_on_a_reminder_checks_for_the_release_then_downloads_and_restarts)
+{
+    UpdateRig rig{with_updates(choice(update::WhenFound::notify_only))};
+    put_off_earlier(rig, true);
+    rig.start();
+    ASSERT_EQ(rig.bar().action_button()->text(), "Update now");
+    ASSERT_EQ(rig.backend->requests(), 0);
+
+    rig.backend->hold_downloads();
+    rig.bar().action_button()->click();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_EQ(rig.backend->manual_checks(), 1) << "the user asked: one check for its release";
+    EXPECT_EQ(rig.bar().message_label()->text(), q("Downloading WizzairHelper 1.2.0…"));
+    EXPECT_FALSE(rig.bar().action_button()->isVisible());
+    EXPECT_EQ(rig.controller()->status_view().status, "Downloading WizzairHelper 1.2.0…");
+
+    rig.backend->release_downloads();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); })) << "verified: the app restarts";
+    EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_EQ(rig.launches.commands.front().command_line(), expected_command_line(rig, true));
+    EXPECT_EQ(rig.backend->checks(), 1) << "one check, one download";
+}
+
+TEST(UpdateController, Update_now_on_a_reminder_offers_itself_again_when_its_check_fails)
+{
+    UpdateRig rig{with_updates(choice(update::WhenFound::install_on_close))};
+    put_off_earlier(rig, false);
+    rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::network,
+                                                             "Update check failed: network error: no route to host"))});
+    rig.start();
+    ASSERT_EQ(rig.bar().action_button()->text(), "Update now");
+    rig.clock->advance(std::chrono::minutes{10});
+    rig.bar().action_button()->click();
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->checks(), 1);
+    EXPECT_TRUE(rig.backend->downloaded().empty());
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Update now") << "offered again";
+    const wizz::ui::UpdateStatusView view = rig.controller()->status_view();
+    EXPECT_EQ(view.kind, wizz::ui::UpdateStatusKind::failed);
+    EXPECT_EQ(view.status, "Could not reach GitHub. Check your internet connection and try again.");
+    EXPECT_EQ(view.version_line, "WizzairHelper 1.0.0 · last successful check today at 10:00");
+    EXPECT_EQ(update_lines(rig.window_rig).back(), "Update check failed: network error: no route to host");
+    EXPECT_TRUE(rig.window().isVisible());
+}
+
+TEST(UpdateController, A_portable_copy_is_reminded_with_its_release_page_without_any_request)
+{
+    UpdateRig rig{with_updates(choice(update::WhenFound::install_on_close), InstallKind::portable)};
+    put_off_earlier(rig, false);
+    rig.start();
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Download");
+    rig.bar().action_button()->click();
+    EXPECT_EQ(rig.launches.opened_pages, std::vector<std::string>{std::string{kReleasePage}});
+    EXPECT_EQ(rig.backend->requests(), 0) << "the page is opened in the browser; the app sends nothing";
+    rig.window().close();
+    EXPECT_TRUE(rig.launches.commands.empty());
+}
+
+TEST(UpdateController, No_reminder_for_a_version_that_is_not_newer)
+{
+    for (const Version seen : {kRunningVersion, Version{0, 9, 0}}) {
+        SCOPED_TRACE(seen.to_string());
+        UpdateRig rig;
+        rig.backend->schedule().record_success(seen);
+        rig.backend->place_verified_installer(seen);
+        rig.start();
+        EXPECT_EQ(rig.backend->requests(), 0);
+        EXPECT_EQ(rig.backend->cleanups(), 1) << "old downloads are cleaned up as today";
+        EXPECT_FALSE(rig.bar().isVisible());
+        EXPECT_TRUE(update_lines(rig.window_rig).empty());
+        EXPECT_EQ(rig.controller()->status_view().kind, wizz::ui::UpdateStatusKind::up_to_date);
+        rig.window().close();
+        EXPECT_TRUE(rig.launches.commands.empty()) << "never an installer of the running or an older version";
+    }
+}
+
+TEST(UpdateController, Later_hides_the_reminder_until_the_next_start)
+{
+    UpdateRigOptions options = with_updates(choice(update::WhenFound::notify_only));
+    options.interval = 20ms;  // the hours of the session, compressed
+    UpdateRig first{std::move(options)};
+    put_off_earlier(first, false);
+    first.start();
+    ASSERT_TRUE(first.bar().isVisible());
+    first.bar().later_button()->click();
+    EXPECT_FALSE(first.bar().isVisible());
+    first.wait_for_evaluations(4);
+    EXPECT_FALSE(first.bar().isVisible()) << "hidden for the rest of the session";
+    EXPECT_EQ(first.backend->requests(), 0);
+    first.window().close();
+
+    // The next start, with the files the first session left: offered again, still without a request.
+    UpdateRig next{with_updates(choice(update::WhenFound::notify_only))};
+    std::filesystem::copy(first.window_rig.data_root() / "updates", next.window_rig.data_root() / "updates",
+                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+    next.start();
+    ASSERT_TRUE(next.bar().isVisible());
+    EXPECT_EQ(next.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(next.backend->requests(), 0);
+}
+
+TEST(UpdateController, The_first_evaluation_reminds_also_after_a_Check_now_that_was_running)
+{
+    // Check now ran before the window was shown; the first evaluation waits for it instead
+    // of being skipped, so old downloads still go and the reminder still comes. A failed
+    // check knows nothing new, so the update put off earlier stands.
+    UpdateRig rig;
+    put_off_earlier(rig, true);
+    rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::network,
+                                                             "Update check failed: network error: no route to host"))});
+    rig.backend->hold_checks();
+    ASSERT_TRUE(rig.enable());
+    rig.controller()->check_now();
+    rig.window_rig.start();  // shown while Check now still runs
+    ASSERT_TRUE(rig.controller()->is_started());
+    ASSERT_TRUE(rig.controller()->is_running());
+    EXPECT_EQ(rig.backend->evaluations(), 0) << "one piece of work at a time";
+    rig.backend->release_checks();
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->manual_checks(), 1);
+    EXPECT_EQ(rig.backend->requests(), 1) << "Check now only";
+    EXPECT_EQ(rig.backend->evaluations(), 1);
+    EXPECT_EQ(rig.backend->cleanups(), 1) << "the first evaluation ran after it";
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
 }
 
 TEST(UpdateController, Check_now_reports_checking_then_the_result_and_counts_as_the_periods_check)
@@ -898,6 +1129,39 @@ TEST(UpdateController, The_real_core_checks_downloads_and_verifies_through_the_t
     rig.window().close();
     ASSERT_EQ(launches.commands.size(), 1u);
     EXPECT_EQ(launches.commands.front().program, downloaded);
+}
+
+TEST(UpdateController, The_real_core_reminds_from_its_files_without_a_request)
+{
+    // update-state.json of an earlier session that saw 1.2.0 today, its verified installer
+    // and a stale one of an older version in the downloads folder; the transport answers
+    // every request with HTTP 500 and records it.
+    const auto transport = std::make_shared<wizz::test::FakeTransport>(
+        [](const wizz::test::RecordedRequest&) { return wizz::test::json_response("{}", 500); });
+    WindowRig rig;
+    const auto clock = std::make_shared<wizz::FixedClock>();
+    const update::UpdateConfig config = update::UpdateConfig::for_app("1.0.0", rig.data_root());
+    update::UpdateSchedule{config.updates_dir(), clock}.record_success(kNewVersion);
+    const std::filesystem::path installer = config.download_dir() / "WizzairHelper-1.2.0-win64-setup.exe";
+    const std::filesystem::path stale = config.download_dir() / "WizzairHelper-0.9.0-win64-setup.exe";
+    std::filesystem::create_directories(config.download_dir());
+    std::ofstream{installer, std::ios::binary} << "MZ verified by an earlier session";
+    std::ofstream{stale, std::ios::binary} << "MZ";
+    auto backend = std::make_shared<wizz::app::CoreUpdateBackend>(
+        config, InstallKind::installed, transport, clock,
+        [](wizz::Duration, std::stop_token stop) { wizz::throw_if_cancelled(stop); });
+    wizz::test::app::LaunchLog launches;
+    ASSERT_TRUE(rig.window().enable_updates(launches.hooks(backend)));
+    rig.start();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().update_bar()->isVisible(); }));
+
+    EXPECT_EQ(rig.window().update_bar()->message_label()->text(), q(kReadyText));
+    EXPECT_TRUE(transport->urls().empty()) << "nothing was sent to GitHub";
+    EXPECT_FALSE(std::filesystem::exists(stale)) << "old downloads are still cleaned up";
+    rig.window().close();
+    ASSERT_EQ(launches.commands.size(), 1u);
+    EXPECT_EQ(launches.commands.front().program, installer);
+    EXPECT_TRUE(transport->urls().empty());
 }
 
 TEST(UpdateController, The_system_hooks_use_the_running_version_and_the_updates_folder)

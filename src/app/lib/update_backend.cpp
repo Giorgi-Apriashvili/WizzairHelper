@@ -48,6 +48,16 @@ update::UpdateState CoreUpdateBackend::load_state() const
     return schedule_.load();
 }
 
+std::optional<std::filesystem::path> CoreUpdateBackend::verified_installer(const update::Version& version) const
+{
+    return update::find_verified_download(updater_.config(), version, update::AssetKind::installer);
+}
+
+std::string CoreUpdateBackend::release_page_url(const update::Version& version) const
+{
+    return updater_.config().release_page_url(version);
+}
+
 UpdateDownloadResult CoreUpdateBackend::download_installer(const update::ReleaseInfo& release, std::stop_token stop)
 {
     return updater_.download_verified(release, update::AssetKind::installer, updater_.config().download_dir(),

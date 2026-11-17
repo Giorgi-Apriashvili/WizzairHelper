@@ -503,6 +503,27 @@ TEST(SettingsWindow, Check_now_shows_checking_then_each_result_live_like_the_upd
     EXPECT_FALSE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
 }
 
+TEST(SettingsWindow, Shows_an_update_put_off_earlier_from_the_start_without_a_request)
+{
+    UpdateRig rig{rig_options(options(WhenFound::download_then_ask))};
+    rig.backend->schedule().record_success(kNewVersion);  // an earlier session today saw 1.2.0
+    rig.backend->place_verified_installer(kNewVersion);
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    EXPECT_EQ(dialog.status().kind, UpdateStatusKind::ready);
+    EXPECT_EQ(dialog.status_label()->text(), "WizzairHelper 1.2.0 is ready to install.");
+    EXPECT_EQ(dialog.version_label()->text(), q("WizzairHelper 1.0.0 · last checked today at 10:00"));
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is ready to install.");
+
+    // Only tell me: the same update is available, with Update now in the bar.
+    dialog.when_found_button(WhenFound::notify_only)->click();
+    gui::settle();
+    EXPECT_EQ(dialog.status_label()->text(), "WizzairHelper 1.2.0 is available.");
+    EXPECT_EQ(rig.bar().action_button()->text(), "Update now");
+    EXPECT_EQ(rig.backend->requests(), 0) << "changing the choice sends nothing either";
+}
+
 TEST(SettingsWindow, Download_then_ask_chosen_in_the_window_asks_and_closing_installs_nothing)
 {
     UpdateRig rig;

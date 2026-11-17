@@ -20,6 +20,14 @@
 //   * What a finished check means: nothing visible when it is up to date or no release
 //     is published; one Log line when it failed; for a newer release one "Update
 //     available" line per version and session, then the choice above.
+//   * An update put off in an earlier session (Later, notify only, closed under
+//     download_then_ask, a portable copy, an installer that did not start) is offered
+//     again at every start from what the app already knows — update-state.json's
+//     LatestSeenVersion and a verified installer in the downloads folder — without any
+//     request (remind()): a verified installer is ready under install_on_close and
+//     download_then_ask; otherwise, and under notify_only, "Update now" checks for its
+//     release first and then downloads it (the user asked); a portable copy links to its
+//     release page.
 //   * The update bar (UpdateBarView) and what its action does (BarAction); "Later"
 //     hides the bar for the rest of the session.
 //   * The Settings window's "Updates" status (UpdateStatusView): the version and the
@@ -156,13 +164,18 @@ enum class BarAction : std::uint8_t {
     none,               ///< nothing (disabled while working, or already under way)
     restart,            ///< close the window; the ready installer then starts with /RELAUNCH
     download,           ///< download and verify pending_download() now; on_download then restarts
+    /// "Update now" for an update remembered from an earlier session (remembered()): check
+    /// releases/latest first (begin_fetch, then on_check with CheckOrigin::update_now),
+    /// whose answer asks for the download; on_download then restarts.
+    check_then_download,
     open_release_page,  ///< a portable copy: open available()->page_url in the browser
 };
 
 /// Who asked for a check.
 enum class CheckOrigin : std::uint8_t {
-    automatic,  ///< the schedule (check_policy)
-    manual,     ///< Check now in the Settings window
+    automatic,   ///< the schedule (check_policy)
+    manual,      ///< Check now in the Settings window
+    update_now,  ///< "Update now" for a remembered update: the check that finds its release
 };
 
 /// The Settings window's status line.
@@ -211,6 +224,18 @@ struct AvailableRelease {
     friend bool operator==(const AvailableRelease&, const AvailableRelease&) = default;
 };
 
+/// What the app knows at start-up, without asking GitHub, of an update found in an
+/// earlier session (UpdateModel::remind).
+struct EarlierUpdate {
+    update::Version version;  ///< update-state.json's LatestSeenVersion
+    std::string page_url;     ///< its release page (UpdateConfig::release_page_url), for a portable copy
+    /// Its verified installer in the downloads folder (update::find_verified_download), for
+    /// an installed copy; nullopt when there is none.
+    std::optional<std::filesystem::path> installer;
+
+    friend bool operator==(const EarlierUpdate&, const EarlierUpdate&) = default;
+};
+
 /// The update state of one app session (UI thread only). See the file comment and
 /// DECISIONS D-61 for the state machine.
 class UpdateModel {
@@ -235,6 +260,25 @@ public:
     void set_saved_state(const update::UpdateState& state) { saved_ = state; }
     [[nodiscard]] const update::UpdateState& saved_state() const noexcept { return saved_; }
 
+    // --- The reminder at start-up ------------------------------------------------------
+    /// The session's first evaluation: an update found in an earlier session and not
+    /// installed is offered again, from what the app knows — nothing here asks GitHub.
+    /// Ignored when `earlier.version` is not newer than the running version, or when a
+    /// check of this session has already answered. Otherwise the version is announced
+    /// (available_log, once per session) and remembered():
+    /// - portable: available() with `earlier.page_url` ("Download");
+    /// - installed with `earlier.installer` and a choice that downloads (install_on_close,
+    ///   download_then_ask): ready() — "Restart and update", installed on close under
+    ///   install_on_close;
+    /// - installed otherwise (no verified installer, or notify_only): available_text +
+    ///   "Update now", which checks for the release first (BarAction::check_then_download).
+    /// The offer follows later changes of the choice and never downloads on its own; the
+    /// next successful check replaces it with what it found. Returns the Log lines.
+    [[nodiscard]] std::vector<std::string> remind(const EarlierUpdate& earlier);
+    /// The update remembered from an earlier session that no check of this session has
+    /// answered yet (remind()).
+    [[nodiscard]] const std::optional<EarlierUpdate>& remembered() const noexcept { return remembered_; }
+
     // --- Checks ------------------------------------------------------------------------
     /// Check now was pressed: the status says "Checking for updates…" until on_check with
     /// CheckOrigin::manual.
@@ -248,17 +292,33 @@ public:
 
     /// A check finished:
     /// - no_release (nothing published, a draft or a prerelease) or a release that is not
-    ///   newer than the running version: nothing visible (the status: up to date);
+    ///   newer than the running version: nothing visible (the status: up to date), and a
+    ///   remembered() update is dropped;
     /// - any other error: one check_failed_log line (the status: the failure; the version
-    ///   line names the last *successful* check);
+    ///   line names the last *successful* check); a remembered() update stays offered;
+    /// - a release, after a remembered() update: the check's answer replaces it; its
+    ///   verified installer becomes ready() when the release is that version or a newer
+    ///   one and the choice downloads;
     /// - a newer release already ready, offered or being downloaded (or an older one):
     ///   nothing new;
     /// - a newer release: available_log once per version and session; a portable copy
     ///   offers its page (available()); an installed copy remembers it as
     ///   pending_download() and asks for the download unless the choice is notify_only
-    ///   (also again after an earlier download of it failed).
-    /// A manual check that finds a newer release shows the bar again after "Later".
+    ///   (also again after an earlier download of it failed) — or "Update now" asked for
+    ///   it (install_requested()).
+    /// A manual check that finds a newer release shows the bar again after "Later". The
+    /// check of "Update now" for a remembered update (CheckOrigin::update_now) that fails
+    /// or finds nothing newer ends that request: "Update now" is offered again, or nothing.
     [[nodiscard]] CheckOutcome on_check(const CheckResult& result, CheckOrigin origin = CheckOrigin::automatic);
+
+    /// The check of "Update now" for a remembered update starts (the bar and the status:
+    /// downloading).
+    void begin_fetch() noexcept { fetching_ = true; }
+    [[nodiscard]] bool fetching() const noexcept { return fetching_; }
+    /// "Update now" asked to check for a remembered update's release, that check has not
+    /// started, and nothing made it unnecessary meanwhile ("Later", or another check that
+    /// answered first). The controller asks before it starts a queued one.
+    [[nodiscard]] bool fetch_wanted() const noexcept;
 
     // --- Downloads ---------------------------------------------------------------------
     /// The download of pending_download() starts (the status: downloading).
@@ -294,7 +354,9 @@ public:
     /// next re-evaluation downloads again instead of checking.
     [[nodiscard]] bool download_retry_due() const noexcept;
 
-    [[nodiscard]] const std::optional<ReadyInstaller>& ready() const noexcept { return ready_; }
+    /// The verified installer on offer: the one verified in this session, else a
+    /// remembered() one while the choice downloads (install_on_close, download_then_ask).
+    [[nodiscard]] std::optional<ReadyInstaller> ready() const;
     [[nodiscard]] const std::optional<AvailableRelease>& available() const noexcept { return available_; }
 
     // --- The update bar ------------------------------------------------------------------
@@ -308,16 +370,20 @@ public:
     /// - installed, a verified installer: ready_text (install_on_close) or
     ///   ready_to_install_text (the other choices, or after "Restart and update") +
     ///   "Restart and update" (disabled while `working`);
+    /// - installed, a remembered() update without a ready() installer: available_text +
+    ///   "Update now" as above; after it was pressed downloading_text, no action;
     /// - otherwise hidden (an installed copy downloading on its own shows nothing yet).
     [[nodiscard]] UpdateBarView bar(bool working) const;
     /// The bar's action button: what bar() offers, unless it is disabled while `working`.
     /// "Restart and update" sets restart_requested(); "Update now" sets install_requested()
-    /// (none when its download is already running: it restarts when verified).
+    /// (none when its download is already running: it restarts when verified; for a
+    /// remembered() update check_then_download).
     [[nodiscard]] BarAction on_action(bool working);
     /// "Later": the bar stays hidden for the rest of the session (until a manual check
-    /// finds a newer release) and a pending "Update now" no longer restarts (its download
-    /// still runs if it has started, and is dropped if it has not); a ready installer
-    /// still runs on exit with install_on_close.
+    /// finds a newer release; the next start reminds again, remind()) and a pending
+    /// "Update now" no longer restarts (its check or download still runs if it has
+    /// started, and is dropped if it has not); a ready installer still runs on exit with
+    /// install_on_close.
     void dismiss() noexcept;
     [[nodiscard]] bool dismissed() const noexcept { return dismissed_; }
     [[nodiscard]] bool restart_requested() const noexcept { return restart_; }
@@ -334,11 +400,12 @@ public:
     /// The "Updates" section; `clock` and `locale` format the last successful check of
     /// saved_state(), named "last successful check" while the last check of this session
     /// failed (update_strings::LastCheck::failed), else "last checked". The status, first
-    /// that applies: checking; downloading; ready (a
-    /// verified installer, unless "Update now" offers a newer release); failed (the last
-    /// check or download failed); available; up to date (a check this session found
-    /// nothing newer); before any check this session, from saved_state(): available when
-    /// it saw a newer version, up to date after a successful check, else not checked.
+    /// that applies: checking; downloading (also the check of "Update now" for a
+    /// remembered update); ready (a verified installer, unless "Update now" offers a newer
+    /// release); failed (the last check or download failed); available (also a remembered
+    /// update); up to date (a check this session found nothing newer); before any check
+    /// this session, from saved_state(): available when it saw a newer version, up to date
+    /// after a successful check, else not checked.
     [[nodiscard]] UpdateStatusView status_view(const Clock& clock, const Locale& locale) const;
 
     [[nodiscard]] const update::Version& running() const noexcept { return running_; }
@@ -348,8 +415,18 @@ private:
     enum class Offer : std::uint8_t { none, ready, release_page, update_now, downloading_for_install };
 
     [[nodiscard]] Offer offer() const noexcept;
+    /// on_check without its bookkeeping of the checks in flight.
+    [[nodiscard]] CheckOutcome take_check(const CheckResult& result, CheckOrigin origin);
     /// pending_ is newer than any ready installer.
     [[nodiscard]] bool newer_pending() const noexcept;
+    /// The remembered update's verified installer is on offer as ready().
+    [[nodiscard]] bool remembered_ready() const noexcept;
+    /// The version "Update now" (or its download) is about: pending_'s when newer_pending(),
+    /// else the remembered one's.
+    [[nodiscard]] update::Version wanted_version() const noexcept;
+    /// A check of this session answered with `found` (nullptr: no newer release): the
+    /// remembered update gives way to it.
+    void forget_remembered(const update::ReleaseInfo* found);
     [[nodiscard]] bool downloads_on_its_own() const noexcept;
     /// Nothing downloads pending_ unless the user presses "Update now" (see bar()).
     [[nodiscard]] bool waits_for_user() const noexcept;
@@ -367,7 +444,10 @@ private:
     std::optional<ReadyInstaller> ready_;
     std::optional<AvailableRelease> available_;
     std::optional<std::string> problem_;  ///< the last check or download failure, in plain words
+    std::optional<EarlierUpdate> remembered_;  ///< remind()'s update until a check of this session answers
+    bool checked_ = false;            ///< a check of this session answered (a release or no_release)
     bool last_check_failed_ = false;  ///< the last check of this session failed
+    bool fetching_ = false;           ///< the check of "Update now" for remembered_ runs
     bool checking_ = false;
     bool up_to_date_ = false;  ///< the last successful check found nothing newer
     bool dismissed_ = false;

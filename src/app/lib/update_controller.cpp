@@ -106,7 +106,7 @@ void UpdateController::start()
     }
     started_ = true;
     timer_->start();
-    evaluate();
+    start_work(Work::automatic);  // the first evaluation (with the reminder) runs, also after work started earlier
 }
 
 ui::UpdateStatusView UpdateController::status_view() const
@@ -135,6 +135,9 @@ void UpdateController::start_work(Work work)
     case Work::manual:
         manual_queued_ = true;
         break;
+    case Work::fetch:
+        fetch_queued_ = true;
+        break;
     case Work::download:
         download_queued_ = true;
         break;
@@ -153,6 +156,9 @@ Task<> UpdateController::run(Work first)
             try {
                 switch (*work) {
                 case Work::automatic:
+                    if (!std::exchange(reminded_, true)) {
+                        co_await remind();
+                    }
                     if (model_.download_retry_due()) {
                         co_await download();
                     } else {
@@ -160,7 +166,12 @@ Task<> UpdateController::run(Work first)
                     }
                     break;
                 case Work::manual:
-                    co_await manual_check();
+                    co_await check_now_work(ui::CheckOrigin::manual);
+                    break;
+                case Work::fetch:
+                    if (model_.fetch_wanted()) {  // not made unnecessary while it waited
+                        co_await check_now_work(ui::CheckOrigin::update_now);
+                    }
                     break;
                 case Work::download:
                     if (model_.download_wanted()) {  // not withdrawn while it waited (D-61)
@@ -179,6 +190,8 @@ Task<> UpdateController::run(Work first)
             work.reset();
             if (std::exchange(manual_queued_, false)) {
                 work = Work::manual;
+            } else if (std::exchange(fetch_queued_, false)) {
+                work = Work::fetch;
             } else if (std::exchange(download_queued_, false)) {
                 work = Work::download;
             } else if (std::exchange(automatic_queued_, false) && started_) {
@@ -191,19 +204,43 @@ Task<> UpdateController::run(Work first)
     }
 }
 
+Task<> UpdateController::remind()
+{
+    struct Answer {
+        update::UpdateState state;
+        std::optional<ui::EarlierUpdate> earlier;  // update-state.json saw a newer version
+    };
+    // Files only: update-state.json and the downloads folder. Nothing goes to GitHub.
+    Answer answer =
+        co_await jobs_->run(jobs_->new_job_id(), stop_.get_token(), [backend = hooks_.backend](const JobChannel&) {
+            backend->remove_stale_downloads();  // versions up to the running one
+            Answer result{.state = backend->load_state(), .earlier = std::nullopt};
+            if (const std::optional<update::Version> seen = result.state.latest_seen;
+                seen && *seen > backend->running_version()) {
+                const bool installed = backend->install_kind() == update::InstallKind::installed;
+                result.earlier = ui::EarlierUpdate{.version = *seen,
+                                                   .page_url = backend->release_page_url(*seen),
+                                                   .installer = installed ? backend->verified_installer(*seen)
+                                                                          : std::nullopt};
+            }
+            return result;
+        });
+    model_.set_saved_state(answer.state);
+    if (answer.earlier) {
+        log_lines(model_.remind(*answer.earlier));
+    }
+    refresh();
+}
+
 Task<> UpdateController::automatic_check()
 {
     struct Answer {
         std::optional<UpdateCheckResult> result;  // nullopt: no check was due
         update::UpdateState state;
     };
-    const bool clean_up = !std::exchange(cleaned_up_, true);
     Answer answer = co_await jobs_->run(
         jobs_->new_job_id(), stop_.get_token(),
-        [backend = hooks_.backend, clean_up, policy = model_.check_policy()](const JobChannel& channel) {
-            if (clean_up) {
-                backend->remove_stale_downloads();
-            }
+        [backend = hooks_.backend, policy = model_.check_policy()](const JobChannel& channel) {
             std::optional<UpdateCheckResult> result = backend->check_if_due(policy, channel.stop_token());
             return Answer{.result = std::move(result), .state = backend->load_state()};
         });
@@ -213,19 +250,23 @@ Task<> UpdateController::automatic_check()
     }
 }
 
-Task<> UpdateController::manual_check()
+Task<> UpdateController::check_now_work(ui::CheckOrigin origin)
 {
     struct Answer {
         UpdateCheckResult result;
         update::UpdateState state;
     };
+    if (origin == ui::CheckOrigin::update_now) {
+        model_.begin_fetch();
+        refresh();  // "Downloading WizzairHelper X…"; Check now waits
+    }
     Answer answer = co_await jobs_->run(jobs_->new_job_id(), stop_.get_token(),
                                         [backend = hooks_.backend](const JobChannel& channel) {
                                             UpdateCheckResult result = backend->check_now(channel.stop_token());
                                             return Answer{.result = std::move(result), .state = backend->load_state()};
                                         });
     model_.set_saved_state(answer.state);
-    co_await apply_check(std::move(answer.result), ui::CheckOrigin::manual);
+    co_await apply_check(std::move(answer.result), origin);
 }
 
 Task<> UpdateController::apply_check(ui::CheckResult result, ui::CheckOrigin origin)
@@ -284,6 +325,10 @@ void UpdateController::trigger_action()
     case ui::BarAction::download:
         refresh();  // "Downloading WizzairHelper X…"
         start_work(Work::download);
+        return;
+    case ui::BarAction::check_then_download:
+        refresh();  // "Downloading WizzairHelper X…"
+        start_work(Work::fetch);  // the user asked: its release is checked for, then downloaded
         return;
     case ui::BarAction::none:
         refresh();
