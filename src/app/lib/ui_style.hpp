@@ -218,15 +218,18 @@ inline constexpr int kHeavierBy = 50;
 /// QFont::resolve(); returns whether a value changed. The fonts below come out of it; a copy
 /// of one with another weight (Qt's setBold() copies) needs it again.
 bool fit_text_rendering(QFont& font);
-/// fit_text_rendering() for `widget`'s font: sets it when it changed (making every attribute
-/// the widget inherited its own); returns whether it did.
+/// fit_text_rendering() for `widget`'s font: sets it when it changed, which makes every
+/// attribute the widget inherited its own; returns whether it did.
 bool fit_text_rendering(QWidget& widget);
 /// Keeps every widget's font fitted: an application event filter that runs
 /// fit_text_rendering(widget) on each QEvent::Polish and QEvent::FontChange, in every look
 /// (High Contrast's plain style included). That covers the fonts Qt derives from a widget
 /// font (the calendar's bold month and year buttons) and fonts the app builds without the
 /// functions below (a default-constructed QFont copies the application font, axis included).
-/// apply_application_look() installs it; later calls do nothing.
+/// A widget whose parent's font needs fitting too is left alone: Qt sends the parent's
+/// FontChange after its children's, and the parent's fitted font reaches them, so a child
+/// never holds a weight it only inherited. apply_application_look() installs it; later calls
+/// do nothing.
 void keep_text_rendering();
 /// The UI font: Segoe UI Variable Text 10 pt, Segoe UI 10 pt on Windows 10.
 [[nodiscard]] QFont form_font();
