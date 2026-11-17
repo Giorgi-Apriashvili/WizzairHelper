@@ -58,14 +58,14 @@ Header layout: public headers under `src/<target>/include/wizz/<target>/…`, in
 
 The build needs no image tools: it compiles the committed `.ico` and PNGs as they are.
 
-## The look (DECISIONS D-53..D-57)
+## The look (DECISIONS D-53..D-58)
 
 The app draws its own look instead of the WinForms one of 01; these files hold it:
 
 | File | What |
 |---|---|
-| `src/app/lib/ui_style.hpp/.cpp` | `style::Theme`: the light, dark and High Contrast colour tokens; the fonts with their Windows 10 fallbacks; icon glyphs painted from their outlines; choosing the look (High Contrast, `WIZZ_COLOR_SCHEME`, the Windows app mode), installing it, following Windows' changes (`refresh_appearance`, `ThemeNotifier`) |
-| `src/app/lib/modern_style.hpp/.cpp` | `ModernStyle`, the `QProxyStyle` over Fusion that paints inputs, buttons, check boxes, tabs, headers, scroll bars, list and menu items, popups, tooltips and focus rings from the tokens; `control_height` |
+| `src/app/lib/ui_style.hpp/.cpp` | `style::Theme`: the light, dark and High Contrast colour tokens; the fonts with their Windows 10 fallbacks and the text rendering (natural, slightly heavier: `fit_text_rendering`, `weight_axis_for`, the `keep_text_rendering` event filter that fits every widget's font; D-58); icon glyphs painted from their outlines; choosing the look (High Contrast, `WIZZ_COLOR_SCHEME`, the Windows app mode), installing it, following Windows' changes (`refresh_appearance`, `ThemeNotifier`) |
+| `src/app/lib/modern_style.hpp/.cpp` | `ModernStyle`, the `QProxyStyle` over Fusion that paints inputs, buttons, check boxes, tabs, headers, scroll bars, list and menu items, popups, tooltips and focus rings from the tokens; `control_height` and `line_height`; `menu_item_font` |
 | `src/app/lib/section_card.hpp/.cpp` | `SectionCard` (a titled input card) and `GlyphLabel` (one icon glyph) |
 | `src/app/lib/trailing_row_layout.hpp/.cpp` | The card row that keeps a search button at its right end and moves it under the row when it does not fit |
 | `src/app/lib/panel_progress_bar.hpp/.cpp` | The busy panel's self-painted bar, still while idle (D-34) |
@@ -75,7 +75,8 @@ Widgets that copy a token into a palette, brush or text format connect to `style
 they paint. No style sheets.
 
 Their tests in `tests/gui`: `look_test.cpp` (choice of the look, live switch, High Contrast, fonts,
-WCAG contrast), `modern_style_test.cpp`, `trailing_row_layout_test.cpp`, the widget tests of each
+WCAG contrast), `text_rendering_test.cpp` (the text rendering in every font, widget, popup and dialog,
+bold copies, the overrides), `modern_style_test.cpp`, `trailing_row_layout_test.cpp`, the widget tests of each
 control, and `look_snapshot_test.cpp` (renders every surface for a review; manual). Test support:
 `look_test_support.hpp` (the suite's look and `LookGuard`) and `minimum_window.hpp` (the client areas
 of the minimum and default windows).
