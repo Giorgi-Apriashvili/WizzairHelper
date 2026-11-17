@@ -3,9 +3,9 @@
 // D-45): an interface, so widget tests script checks and downloads without a
 // network, and CoreUpdateBackend, the real one over wizz::update (D-40..D-44).
 //
-// check_if_due, download_installer and remove_stale_downloads block and run on a
-// worker thread; the controller never runs two of them at once. log may be called
-// from any thread.
+// check_if_due, check_now, download_installer and remove_stale_downloads block and run
+// on a worker thread; the controller never runs two of them at once. load_state and
+// log may be called from any thread.
 
 #include "wizz/core/cancellation.hpp"
 #include "wizz/core/http.hpp"
@@ -34,10 +34,20 @@ public:
     [[nodiscard]] virtual update::Version running_version() const = 0;
     /// Installed (unins000.exe next to the exe) or portable.
     [[nodiscard]] virtual update::InstallKind install_kind() const = 0;
+    /// The schedule's clock: its local time is the one of the calendar periods (D-59) and
+    /// of the Settings window's "last checked" line.
+    [[nodiscard]] virtual const Clock& clock() const = 0;
 
-    /// Worker: the daily check — nullopt without any request when none is due, else the
-    /// releases/latest result, recorded in the schedule. Throws OperationCancelled.
-    [[nodiscard]] virtual std::optional<UpdateCheckResult> check_if_due(std::stop_token stop) = 0;
+    /// Worker: the automatic check — nullopt without any request when none is due under
+    /// `policy` (D-59), else the releases/latest result, recorded in the schedule. Throws
+    /// OperationCancelled.
+    [[nodiscard]] virtual std::optional<UpdateCheckResult> check_if_due(const update::CheckPolicy& policy,
+                                                                        std::stop_token stop) = 0;
+    /// Worker: Check now — always the releases/latest request, recorded in the schedule
+    /// (a success is the period's check). Throws OperationCancelled.
+    [[nodiscard]] virtual UpdateCheckResult check_now(std::stop_token stop) = 0;
+    /// update-state.json as it is now; the empty state when it cannot be read.
+    [[nodiscard]] virtual update::UpdateState load_state() const = 0;
     /// Worker: downloads and verifies `release`'s installer into the downloads folder.
     /// Throws OperationCancelled.
     [[nodiscard]] virtual UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
@@ -58,7 +68,11 @@ public:
 
     [[nodiscard]] update::Version running_version() const override;
     [[nodiscard]] update::InstallKind install_kind() const override { return kind_; }
-    [[nodiscard]] std::optional<UpdateCheckResult> check_if_due(std::stop_token stop) override;
+    [[nodiscard]] const Clock& clock() const override { return *clock_; }
+    [[nodiscard]] std::optional<UpdateCheckResult> check_if_due(const update::CheckPolicy& policy,
+                                                                std::stop_token stop) override;
+    [[nodiscard]] UpdateCheckResult check_now(std::stop_token stop) override;
+    [[nodiscard]] update::UpdateState load_state() const override;
     [[nodiscard]] UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
                                                           std::stop_token stop) override;
     void remove_stale_downloads() override;

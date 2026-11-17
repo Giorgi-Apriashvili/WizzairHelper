@@ -14,12 +14,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <expected>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -59,8 +61,9 @@ inline const update::Version kRunningVersion{1, 0, 0};
 }
 
 /// The core with scripted answers: check_if_due asks the real UpdateSchedule (in
-/// `updates_dir`, on `clock`) and records the scripted result in it, like
-/// Updater::check_if_due; downloads answer from their own script. Thread-safe.
+/// `updates_dir`, on `clock`) with the controller's policy and records the scripted
+/// result in it, like Updater::check_if_due; check_now always answers and records, like
+/// Updater::check_now; downloads answer from their own script. Thread-safe.
 class FakeUpdateBackend final : public wizz::app::UpdateBackend {
 public:
     FakeUpdateBackend(update::InstallKind kind, std::filesystem::path updates_dir, std::shared_ptr<FixedClock> clock)
@@ -70,28 +73,47 @@ public:
 
     [[nodiscard]] update::Version running_version() const override { return kRunningVersion; }
     [[nodiscard]] update::InstallKind install_kind() const override { return kind_; }
+    [[nodiscard]] const wizz::Clock& clock() const override { return *clock_; }
 
-    [[nodiscard]] std::optional<wizz::app::UpdateCheckResult> check_if_due(std::stop_token stop) override
+    [[nodiscard]] std::optional<wizz::app::UpdateCheckResult> check_if_due(const update::CheckPolicy& policy,
+                                                                          std::stop_token stop) override
     {
         throw_if_cancelled(stop);
         const std::scoped_lock lock{mutex_};
         worker_threads_.push_back(std::this_thread::get_id());
         ++evaluations_;
-        if (!schedule_.is_check_due()) {
+        policies_.push_back(policy);
+        if (!schedule_.is_check_due(policy)) {
             return std::nullopt;
         }
-        ++checks_;
-        wizz::app::UpdateCheckResult result = next(check_script_, wizz::app::UpdateCheckResult{std::unexpected(
-                                                                      update_error(update::UpdateErrorKind::no_release,
-                                                                                   "No release is published yet "
-                                                                                   "(GitHub answered HTTP 404)."))});
-        schedule_.record(result);
-        return result;
+        return answer_check();
     }
+
+    [[nodiscard]] wizz::app::UpdateCheckResult check_now(std::stop_token stop) override
+    {
+        throw_if_cancelled(stop);
+        const std::scoped_lock lock{mutex_};
+        worker_threads_.push_back(std::this_thread::get_id());
+        ++manual_checks_;
+        if (block_manual_checks_) {
+            throw std::runtime_error("scripted failure of the check");
+        }
+        return answer_check();
+    }
+
+    [[nodiscard]] update::UpdateState load_state() const override { return schedule_.load(); }
 
     [[nodiscard]] wizz::app::UpdateDownloadResult download_installer(const update::ReleaseInfo& release,
                                                                      std::stop_token stop) override
     {
+        throw_if_cancelled(stop);
+        {
+            // hold_downloads(): wait until release_downloads() or the stop (the window closes).
+            std::unique_lock gate{gate_mutex_};
+            ++downloads_started_;
+            gate_changed_.notify_all();
+            gate_changed_.wait(gate, stop, [this] { return !downloads_held_; });
+        }
         throw_if_cancelled(stop);
         const std::scoped_lock lock{mutex_};
         worker_threads_.push_back(std::this_thread::get_id());
@@ -121,9 +143,44 @@ public:
         download_script_.assign(results.begin(), results.end());
     }
 
+    /// check_now throws a std::runtime_error (an unexpected failure) while set.
+    void set_manual_checks_throw(bool on)
+    {
+        const std::scoped_lock lock{mutex_};
+        block_manual_checks_ = on;
+    }
+
+    /// Downloads wait on their worker until release_downloads() (or the window closes).
+    void hold_downloads()
+    {
+        const std::scoped_lock gate{gate_mutex_};
+        downloads_held_ = true;
+    }
+    void release_downloads()
+    {
+        {
+            const std::scoped_lock gate{gate_mutex_};
+            downloads_held_ = false;
+        }
+        gate_changed_.notify_all();
+    }
+    /// Downloads that reached the backend (held or not).
+    [[nodiscard]] int downloads_started() const
+    {
+        const std::scoped_lock gate{gate_mutex_};
+        return downloads_started_;
+    }
+
     // --- Observations ------------------------------------------------------------------
     [[nodiscard]] int evaluations() const { return evaluations_; }
+    /// Requests to releases/latest, automatic and manual.
     [[nodiscard]] int checks() const { return checks_; }
+    [[nodiscard]] int manual_checks() const { return manual_checks_; }
+    [[nodiscard]] std::vector<update::CheckPolicy> policies() const
+    {
+        const std::scoped_lock lock{mutex_};
+        return policies_;
+    }
     [[nodiscard]] int cleanups() const { return cleanups_; }
     [[nodiscard]] std::vector<update::Version> downloaded() const
     {
@@ -145,9 +202,20 @@ public:
         return downloads_dir_ / update::UpdateConfig::installer_name(version);
     }
     [[nodiscard]] const update::UpdateSchedule& schedule() const noexcept { return schedule_; }
-    [[nodiscard]] FixedClock& clock() const noexcept { return *clock_; }
 
 private:
+    /// The next scripted check answer, recorded in the schedule (mutex held).
+    [[nodiscard]] wizz::app::UpdateCheckResult answer_check()
+    {
+        ++checks_;
+        wizz::app::UpdateCheckResult result = next(check_script_, wizz::app::UpdateCheckResult{std::unexpected(
+                                                                      update_error(update::UpdateErrorKind::no_release,
+                                                                                   "No release is published yet "
+                                                                                   "(GitHub answered HTTP 404)."))});
+        schedule_.record(result);
+        return result;
+    }
+
     template <class T>
     [[nodiscard]] static T next(std::deque<T>& script, T fallback)
     {
@@ -171,8 +239,15 @@ private:
     std::vector<update::Version> downloaded_;
     std::vector<std::thread::id> worker_threads_;
     std::vector<std::string> log_;
+    std::vector<update::CheckPolicy> policies_;
+    bool block_manual_checks_ = false;
+    mutable std::mutex gate_mutex_;
+    std::condition_variable_any gate_changed_;
+    bool downloads_held_ = false;
+    int downloads_started_ = 0;
     std::atomic<int> evaluations_{0};
     std::atomic<int> checks_{0};
+    std::atomic<int> manual_checks_{0};
     std::atomic<int> cleanups_{0};
 };
 

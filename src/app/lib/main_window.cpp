@@ -193,6 +193,7 @@ bool MainWindow::enable_updates(UpdateHooks hooks)
     Controller* const controller = controller_;
     updates_ = new UpdateController(std::move(hooks), *update_bar_,
                                     [controller](std::string_view line) { controller->log(line); }, this);
+    updates_->set_options(settings_.updates);  // settings.json's update options (D-60)
     updates_->set_working(controller_->is_working());
     connect(controller_, &Controller::working_changed, updates_, &UpdateController::set_working);
     connect(update_bar_, &UpdateBar::action_clicked, updates_, &UpdateController::trigger_action);

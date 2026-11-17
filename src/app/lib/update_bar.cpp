@@ -92,6 +92,7 @@ void UpdateBar::show_view(const ui::UpdateBarView& view)
         action_->setText(action);
     }
     action_->setEnabled(view.action_enabled);
+    action_->setVisible(!action.isEmpty());  // no action while "Update now" downloads (D-61)
     // Showing a child never moves the focus; hiding one that has it passes it on.
     setVisible(view.visible);
     view_ = view;
