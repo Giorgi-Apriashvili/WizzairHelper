@@ -82,8 +82,10 @@ release page.
 
 An update you put off (with "Later", with "only tell me", or by closing the app when it was to
 ask you) is offered again in that bar every time you start the app, from what the app already
-knows: no extra request to GitHub, so it still asks GitHub only once per chosen period. "Later"
-hides it until the next start.
+knows: no extra request to GitHub, so it still asks GitHub only once per chosen period. An
+installer it downloaded earlier is offered as ready only while its bytes still match the checksum
+they had when they were verified. "Later" hides the bar until the next start (with the default
+choice the update is still installed when you close the app).
 
 To change this, click **Settings** (the gear at the right end of the Outbound / Return / Round
 trips / Log tabs). Its "Updates" section shows your version, when it last checked (after a
@@ -92,7 +94,8 @@ check that failed: when it last checked successfully) and what it found, and has
 - **Check now**, which checks at once, also when automatic checks are off;
 - **Check for updates automatically** with **Once a day**, **Once a week** or **Once a month**
   (the first time you open the app on a new day, in a new week starting on Monday, or in a new
-  month); clear the box and the app never contacts GitHub unless you press Check now;
+  month); clear the box and the app contacts GitHub only when you press Check now, or "Update now"
+  in the bar;
 - **When an update is found:** download it and install it when you close the app (the default),
   download it and then ask before installing ("Restart and update" in the bar; closing the app
   leaves it), or only say that it is available ("Update now" in the bar downloads it, then

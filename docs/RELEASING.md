@@ -212,7 +212,9 @@ now offers X.Y.Z+1 as the choice says (installed when the app closes; only `Rest
 installs, closing installs nothing; nothing is downloaded until `Update now`, which ends in X.Y.Z+1
 starting by itself), and the ZIP offers `Download` (the release page). Then, with X.Y.Z+1 put off
 (`Later`, or only tell me), the next start offers it again in the bar at once and adds no request
-to `update.log`.
+to `update.log`; with a downloading choice, the first start in the next period adds the check and
+`SHA256SUMS.txt`, then `Kept WizzairHelper-X.Y.Z+1-win64-setup.exe`, and the bar keeps offering it
+throughout.
 
 ## Checklist
 
