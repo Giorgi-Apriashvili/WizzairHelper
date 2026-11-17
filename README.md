@@ -80,9 +80,14 @@ installed app downloads the installer from GitHub, checks it against the release
 update" in the bar under the search inputs. A portable copy (the ZIP) only shows a link to the
 release page.
 
+An update you put off (with "Later", with "only tell me", or by closing the app when it was to
+ask you) is offered again in that bar every time you start the app, from what the app already
+knows: no extra request to GitHub, so it still asks GitHub only once per chosen period. "Later"
+hides it until the next start.
+
 To change this, click **Settings** (the gear at the right end of the Outbound / Return / Round
-trips / Log tabs). Its "Updates" section shows your version, when it last checked and what it
-found, and has:
+trips / Log tabs). Its "Updates" section shows your version, when it last checked (after a
+check that failed: when it last checked successfully) and what it found, and has:
 
 - **Check now**, which checks at once, also when automatic checks are off;
 - **Check for updates automatically** with **Once a day**, **Once a week** or **Once a month**

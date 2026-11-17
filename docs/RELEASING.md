@@ -204,12 +204,15 @@ the updater or the Settings window, in the installed X.Y.Z:
   today at …`;
 - clearing *Check for updates automatically* writes `"CheckForUpdates": false` to `settings.json`,
   and the next start adds no request to `<data root>\updates\update.log`;
+- with the network off, *Check now* shows the red failure under `last successful check today at …`;
 - the ZIP's copy shows the install choices greyed out with the portable note.
 
 The install choices are seen working at the next release, from this one: with each choice, Check
 now offers X.Y.Z+1 as the choice says (installed when the app closes; only `Restart and update`
 installs, closing installs nothing; nothing is downloaded until `Update now`, which ends in X.Y.Z+1
-starting by itself), and the ZIP offers `Download` (the release page).
+starting by itself), and the ZIP offers `Download` (the release page). Then, with X.Y.Z+1 put off
+(`Later`, or only tell me), the next start offers it again in the bar at once and adds no request
+to `update.log`.
 
 ## Checklist
 
