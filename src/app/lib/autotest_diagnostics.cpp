@@ -245,6 +245,21 @@ EnvironmentDiagnostics describe_environment(const Locale& locale)
     }
     environment.window_colour = to_utf8(QApplication::palette().color(QPalette::Window).name());
     environment.font_family = to_utf8(QFontInfo(QApplication::font()).family());
+    environment.text_rendering = style::text_rendering_name(style::text_rendering());
+    switch (QApplication::font().hintingPreference()) {
+    case QFont::PreferDefaultHinting:
+        environment.font_hinting = "default";
+        break;
+    case QFont::PreferNoHinting:
+        environment.font_hinting = "none";
+        break;
+    case QFont::PreferVerticalHinting:
+        environment.font_hinting = "vertical";
+        break;
+    case QFont::PreferFullHinting:
+        environment.font_hinting = "full";
+        break;
+    }
     return environment;
 }
 
@@ -332,6 +347,8 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("look").string(environment.look);
     writer.key("windowColour").string(environment.window_colour);
     writer.key("fontFamily").string(environment.font_family);
+    writer.key("textRendering").string(environment.text_rendering);
+    writer.key("fontHinting").string(environment.font_hinting);
     writer.end_object();
 
     writer.end_object();

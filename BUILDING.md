@@ -216,7 +216,23 @@ screenshots and diagnosis these environment variables override what Windows says
 | `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
 | `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
 | `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
+| `WIZZ_TEXT_RENDERING=current` / `natural` / `classic` / `classic-natural` / `natural-heavier` | Draws all text, popups and dialogs included, with one text-rendering candidate (`TextRendering` in `ui_style.hpp`): `current` as released (DirectWrite GDI-classic ClearType at 100 %), `natural` without hinting (natural symmetric ClearType: curves smoothed vertically too), `classic` with Segoe UI instead of Segoe UI Variable, `classic-natural` both, `natural-heavier` natural with the variable faces 50 units heavier. Read at start-up; unknown values mean `current` |
 
 The GUI test binary reads them too: `WIZZ_COLOR_SCHEME=dark` runs the whole suite in the dark look
 (its tests compare with the theme's tokens, not with fixed colours), `WIZZ_FONTS=windows10` with the
-Windows 10 families. Tests that change the look restore these variables afterwards.
+Windows 10 families, `WIZZ_TEXT_RENDERING` with a text-rendering candidate. Tests that change the
+look restore these variables afterwards.
+
+To try a candidate in the built app without touching your own profile, run it as an autotest
+(`--data-root` counts only with `--autotest`) on a replay and keep the window open afterwards. The
+`heavy_cached` check writes a replay with the whole frozen route map (189 airports in the place
+lists) into its work directory:
+
+```powershell
+python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\WizzairHelper.exe `
+    --replay-root tests\replay --scenario heavy_cached --work-dir C:\Temp\autotest\heavy
+$env:WIZZ_TEXT_RENDERING = 'natural'
+build\msvc-x64\src\app\Release\WizzairHelper.exe --autotest C:\Temp\wizz-natural\out `
+    --data-root C:\Temp\wizz-natural\data --replay C:\Temp\autotest\heavy\replay `
+    --fixed-now 2026-11-02T10:00:00Z --from Budapest --from-radius 0 --out 2026-11-03:2026-12-14 --keep-open
+```

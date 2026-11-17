@@ -47,11 +47,38 @@ struct State {
     return instance;
 }
 
-[[nodiscard]] QFont with_families(const QStringList& list, qreal point_size)
+constexpr int kHeavierBy = 50;  ///< natural-heavier: weight-axis units added to every face
+
+[[nodiscard]] constexpr QFont::Tag weight_axis()
+{
+    return QFont::Tag("wght");
+}
+
+/// Gives `font` the text-rendering candidate; `weight` is the weight its families draw (the
+/// semibold families are families of their own, so QFont::weight() does not say it).
+void finish(QFont& font, int weight)
+{
+    switch (text_rendering()) {
+    case TextRendering::current:
+    case TextRendering::classic:
+        return;  // Qt's default hinting, as released
+    case TextRendering::natural:
+    case TextRendering::classic_natural:
+        font.setHintingPreference(QFont::PreferNoHinting);
+        return;
+    case TextRendering::natural_heavier:
+        font.setHintingPreference(QFont::PreferNoHinting);
+        font.setVariableAxis(weight_axis(), heavier_weight_axis(weight));
+        return;
+    }
+}
+
+[[nodiscard]] QFont with_families(const QStringList& list, qreal point_size, int weight = QFont::Normal)
 {
     QFont font;
     font.setFamilies(list);
     font.setPointSizeF(point_size);
+    finish(font, weight);
     return font;
 }
 
@@ -68,6 +95,17 @@ struct State {
         list.push_back(QString::fromLatin1(family));
     }
     return list;
+}
+
+/// The UI faces: Segoe UI Variable `variable` first unless WIZZ_FONTS=windows10 or a classic
+/// text rendering asks for Segoe UI, then the Segoe UI face `classic`.
+[[nodiscard]] QStringList ui_families(const char* variable, const char* classic)
+{
+    const TextRendering rendering = text_rendering();
+    if (rendering == TextRendering::classic || rendering == TextRendering::classic_natural) {
+        return families({}, {classic});
+    }
+    return families({variable}, {classic});
 }
 
 [[nodiscard]] bool system_high_contrast()
@@ -501,14 +539,67 @@ bool windows10_fonts()
     return qgetenv("WIZZ_FONTS").trimmed().toLower() == "windows10";
 }
 
+std::optional<TextRendering> parse_text_rendering(QByteArrayView value)
+{
+    const QByteArray text = value.toByteArray().trimmed().toLower();
+    for (const TextRendering rendering : {TextRendering::current, TextRendering::natural, TextRendering::classic,
+                                          TextRendering::classic_natural, TextRendering::natural_heavier}) {
+        if (text == text_rendering_name(rendering)) {
+            return rendering;
+        }
+    }
+    return std::nullopt;
+}
+
+TextRendering text_rendering()
+{
+    return parse_text_rendering(qgetenv("WIZZ_TEXT_RENDERING")).value_or(TextRendering::current);
+}
+
+const char* text_rendering_name(TextRendering rendering) noexcept
+{
+    switch (rendering) {
+    case TextRendering::natural:
+        return "natural";
+    case TextRendering::classic:
+        return "classic";
+    case TextRendering::classic_natural:
+        return "classic-natural";
+    case TextRendering::natural_heavier:
+        return "natural-heavier";
+    case TextRendering::current:
+        break;
+    }
+    return "current";
+}
+
+float heavier_weight_axis(int weight) noexcept
+{
+    return static_cast<float>(weight + kHeavierBy);
+}
+
+bool keep_requested_weight(QFont& font)
+{
+    // The axis first: no other candidate sets it, so a normal run never reads the environment.
+    if (!font.isVariableAxisSet(weight_axis()) || text_rendering() != TextRendering::natural_heavier) {
+        return false;
+    }
+    const float wanted = heavier_weight_axis(font.weight());
+    if (font.variableAxisValue(weight_axis()) >= wanted) {
+        return false;  // the semibold families draw heavier than their QFont::weight() says
+    }
+    font.setVariableAxis(weight_axis(), wanted);
+    return true;
+}
+
 QFont form_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), kFormPointSize);
+    return with_families(ui_families("Segoe UI Variable Text", "Segoe UI"), kFormPointSize);
 }
 
 QFont data_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
+    return with_families(ui_families("Segoe UI Variable Text", "Segoe UI"), 9.0);
 }
 
 QFont semibold_face()
@@ -516,7 +607,8 @@ QFont semibold_face()
     // The semibold faces are families of their own in Windows' font list; asking for
     // weight 600 of "Segoe UI Variable Text" would give its Bold.
     QFont font;
-    font.setFamilies(families({"Segoe UI Variable Text Semibold"}, {"Segoe UI Semibold"}));
+    font.setFamilies(ui_families("Segoe UI Variable Text Semibold", "Segoe UI Semibold"));
+    finish(font, QFont::DemiBold);
     return font;
 }
 
@@ -534,7 +626,7 @@ QFont bold_form_font()
 
 QFont caption_font()
 {
-    QFont font = with_families(families({"Segoe UI Variable Small Semibold"}, {"Segoe UI Semibold"}), 8.0);
+    QFont font = with_families(ui_families("Segoe UI Variable Small Semibold", "Segoe UI Semibold"), 8.0, QFont::DemiBold);
     font.setCapitalization(QFont::AllUppercase);
     font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     return font;
@@ -542,13 +634,14 @@ QFont caption_font()
 
 QFont hint_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
+    return with_families(ui_families("Segoe UI Variable Text", "Segoe UI"), 9.0);
 }
 
 QFont mono_font(qreal point_size, bool semibold)
 {
     // Windows 10 has Cascadia Mono only with Windows Terminal: Consolas then.
-    QFont font = with_families(families({"Cascadia Mono"}, {"Consolas", "Courier New"}), point_size);
+    QFont font = with_families(families({"Cascadia Mono"}, {"Consolas", "Courier New"}), point_size,
+                               semibold ? QFont::DemiBold : QFont::Normal);
     font.setStyleHint(QFont::TypeWriter);
     font.setFixedPitch(true);
     if (semibold) {

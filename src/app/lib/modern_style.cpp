@@ -353,6 +353,9 @@ QWidget* ModernStyle::make_surface_corner(QWidget* parent)
 void ModernStyle::polish(QWidget* widget)
 {
     QProxyStyle::polish(widget);
+    if (QFont font = widget->font(); style::keep_requested_weight(font)) {
+        widget->setFont(font);  // WIZZ_TEXT_RENDERING=natural-heavier: Qt's setBold() copies stay bold
+    }
     if (qobject_cast<QAbstractButton*>(widget) != nullptr || qobject_cast<QComboBox*>(widget) != nullptr ||
         qobject_cast<QAbstractSpinBox*>(widget) != nullptr || qobject_cast<QTabBar*>(widget) != nullptr ||
         qobject_cast<QScrollBar*>(widget) != nullptr || qobject_cast<QLineEdit*>(widget) != nullptr ||

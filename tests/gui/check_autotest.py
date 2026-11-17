@@ -1053,7 +1053,7 @@ def main():
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
           'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
-          'work area %s; look %s (%s, %s); %s' %
+          'work area %s; look %s (%s, %s, text rendering %s, hinting %s); %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
@@ -1061,6 +1061,7 @@ def main():
            diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('display', {}).get('windowFrame'),
            diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('look'),
            diagnostics.get('environment', {}).get('style'), diagnostics.get('environment', {}).get('fontFamily'),
+           diagnostics.get('environment', {}).get('textRendering'), diagnostics.get('environment', {}).get('fontHinting'),
            diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:
