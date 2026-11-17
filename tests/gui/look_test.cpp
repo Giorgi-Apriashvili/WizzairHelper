@@ -188,7 +188,10 @@ TEST(Look, WIZZ_COLOR_SCHEME_switches_a_running_window_in_place)
     expect_window_follows(rig, style::light_theme());
 
     int notified = 0;
-    QObject::connect(style::theme_notifier(), &style::ThemeNotifier::changed, [&notified] { ++notified; });
+    // The notifier lives as long as the application: the connection must end with the test,
+    // or a later change of the look writes to this frame's dead counter.
+    const QObject counting;
+    QObject::connect(style::theme_notifier(), &style::ThemeNotifier::changed, &counting, [&notified] { ++notified; });
     qputenv("WIZZ_COLOR_SCHEME", "dark");
     EXPECT_TRUE(style::refresh_appearance());
     EXPECT_EQ(notified, 1);

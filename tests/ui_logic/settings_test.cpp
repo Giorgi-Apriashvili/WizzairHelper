@@ -3,13 +3,18 @@
 
 #include "wizz/ui/settings.hpp"
 
+#include "wizz/core/json.hpp"
+
 #include <gtest/gtest.h>
 
 #include <windows.h>
 
 #include <atomic>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -17,6 +22,10 @@ namespace {
 
 using namespace wizz::ui;
 namespace fs = std::filesystem;
+namespace json = wizz::json;
+using wizz::update::CheckFrequency;
+using wizz::update::UpdateOptions;
+using wizz::update::WhenFound;
 
 /// A fresh temporary directory, removed afterwards (I/O errors ignored).
 class TempDir {
@@ -55,6 +64,7 @@ void write_file(const fs::path& path, std::string_view bytes)
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
 }
 
+/// The 01 §13 example, as 2.0 and 2.1 write it: the twelve properties.
 constexpr std::string_view kExample = R"({
   "From": "Budapest",
   "To": "London",
@@ -69,6 +79,101 @@ constexpr std::string_view kExample = R"({
   "WindowHeight": 820,
   "Maximized": false
 })";
+
+/// The same settings as this version writes them: the update options follow the twelve (D-60).
+constexpr std::string_view kExampleWithUpdates = R"({
+  "From": "Budapest",
+  "To": "London",
+  "FromRadiusKm": 250,
+  "ToRadiusKm": 100,
+  "Adults": 1,
+  "DiscountClub": false,
+  "Currency": "EUR",
+  "MinNights": 2,
+  "MaxNights": 10,
+  "WindowWidth": 1320,
+  "WindowHeight": 820,
+  "Maximized": false,
+  "CheckForUpdates": true,
+  "UpdateCheckFrequency": "Daily",
+  "WhenUpdateFound": "InstallOnClose"
+})";
+
+[[nodiscard]] std::string with_crlf(std::string_view text)
+{
+    std::string result;
+    for (const char c : text) {
+        if (c == '\n') {
+            result += "\r\n";  // Environment.NewLine (json::Layout::indented)
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+/// settings.json as 2.1 reads it (its settings.cpp, frozen here): the twelve names,
+/// strict types, every other name skipped unread; nullopt where 2.1 falls back to ALL
+/// defaults.
+struct Settings21 {
+    std::string from{"Budapest"};
+    std::string to{"London"};
+    int from_radius_km = 250;
+    int to_radius_km = 100;
+    int adults = 1;
+    bool discount_club = false;
+    std::string currency{"EUR"};
+    int min_nights = 2;
+    int max_nights = 10;
+    int window_width = 0;
+    int window_height = 0;
+    bool maximized = false;
+};
+
+[[nodiscard]] std::optional<Settings21> read_like_2_1(std::string_view text)
+{
+    try {
+        const json::Value root = json::parse(text);
+        if (!root.is_object()) {
+            return std::nullopt;
+        }
+        Settings21 settings;
+        for (const json::Member& member : root.as_object()) {
+            const std::string_view name = member.name();
+            const json::Value& value = member.value();
+            if (name == "From" || name == "To" || name == "Currency") {
+                if (!value.is_null() && !value.is_string()) {
+                    return std::nullopt;
+                }
+                std::string& target = name == "From" ? settings.from : name == "To" ? settings.to : settings.currency;
+                target = value.is_null() ? std::string{} : std::string{value.as_string()};
+            } else if (name == "FromRadiusKm" || name == "ToRadiusKm" || name == "Adults" || name == "MinNights" ||
+                       name == "MaxNights" || name == "WindowWidth" || name == "WindowHeight") {
+                const std::optional<std::int32_t> number = value.try_int32();
+                if (!number) {
+                    return std::nullopt;
+                }
+                int& target = name == "FromRadiusKm"  ? settings.from_radius_km
+                              : name == "ToRadiusKm"  ? settings.to_radius_km
+                              : name == "Adults"      ? settings.adults
+                              : name == "MinNights"   ? settings.min_nights
+                              : name == "MaxNights"   ? settings.max_nights
+                              : name == "WindowWidth" ? settings.window_width
+                                                      : settings.window_height;
+                target = *number;
+            } else if (name == "DiscountClub" || name == "Maximized") {
+                if (!value.is_bool()) {
+                    return std::nullopt;
+                }
+                (name == "DiscountClub" ? settings.discount_club : settings.maximized) = value.as_bool();
+            }
+            // 2.1 ignores every other name.
+        }
+        return settings;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
 
 TEST(Settings, Defaults)
 {
@@ -85,6 +190,10 @@ TEST(Settings, Defaults)
     EXPECT_EQ(settings.window_width, 0);
     EXPECT_EQ(settings.window_height, 0);
     EXPECT_FALSE(settings.maximized);
+    // The update options default to the behaviour of 2.0 / 2.1 (D-60).
+    EXPECT_TRUE(settings.updates.check_automatically);
+    EXPECT_EQ(settings.updates.check_frequency, CheckFrequency::daily);
+    EXPECT_EQ(settings.updates.when_found, WhenFound::install_on_close);
 }
 
 TEST(Settings, Reads_the_example_of_01_13)
@@ -95,20 +204,159 @@ TEST(Settings, Reads_the_example_of_01_13)
     EXPECT_EQ(AppSettings::parse(kExample), expected);
 }
 
-TEST(Settings, Writes_the_example_in_table_order_indented_two_spaces)
+TEST(Settings, Writes_the_example_in_table_order_indented_two_spaces_then_the_update_options)
 {
     AppSettings settings;
     settings.window_width = 1320;
     settings.window_height = 820;
-    std::string expected;
-    for (const char c : kExample) {
-        if (c == '\n') {
-            expected += "\r\n";  // Environment.NewLine (json::Layout::indented)
-        } else {
-            expected += c;
+    EXPECT_EQ(settings.to_json(), with_crlf(kExampleWithUpdates));
+    EXPECT_EQ(AppSettings::parse(kExampleWithUpdates), settings);
+}
+
+TEST(Settings, Update_options_are_written_after_the_twelve_with_their_json_names)
+{
+    struct Case {
+        UpdateOptions options;
+        std::string_view tail;
+    };
+    const Case cases[] = {
+        {{.check_automatically = true, .check_frequency = CheckFrequency::daily, .when_found = WhenFound::install_on_close},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\"\r\n}"},
+        {{.check_automatically = false, .check_frequency = CheckFrequency::weekly, .when_found = WhenFound::download_then_ask},
+         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\"\r\n}"},
+        {{.check_automatically = true, .check_frequency = CheckFrequency::monthly, .when_found = WhenFound::notify_only},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\"\r\n}"},
+    };
+    for (const Case& c : cases) {
+        AppSettings settings;
+        settings.updates = c.options;
+        const std::string text = settings.to_json();
+        EXPECT_TRUE(text.ends_with("  \"Maximized\": false,\r\n" + std::string{c.tail})) << text;
+        EXPECT_EQ(AppSettings::parse(text), settings);
+    }
+    // Every combination round-trips through the file.
+    for (const bool automatic : {true, false}) {
+        for (const CheckFrequency frequency : {CheckFrequency::daily, CheckFrequency::weekly, CheckFrequency::monthly}) {
+            for (const WhenFound when : {WhenFound::install_on_close, WhenFound::download_then_ask, WhenFound::notify_only}) {
+                AppSettings settings;
+                settings.updates = UpdateOptions{.check_automatically = automatic, .check_frequency = frequency, .when_found = when};
+                EXPECT_EQ(AppSettings::parse(settings.to_json()).updates, settings.updates);
+            }
         }
     }
-    EXPECT_EQ(settings.to_json(), expected);
+}
+
+TEST(Settings, A_file_of_2_1_reads_the_update_options_as_their_defaults)
+{
+    AppSettings expected;
+    expected.window_width = 1320;
+    expected.window_height = 820;
+    const AppSettings settings = AppSettings::parse(kExample);
+    EXPECT_EQ(settings, expected);
+    EXPECT_EQ(settings.updates, UpdateOptions{}) << "check once a day, install when the app closes";
+    // Some options present, others missing: the missing ones keep their defaults.
+    const AppSettings partial = AppSettings::parse(R"({"Adults": 2, "UpdateCheckFrequency": "Weekly"})");
+    EXPECT_EQ(partial.adults, 2);
+    EXPECT_EQ(partial.updates, (UpdateOptions{.check_automatically = true,
+                                              .check_frequency = CheckFrequency::weekly,
+                                              .when_found = WhenFound::install_on_close}));
+}
+
+TEST(Settings, A_new_file_read_by_the_rules_of_2_1_keeps_its_twelve_values)
+{
+    AppSettings settings;
+    settings.from = "Wien";
+    settings.to = "";
+    settings.adults = 3;
+    settings.discount_club = true;
+    settings.currency = "HUF";
+    settings.max_nights = 14;
+    settings.window_width = 1500;
+    settings.window_height = 900;
+    settings.maximized = true;
+    settings.updates = UpdateOptions{.check_automatically = false,
+                                     .check_frequency = CheckFrequency::monthly,
+                                     .when_found = WhenFound::notify_only};
+    const std::optional<Settings21> old = read_like_2_1(settings.to_json());
+    ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
+    EXPECT_EQ(old->from, "Wien");
+    EXPECT_EQ(old->to, "");
+    EXPECT_EQ(old->from_radius_km, 250);
+    EXPECT_EQ(old->to_radius_km, 100);
+    EXPECT_EQ(old->adults, 3);
+    EXPECT_TRUE(old->discount_club);
+    EXPECT_EQ(old->currency, "HUF");
+    EXPECT_EQ(old->min_nights, 2);
+    EXPECT_EQ(old->max_nights, 14);
+    EXPECT_EQ(old->window_width, 1500);
+    EXPECT_EQ(old->window_height, 900);
+    EXPECT_TRUE(old->maximized);
+    // The frozen reader is as strict as 2.1: a wrong type among the twelve still resets it.
+    EXPECT_FALSE(read_like_2_1(R"({"Adults": "two", "CheckForUpdates": false})").has_value());
+}
+
+TEST(Settings, An_unknown_update_option_value_gives_that_options_default_only)
+{
+    // D-60: a later version may write a value this one does not know.
+    AppSettings expected;
+    expected.from = "Wien";
+    expected.adults = 3;
+    expected.updates.check_automatically = false;
+    expected.updates.when_found = WhenFound::notify_only;
+    EXPECT_EQ(AppSettings::parse(R"({"From": "Wien", "Adults": 3, "CheckForUpdates": false,
+                                     "UpdateCheckFrequency": "Hourly", "WhenUpdateFound": "NotifyOnly"})"),
+              expected);
+
+    expected.updates = UpdateOptions{.check_automatically = false,
+                                     .check_frequency = CheckFrequency::weekly,
+                                     .when_found = WhenFound::install_on_close};
+    EXPECT_EQ(AppSettings::parse(R"({"From": "Wien", "Adults": 3, "CheckForUpdates": false,
+                                     "UpdateCheckFrequency": "Weekly", "WhenUpdateFound": "InstallSilently"})"),
+              expected);
+
+    for (const std::string_view unknown : {"", " Weekly", "Week", "Weekly ", "Wéekly", "2"}) {
+        const std::string text = R"({"MaxNights": 12, "UpdateCheckFrequency": ")" + std::string{unknown} +
+                                 R"(", "WhenUpdateFound": ")" + std::string{unknown} + R"("})";
+        const AppSettings settings = AppSettings::parse(text);
+        EXPECT_EQ(settings.max_nights, 12) << text;
+        EXPECT_EQ(settings.updates, UpdateOptions{}) << text;
+    }
+    // The last of duplicate names wins, also when it names no value.
+    EXPECT_EQ(AppSettings::parse(R"({"UpdateCheckFrequency": "Monthly", "UpdateCheckFrequency": "Yearly"})")
+                  .updates.check_frequency,
+              CheckFrequency::daily);
+}
+
+TEST(Settings, Update_option_values_ignore_ascii_case_but_names_do_not)
+{
+    const AppSettings settings =
+        AppSettings::parse(R"({"UpdateCheckFrequency": "weekly", "WhenUpdateFound": "NOTIFYONLY"})");
+    EXPECT_EQ(settings.updates.check_frequency, CheckFrequency::weekly);
+    EXPECT_EQ(settings.updates.when_found, WhenFound::notify_only);
+    EXPECT_EQ(AppSettings::parse(R"({"UpdateCheckFrequency": "mOnThLy"})").updates.check_frequency,
+              CheckFrequency::monthly);
+    EXPECT_EQ(parse_when_found("downloadthenask"), WhenFound::download_then_ask);
+    EXPECT_EQ(parse_check_frequency("Fortnightly"), std::nullopt);
+    EXPECT_EQ(json_name(CheckFrequency::weekly), "Weekly");
+    EXPECT_EQ(json_name(WhenFound::notify_only), "NotifyOnly");
+    // Property names stay case-sensitive: these are unknown properties, ignored.
+    EXPECT_EQ(AppSettings::parse(R"({"checkForUpdates": false, "updateCheckFrequency": "Monthly"})"), AppSettings{});
+}
+
+TEST(Settings, A_wrong_type_for_an_update_option_gives_all_defaults)
+{
+    for (const std::string_view bad : {
+             R"({"MaxNights": 12, "CheckForUpdates": "false"})",
+             R"({"MaxNights": 12, "CheckForUpdates": 0})",
+             R"({"MaxNights": 12, "CheckForUpdates": null})",
+             R"({"MaxNights": 12, "UpdateCheckFrequency": 1})",
+             R"({"MaxNights": 12, "UpdateCheckFrequency": null})",
+             R"({"MaxNights": 12, "UpdateCheckFrequency": ["Weekly"]})",
+             R"({"MaxNights": 12, "WhenUpdateFound": true})",
+             R"({"MaxNights": 12, "WhenUpdateFound": {"Value": "NotifyOnly"}})",
+         }) {
+        EXPECT_EQ(AppSettings::parse(bad), AppSettings{}) << bad;
+    }
 }
 
 TEST(Settings, Every_value_round_trips_including_unicode)
@@ -126,6 +374,9 @@ TEST(Settings, Every_value_round_trips_including_unicode)
     settings.window_width = 1920;
     settings.window_height = 1040;
     settings.maximized = true;
+    settings.updates = UpdateOptions{.check_automatically = false,
+                                     .check_frequency = CheckFrequency::monthly,
+                                     .when_found = WhenFound::notify_only};
     const std::string text = settings.to_json();
     // JsonSerializer escaping: every non-ASCII character as an upper-case UCN, a surrogate pair beyond the BMP
     // (\x5C below is a backslash).

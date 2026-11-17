@@ -105,6 +105,22 @@ TEST(UpdateBar, Shows_the_texts_and_buttons_of_its_view)
     EXPECT_TRUE(w.bar->action_button()->isEnabled());
 }
 
+TEST(UpdateBar, An_empty_action_hides_the_action_button_but_keeps_Later)
+{
+    // "Update now" downloading (D-61): the message and Later, no action.
+    BarWindow w;
+    w.bar->show_view(UpdateBarView{
+        .visible = true, .text = "Downloading WizzairHelper 1.2.0…", .action = "", .action_enabled = false});
+    gui::settle();
+    EXPECT_TRUE(w.bar->isVisible());
+    EXPECT_FALSE(w.bar->action_button()->isVisible());
+    EXPECT_TRUE(w.bar->later_button()->isVisible());
+    w.bar->show_view(kReady);
+    gui::settle();
+    EXPECT_TRUE(w.bar->action_button()->isVisible()) << "back with the next action";
+    EXPECT_EQ(w.bar->action_button()->text(), "Restart and update");
+}
+
 TEST(UpdateBar, Never_takes_the_focus_and_reports_its_clicks)
 {
     BarWindow w;

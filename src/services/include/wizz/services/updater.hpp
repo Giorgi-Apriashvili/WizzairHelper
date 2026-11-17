@@ -11,10 +11,10 @@
 //     string on each try (GitHub's edge caches error answers per URL), then the API
 //     asset URL with `Accept: application/octet-stream`; every error carries the last
 //     HTTP status and every try is logged.
-//   - A daily schedule kept in `<data root>\updates\update-state.json` (settings.json
-//     has a fixed schema), the log in `<data root>\updates\update.log` and downloads in
-//     `<data root>\updates\downloads\` — nothing of the updater lives in the data root
-//     itself.
+//   - A schedule of local calendar periods (once a day, week or month; D-59) kept in
+//     `<data root>\updates\update-state.json`, the log in `<data root>\updates\update.log`
+//     and downloads in `<data root>\updates\downloads\` — nothing of the updater lives in
+//     the data root itself. The user's options live in settings.json (update_options.hpp).
 //   - Installed (unins000.exe next to the exe) or portable, and the silent installer
 //     command line. Starting a process or quitting the app is the UI's job.
 //
@@ -24,6 +24,7 @@
 #include "wizz/core/http.hpp"
 #include "wizz/core/time.hpp"
 #include "wizz/services/file_cache.hpp"
+#include "wizz/services/update_options.hpp"
 
 #include <array>
 #include <chrono>
@@ -59,6 +60,10 @@ inline constexpr std::string_view kAssetPrefix = "WizzairHelper-";
 inline constexpr std::string_view kZipSuffix = "-win64.zip";
 inline constexpr std::string_view kInstallerSuffix = "-win64-setup.exe";
 inline constexpr std::string_view kChecksumsName = "SHA256SUMS.txt";
+/// The hash download_verified keeps next to a file it verified: `<name>.sha256`, the
+/// file's SHA256SUMS.txt line, so a later session can hash the file again without a
+/// request (find_verified_download, D-43).
+inline constexpr std::string_view kKeptHashSuffix = ".sha256";
 
 /// An installed copy has the Inno Setup uninstaller next to WizzairHelper.exe.
 inline constexpr std::wstring_view kUninstallerName = L"unins000.exe";
@@ -112,6 +117,10 @@ struct UpdateConfig {
     [[nodiscard]] std::string user_agent() const;
     /// "https://api.github.com/repos/<owner>/<repo>/releases/latest".
     [[nodiscard]] std::string latest_release_url() const;
+    /// "https://github.com/<owner>/<repo>/releases/tag/v<X.Y.Z>": the release page of a
+    /// version, as GitHub's `html_url` names it, for an update remembered from an earlier
+    /// session without asking GitHub again.
+    [[nodiscard]] std::string release_page_url(const Version& version) const;
     /// "WizzairHelper-<X.Y.Z>-win64-setup.exe".
     [[nodiscard]] static std::string installer_name(const Version& version);
     /// "WizzairHelper-<X.Y.Z>-win64.zip".
@@ -233,15 +242,14 @@ struct ChecksumLine {
 /// Lowercase hex SHA-256 of a file's bytes; nullopt when it cannot be read.
 [[nodiscard]] std::optional<std::string> sha256_file(const std::filesystem::path& path);
 
-// --- Daily schedule ------------------------------------------------------------------
+// --- Schedule (D-40, D-59) -----------------------------------------------------------
 
-/// A check is due when the last successful one is at least this old.
-inline constexpr Duration kCheckInterval = std::chrono::hours{24};
-/// After a failed check, the next one waits at least this long.
+/// After a failed check, the next automatic one waits at least this long.
 inline constexpr Duration kFailureRetryInterval = std::chrono::hours{1};
 
 /// `update-state.json`: an object with `LastSuccessfulCheckUtc`, `LatestSeenVersion`
 /// and `LastFailedCheckUtc` (each omitted when unknown; times `yyyy-MM-ddTHH:mm:ssZ`).
+/// The format of 2.0 and 2.1, unchanged: each version reads what the other writes.
 struct UpdateState {
     std::optional<UtcInstant> last_success;
     std::optional<Version> latest_seen;
@@ -256,10 +264,28 @@ struct UpdateState {
     [[nodiscard]] std::string to_json() const;
 };
 
-/// True when no check succeeded in the last kCheckInterval (`now - last_success >=
-/// 24 h`, or never) and no check failed in the last kFailureRetryInterval. A time in
-/// the future (the clock was set back) is not trusted: it does not block a check.
-[[nodiscard]] bool is_check_due(const UpdateState& state, UtcInstant now) noexcept;
+/// The first day of the local calendar period that holds `day`: the day itself
+/// (daily), the Monday of its ISO 8601 week (weekly), the first of its month (monthly).
+[[nodiscard]] Date period_start(Date day, CheckFrequency frequency) noexcept;
+
+/// When the automatic check may run.
+struct CheckPolicy {
+    /// settings.json `CheckForUpdates`: false = never due.
+    bool automatic = true;
+    CheckFrequency frequency = CheckFrequency::daily;
+
+    friend bool operator==(const CheckPolicy&, const CheckPolicy&) = default;
+};
+
+/// The automatic check's rule (D-59), in the local time of `clock` (`Clock::to_local`,
+/// each instant with its own daylight-saving offset):
+/// - never due when `!policy.automatic`;
+/// - not due within kFailureRetryInterval after a failed check (a failure in the future,
+///   after the clock was set back, does not count);
+/// - due when no check ever succeeded, when the last success lies in the future (not
+///   trusted), or when it lies in another local calendar period than now
+///   (`period_start` of the two local dates differs): another day, ISO week or month.
+[[nodiscard]] bool is_check_due(const UpdateState& state, const CheckPolicy& policy, const Clock& clock);
 
 /// The persisted schedule in `<updates dir>\update-state.json`, written atomically
 /// (FileCache). Read and write errors are swallowed: an unreadable file is an empty
@@ -270,16 +296,19 @@ public:
     UpdateSchedule(std::filesystem::path updates_dir, std::shared_ptr<const Clock> clock);
 
     [[nodiscard]] UpdateState load() const;
-    /// `is_check_due(load(), clock.utc_now())`.
-    [[nodiscard]] bool is_check_due() const;
+    /// `is_check_due(load(), policy, clock)`.
+    [[nodiscard]] bool is_check_due(const CheckPolicy& policy = {}) const;
 
     /// A check succeeded now: sets last_success and latest_seen, clears last_failure.
     void record_success(std::optional<Version> latest_seen) const;
     /// A check failed now: sets last_failure, keeps the rest.
     void record_failure() const;
     /// Records a check_latest result: a release or no_release is a success, any other
-    /// error a failure.
+    /// error a failure. A manual check is recorded like an automatic one, so a
+    /// successful Check now is the period's check.
     void record(const std::expected<ReleaseInfo, UpdateError>& result) const;
+
+    [[nodiscard]] const std::shared_ptr<const Clock>& clock() const noexcept { return clock_; }
 
 private:
     void save(const UpdateState& state) const;
@@ -339,16 +368,22 @@ public:
     /// to update.log. Throws OperationCancelled when `stop` fires.
     [[nodiscard]] std::expected<ReleaseInfo, UpdateError> check_latest(std::stop_token stop) const;
 
-    /// The daily check: nullopt without any request when `schedule.is_check_due()` is
-    /// false; otherwise check_latest, recorded in the schedule, and its result.
+    /// The automatic check: nullopt without any request when
+    /// `schedule.is_check_due(policy)` is false; otherwise `check_now`.
     [[nodiscard]] std::optional<std::expected<ReleaseInfo, UpdateError>> check_if_due(const UpdateSchedule& schedule,
+                                                                                     const CheckPolicy& policy,
                                                                                      std::stop_token stop) const;
+
+    /// A check that always runs (Check now, or a due automatic check): check_latest,
+    /// recorded in the schedule, and its result. A cancelled check records nothing.
+    [[nodiscard]] std::expected<ReleaseInfo, UpdateError> check_now(const UpdateSchedule& schedule,
+                                                                    std::stop_token stop) const;
 
     /// Downloads `release.asset(kind)` into `destination_dir` and verifies it:
     /// 1. SHA256SUMS.txt first (same tries as below, kChecksumsTimeout), parsed; the
     ///    asset's line must be there (bad_checksums otherwise; the asset is not fetched);
     /// 2. a file of the asset's name already in `destination_dir` whose SHA-256 matches
-    ///    is kept (`reused`); one that does not match is deleted;
+    ///    is kept (`reused`); one that does not match is deleted with its kept hash;
     /// 3. the asset (kAssetTimeout per try): up to kBrowserTries on browser_download_url
     ///    (User-Agent only), then up to kApiTries on the API asset URL (User-Agent,
     ///    `Accept: application/octet-stream`, `X-GitHub-Api-Version`), every try with a
@@ -357,6 +392,9 @@ public:
     ///    another status ends that URL at once (a browser URL falls back to the API URL);
     /// 4. written to `<name>.tmp` in `destination_dir` (created when missing), hashed
     ///    from disk, deleted on a mismatch (checksum_mismatch), else renamed into place.
+    /// A verified file (also a reused one) gets its hash kept next to it, `<name>.sha256`
+    /// (kKeptHashSuffix: its SHA256SUMS.txt line); a failure to write it is logged and
+    /// only means a later session will not offer the file without asking GitHub.
     /// missing_asset when the release lacks the asset or SHA256SUMS.txt (no request).
     /// Every try is in the result (or the error) and in update.log. Throws
     /// OperationCancelled when `stop` fires; no .tmp file is left behind.
@@ -417,8 +455,17 @@ struct InstallerCommand {
 [[nodiscard]] InstallerCommand silent_install_command(const std::filesystem::path& setup_exe, Relaunch relaunch);
 
 /// Deletes downloaded assets of versions up to `config.current_version` (and their
-/// leftover `.tmp` files) from `config.download_dir()`; other files and newer versions
-/// stay. Returns how many files were deleted; errors are ignored.
+/// leftover `.tmp` files and kept `.sha256` hashes) from `config.download_dir()`; other
+/// files and newer versions stay. Returns how many files were deleted; errors are ignored.
 std::size_t remove_stale_downloads(const UpdateConfig& config);
+
+/// The verified download of `version`'s asset (`kind`) in `config.download_dir()`, found
+/// without any request: the regular file of the asset's stable name whose SHA-256, hashed
+/// from disk now, equals the hash download_verified kept next to it (`<name>.sha256`)
+/// when it verified the file against the release's SHA256SUMS.txt. nullopt when there is
+/// no such file, no kept hash (or one without the file's line), or the bytes changed
+/// (D-43, D-61). Throws std::runtime_error when CNG fails.
+[[nodiscard]] std::optional<std::filesystem::path> find_verified_download(const UpdateConfig& config,
+                                                                         const Version& version, AssetKind kind);
 
 } // namespace wizz::update

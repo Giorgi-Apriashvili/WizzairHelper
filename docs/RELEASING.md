@@ -196,6 +196,26 @@ while it shows results:
 - if a Windows 10 machine or real 150 % / 200 % monitors are at hand, check the window at the
   default and the minimum size there (both are simulated otherwise, RELEASE_CHECKS.md).
 
+**The updater against the real GitHub** (DECISIONS D-45..D-49, D-59..D-63). The tests run the
+updater on a scripted backend; CI never contacts GitHub. After publishing a release that changes
+the updater or the Settings window, in the installed X.Y.Z:
+
+- *Settings > Check now* says `You have the latest version.` and the version line `last checked
+  today at …`;
+- clearing *Check for updates automatically* writes `"CheckForUpdates": false` to `settings.json`,
+  and the next start adds no request to `<data root>\updates\update.log`;
+- with the network off, *Check now* shows the red failure under `last successful check today at …`;
+- the ZIP's copy shows the install choices greyed out with the portable note.
+
+The install choices are seen working at the next release, from this one: with each choice, Check
+now offers X.Y.Z+1 as the choice says (installed when the app closes; only `Restart and update`
+installs, closing installs nothing; nothing is downloaded until `Update now`, which ends in X.Y.Z+1
+starting by itself), and the ZIP offers `Download` (the release page). Then, with X.Y.Z+1 put off
+(`Later`, or only tell me), the next start offers it again in the bar at once and adds no request
+to `update.log`; with a downloading choice, the first start in the next period adds the check and
+`SHA256SUMS.txt`, then `Kept WizzairHelper-X.Y.Z+1-win64-setup.exe`, and the bar keeps offering it
+throughout.
+
 ## Checklist
 
 ```
@@ -203,6 +223,7 @@ while it shows results:
 [ ] CI green on HEAD (msvc-release, msvc-debug and clang-cl-release)
 [ ] icon or installer changed: installed by hand, icons checked (Checking the installer locally)
 [ ] look changed: live light/dark switch and a contrast theme checked by hand (Checking the installer locally)
+[ ] updater or Settings window changed: the previous release updated by hand (Checking the installer locally)
 [ ] notes written in release-notes-X.Y.Z.md
 [ ] version bumped in CMakeLists.txt only; commit "Release X.Y.Z"
 [ ] git tag vX.Y.Z; git push origin main; git push origin vX.Y.Z

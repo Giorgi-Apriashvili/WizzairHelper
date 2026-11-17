@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QWidget>
 
 #include <format>
@@ -67,6 +68,36 @@ void collect_placed(const QLayout& layout, std::vector<QWidget*>& out)
         width += bar.tabRect(i).width();
     }
     return width <= bar.width();
+}
+
+/// A tab widget's corner widgets (the Settings button, D-63) are placed by the tab widget,
+/// not by a layout: each must be whole, as large as its text and clear of every tab.
+void check_corners_of(const QTabWidget& tabs, std::vector<std::string>& problems)
+{
+    const QTabBar* bar = tabs.tabBar();
+    for (const Qt::Corner corner : {Qt::TopLeftCorner, Qt::TopRightCorner, Qt::BottomLeftCorner, Qt::BottomRightCorner}) {
+        const QWidget* widget = tabs.cornerWidget(corner);
+        if (widget == nullptr || !widget->isVisible()) {
+            continue;
+        }
+        if (!tabs.rect().contains(widget->geometry())) {
+            problems.push_back(std::format("{}: clipped by its parent {}", describe_widget(*widget), describe_widget(tabs)));
+        } else if (!is_fully_visible(*widget)) {
+            problems.push_back(std::format("{}: cut off by the window", describe_widget(*widget)));
+        }
+        if (text_is_cut(*widget)) {
+            problems.push_back(std::format("{}: smaller than its text ({}x{} < {}x{})", describe_widget(*widget),
+                                           widget->width(), widget->height(), widget->minimumSizeHint().width(),
+                                           widget->minimumSizeHint().height()));
+        }
+        for (int i = 0; bar != nullptr && bar->isVisible() && i < bar->count(); ++i) {
+            const QRect tab{bar->mapTo(&tabs, bar->tabRect(i).topLeft()), bar->tabRect(i).size()};
+            if (tab.intersects(widget->geometry())) {
+                problems.push_back(std::format("{}: overlaps the tab '{}'", describe_widget(*widget),
+                                               to_utf8(bar->tabText(i))));
+            }
+        }
+    }
 }
 
 void check_layout_of(const QWidget& owner, std::vector<std::string>& problems)
@@ -153,6 +184,9 @@ std::vector<std::string> layout_problems(const QWidget& root)
         }
         if (const auto* bar = qobject_cast<const QTabBar*>(widget); bar != nullptr && !tabs_fit(*bar)) {
             problems.push_back(std::format("{}: tabs do not fit", describe_widget(*bar)));
+        }
+        if (const auto* tabs = qobject_cast<const QTabWidget*>(widget); tabs != nullptr) {
+            check_corners_of(*tabs, problems);
         }
     }
     return problems;

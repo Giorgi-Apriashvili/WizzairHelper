@@ -53,6 +53,29 @@ struct WrongType {};
     return value.as_bool();
 }
 
+/// An update option's enumeration (D-60): a non-string (null included) is a wrong type
+/// like anywhere else; a string naming no value gives that property's default only.
+template <class Enum>
+[[nodiscard]] Enum read_enum(const json::Value& value, std::optional<Enum> (*parse)(std::string_view) noexcept,
+                             Enum fallback)
+{
+    if (!value.is_string()) {
+        throw WrongType{};
+    }
+    return parse(value.as_string()).value_or(fallback);
+}
+
+[[nodiscard]] constexpr bool equals_ascii_ignoring_case(std::string_view a, std::string_view b) noexcept
+{
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+    return a.size() == b.size() && std::ranges::equal(a, b, {}, lower, lower);
+}
+
+constexpr update::CheckFrequency kFrequencies[] = {update::CheckFrequency::daily, update::CheckFrequency::weekly,
+                                                   update::CheckFrequency::monthly};
+constexpr update::WhenFound kWhenFound[] = {update::WhenFound::install_on_close, update::WhenFound::download_then_ask,
+                                            update::WhenFound::notify_only};
+
 void apply_member(AppSettings& settings, const json::Member& member)
 {
     const std::string_view name = member.name();
@@ -81,6 +104,13 @@ void apply_member(AppSettings& settings, const json::Member& member)
         settings.window_height = read_int(value);
     } else if (name == "Maximized") {
         settings.maximized = read_bool(value);
+    } else if (name == "CheckForUpdates") {
+        settings.updates.check_automatically = read_bool(value);
+    } else if (name == "UpdateCheckFrequency") {
+        settings.updates.check_frequency =
+            read_enum(value, &parse_check_frequency, update::UpdateOptions{}.check_frequency);
+    } else if (name == "WhenUpdateFound") {
+        settings.updates.when_found = read_enum(value, &parse_when_found, update::UpdateOptions{}.when_found);
     }
     // unknown properties are ignored
 }
@@ -99,6 +129,52 @@ void apply_member(AppSettings& settings, const json::Member& member)
 }
 
 } // namespace
+
+std::string_view json_name(update::CheckFrequency frequency) noexcept
+{
+    switch (frequency) {
+    case update::CheckFrequency::daily:
+        return "Daily";
+    case update::CheckFrequency::weekly:
+        return "Weekly";
+    case update::CheckFrequency::monthly:
+        return "Monthly";
+    }
+    return "Daily";
+}
+
+std::string_view json_name(update::WhenFound when_found) noexcept
+{
+    switch (when_found) {
+    case update::WhenFound::install_on_close:
+        return "InstallOnClose";
+    case update::WhenFound::download_then_ask:
+        return "DownloadThenAsk";
+    case update::WhenFound::notify_only:
+        return "NotifyOnly";
+    }
+    return "InstallOnClose";
+}
+
+std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept
+{
+    for (const update::CheckFrequency frequency : kFrequencies) {
+        if (equals_ascii_ignoring_case(text, json_name(frequency))) {
+            return frequency;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<update::WhenFound> parse_when_found(std::string_view text) noexcept
+{
+    for (const update::WhenFound when_found : kWhenFound) {
+        if (equals_ascii_ignoring_case(text, json_name(when_found))) {
+            return when_found;
+        }
+    }
+    return std::nullopt;
+}
 
 AppSettings AppSettings::parse(std::string_view json_text) noexcept
 {
@@ -153,6 +229,9 @@ std::string AppSettings::to_json() const
         .key("WindowWidth").integer(window_width)
         .key("WindowHeight").integer(window_height)
         .key("Maximized").boolean(maximized)
+        .key("CheckForUpdates").boolean(updates.check_automatically)
+        .key("UpdateCheckFrequency").string(json_name(updates.check_frequency))
+        .key("WhenUpdateFound").string(json_name(updates.when_found))
         .end_object();
     return writer.take();
 }

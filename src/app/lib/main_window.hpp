@@ -24,6 +24,12 @@
 //   * The Log starts with the start-up line (§12.2).
 //   * Updates (D-45): enable_updates() turns the self-updater on in a normal run; it
 //     starts with the window's first Shown, next to OnShownAsync.
+//   * Settings (D-63): the gear "Settings" button at the right end of the tab row (the
+//     tab widget's corner, after the tab bar in the Tab order) opens the window-modal
+//     Settings window (open_settings). A change of its update options applies at once:
+//     settings_.updates, the update controller's options, and settings.json is saved
+//     (never in autotest). Without an update controller (--autotest, --replay) it shows
+//     ui::updates_off_view(). Closing the main window closes it first.
 
 #include "app_services.hpp"
 #include "task.hpp"
@@ -34,6 +40,7 @@
 
 #include <QMainWindow>
 #include <QMargins>
+#include <QPointer>
 #include <QSize>
 
 #include <memory>
@@ -50,6 +57,8 @@ class FlightGrid;
 class InputPanel;
 class LogView;
 class RoundTripGrid;
+class SettingsButton;
+class SettingsDialog;
 class UpdateBar;
 
 class MainWindow final : public QMainWindow {
@@ -97,6 +106,10 @@ public:
     [[nodiscard]] RoundTripGrid* round_trip_grid() const noexcept { return trips_; }
     [[nodiscard]] LogView* log_view() const noexcept { return log_; }
     [[nodiscard]] UpdateBar* update_bar() const noexcept { return update_bar_; }
+    /// The gear at the right end of the tab row (the tab widget's top-right corner).
+    [[nodiscard]] SettingsButton* settings_button() const noexcept { return settings_button_; }
+    /// The Settings window while it is open, else null.
+    [[nodiscard]] SettingsDialog* settings_dialog() const noexcept;
     [[nodiscard]] Controller* controller() const noexcept { return controller_; }
     /// The self-updater, or null when enable_updates() was not called (or refused).
     [[nodiscard]] UpdateController* update_controller() const noexcept { return updates_; }
@@ -107,6 +120,11 @@ public:
 
     [[nodiscard]] QWidget* page(Page page) const;
     void select_page(Page page);
+
+    /// The Settings button: shows the Settings window (window-modal, deleted when it
+    /// closes) with settings_.updates and the update controller's status, or raises the
+    /// one already open. Returns it.
+    SettingsDialog* open_settings();
 
     // --- Settings (01 §13) --------------------------------------------------------------------
     /// The settings as closing saves them (after it committed pending numeric edits): the
@@ -139,6 +157,9 @@ private:
     /// Esc pressed in `watched`: Cancel when it belongs to this window, work is running and
     /// no drop-down is open. Returns whether it was handled.
     bool handle_escape(QObject* watched);
+    /// The Settings window changed the update options: keep them, apply them to the update
+    /// controller and save settings.json (not in autotest).
+    void apply_update_options(const update::UpdateOptions& options);
 
     std::shared_ptr<const AppServices> services_;
     ui::AppSettings settings_;
@@ -153,6 +174,8 @@ private:
     LogView* log_ = nullptr;
     BusyPanel* busy_ = nullptr;
     UpdateBar* update_bar_ = nullptr;
+    SettingsButton* settings_button_ = nullptr;
+    QPointer<SettingsDialog> settings_dialog_;
     Controller* controller_ = nullptr;
     AutoTestRunner* autotest_runner_ = nullptr;
     UpdateController* updates_ = nullptr;

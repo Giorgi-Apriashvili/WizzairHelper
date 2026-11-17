@@ -13,15 +13,36 @@
 // surrogate pairs included. No clamping happens here; `initial_inputs`
 // applies the UI's clamps.
 //
-// Save writes the twelve properties in table order, indented by two spaces,
+// The update options (DECISIONS D-60) are three properties after the twelve of
+// 01 §13: `CheckForUpdates` (bool), `UpdateCheckFrequency` ("Daily", "Weekly",
+// "Monthly") and `WhenUpdateFound` ("InstallOnClose", "DownloadThenAsk",
+// "NotifyOnly"). Missing ones keep their defaults (a 2.0 / 2.1 file); a wrong
+// JSON type falls back to ALL defaults like any property; but a string that
+// names no value of the two enumerations (any ASCII case is accepted) gives
+// that property's default only and keeps everything else — a deliberate
+// departure from the all-or-nothing rule, so a value written by a later
+// version never resets a user's searches. Older versions ignore the three
+// (unknown properties).
+//
+// Save writes the fifteen properties in table order, indented by two spaces,
 // into a complete temporary file in the target directory and then replaces the
 // target (last complete write wins); I/O errors are swallowed.
 
+#include "wizz/services/update_options.hpp"
+
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace wizz::ui {
+
+/// settings.json's names of the update options' values ("Daily", "InstallOnClose", …).
+[[nodiscard]] std::string_view json_name(update::CheckFrequency frequency) noexcept;
+[[nodiscard]] std::string_view json_name(update::WhenFound when_found) noexcept;
+/// The value a settings.json string names, ASCII case ignored; nullopt for any other text.
+[[nodiscard]] std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept;
+[[nodiscard]] std::optional<update::WhenFound> parse_when_found(std::string_view text) noexcept;
 
 struct AppSettings {
     std::string from{"Budapest"};
@@ -36,6 +57,9 @@ struct AppSettings {
     int window_width = 0;   ///< device px; > 0 = restore the saved size
     int window_height = 0;  ///< device px
     bool maximized = false;
+    /// CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound (D-60); the defaults are the
+    /// behaviour of 2.0 / 2.1.
+    update::UpdateOptions updates{};
 
     friend bool operator==(const AppSettings&, const AppSettings&) = default;
 
@@ -46,8 +70,9 @@ struct AppSettings {
     [[nodiscard]] static AppSettings load(const std::filesystem::path& path) noexcept;
 
     /// The settings.json text: an object with From, To, FromRadiusKm, ToRadiusKm, Adults,
-    /// DiscountClub, Currency, MinNights, MaxNights, WindowWidth, WindowHeight, Maximized
-    /// in that order, indented two spaces (CRLF line breaks, JsonSerializer escaping).
+    /// DiscountClub, Currency, MinNights, MaxNights, WindowWidth, WindowHeight, Maximized,
+    /// then CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound, in that order, indented
+    /// two spaces (CRLF line breaks, JsonSerializer escaping).
     [[nodiscard]] std::string to_json() const;
     /// Writes `to_json()` to `path`: creates the directory, writes `<name>.tmp` next to
     /// it, then replaces the target atomically. Returns false on any error (the caller

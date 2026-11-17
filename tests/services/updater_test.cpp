@@ -309,6 +309,9 @@ TEST(UpdaterConfig, App_configuration_names_the_repository_user_agent_and_the_up
     EXPECT_EQ(config.current_version, (Version{1, 0, 0}));
     EXPECT_EQ(config.user_agent(), kUserAgent);
     EXPECT_EQ(config.latest_release_url(), kLatestUrl);
+    EXPECT_EQ(config.release_page_url(Version{1, 2, 0}),
+              "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.2.0")
+        << "the page GitHub's html_url names, for an update remembered from an earlier session";
     EXPECT_EQ(UpdateConfig::installer_name(Version{1, 2, 0}), kInstaller);
     EXPECT_EQ(UpdateConfig::zip_name(Version{1, 2, 0}), kZip);
 
@@ -1038,39 +1041,238 @@ TEST(UpdaterLog, Rotates_a_large_log_and_keeps_lines_on_one_line)
 }
 
 // =====================================================================================
-// Daily schedule
+// Schedule: local calendar periods (D-59)
 // =====================================================================================
 
-const wizz::UtcInstant kT0 = FixedClock::kDefaultUtcNow;
+const wizz::UtcInstant kT0 = FixedClock::kDefaultUtcNow;  // Monday 2026-11-02 10:00 UTC
 
-TEST(UpdaterSchedule, Due_without_a_successful_check_in_the_last_24_hours)
+using update::CheckFrequency;
+using update::CheckPolicy;
+using wizz::Date;
+using wizz::make_utc;
+
+constexpr CheckPolicy kDaily{.automatic = true, .frequency = CheckFrequency::daily};
+constexpr CheckPolicy kWeekly{.automatic = true, .frequency = CheckFrequency::weekly};
+constexpr CheckPolicy kMonthly{.automatic = true, .frequency = CheckFrequency::monthly};
+
+[[nodiscard]] constexpr Date day(int year, unsigned month, unsigned d) noexcept
 {
-    EXPECT_TRUE(update::is_check_due(UpdateState{}, kT0));
+    return Date::from_ymd(year, month, d);
+}
 
-    const UpdateState checked{.last_success = kT0, .latest_seen = Version{1, 2, 0}, .last_failure = std::nullopt};
-    EXPECT_FALSE(update::is_check_due(checked, kT0));
-    EXPECT_FALSE(update::is_check_due(checked, kT0 + 23h + 59min + 59s));
-    EXPECT_TRUE(update::is_check_due(checked, kT0 + 24h));
-    EXPECT_TRUE(update::is_check_due(checked, kT0 + 24h * 30));
+[[nodiscard]] UpdateState succeeded_at(wizz::UtcInstant when)
+{
+    return UpdateState{.last_success = when, .latest_seen = Version{1, 0, 0}, .last_failure = std::nullopt};
+}
+
+/// Is a check due at `now` (UTC) on a machine whose local zone is UTC + `offset`?
+[[nodiscard]] bool due_at(const UpdateState& state, const CheckPolicy& policy, wizz::UtcInstant now,
+                          Duration offset = Duration::zero())
+{
+    const FixedClock clock{now, offset};
+    return update::is_check_due(state, policy, clock);
+}
+
+/// A machine zone with daylight saving time, like Central Europe in 2026: UTC+1, and
+/// UTC+2 from 29 March 01:00 UTC to 25 October 01:00 UTC.
+class CentralEuropeClock final : public wizz::Clock {
+public:
+    static constexpr wizz::UtcInstant kSummerStarts = make_utc(Date::from_ymd(2026, 3, 29), 1, 0);
+    static constexpr wizz::UtcInstant kSummerEnds = make_utc(Date::from_ymd(2026, 10, 25), 1, 0);
+
+    explicit CentralEuropeClock(wizz::UtcInstant now) noexcept : now_(now) {}
+
+    [[nodiscard]] wizz::UtcInstant utc_now() const override { return now_; }
+    [[nodiscard]] wizz::LocalDateTime local_now() const override { return to_local(now_); }
+    [[nodiscard]] wizz::Ticks monotonic_now() const override { return wizz::Ticks::zero(); }
+    [[nodiscard]] wizz::LocalDateTime to_local(wizz::UtcInstant instant) const override
+    {
+        const bool summer = instant >= kSummerStarts && instant < kSummerEnds;
+        return wizz::LocalDateTime{instant.time_since_epoch() + (summer ? Duration{2h} : Duration{1h})};
+    }
+
+private:
+    wizz::UtcInstant now_;
+};
+
+TEST(UpdaterSchedule, Periods_start_on_the_day_the_Monday_of_the_ISO_week_and_the_first_of_the_month)
+{
+    EXPECT_EQ(update::period_start(day(2026, 11, 17), CheckFrequency::daily), day(2026, 11, 17));
+    EXPECT_EQ(update::period_start(day(2026, 11, 17), CheckFrequency::weekly), day(2026, 11, 16)) << "Tuesday";
+    EXPECT_EQ(update::period_start(day(2026, 11, 16), CheckFrequency::weekly), day(2026, 11, 16)) << "Monday";
+    EXPECT_EQ(update::period_start(day(2026, 11, 22), CheckFrequency::weekly), day(2026, 11, 16)) << "Sunday";
+    EXPECT_EQ(update::period_start(day(2027, 1, 3), CheckFrequency::weekly), day(2026, 12, 28))
+        << "ISO week 53 of 2026 runs into 2027";
+    EXPECT_EQ(update::period_start(day(2027, 1, 1), CheckFrequency::monthly), day(2027, 1, 1));
+    EXPECT_EQ(update::period_start(day(2026, 11, 30), CheckFrequency::monthly), day(2026, 11, 1));
+    EXPECT_EQ(update::period_start(day(2028, 2, 29), CheckFrequency::monthly), day(2028, 2, 1));
+}
+
+TEST(UpdaterSchedule, Never_checked_is_due_in_every_period)
+{
+    for (const CheckPolicy& policy : {kDaily, kWeekly, kMonthly}) {
+        EXPECT_TRUE(due_at(UpdateState{}, policy, kT0));
+    }
+}
+
+TEST(UpdaterSchedule, Once_a_day_is_due_on_a_new_local_calendar_day_not_24_hours_later)
+{
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 11, 2), 22, 30));
+    EXPECT_FALSE(due_at(checked, kDaily, make_utc(day(2026, 11, 2), 23, 59, 59)));
+    EXPECT_TRUE(due_at(checked, kDaily, make_utc(day(2026, 11, 3), 0, 0))) << "90 minutes later, but a new day";
+    EXPECT_TRUE(due_at(checked, kDaily, make_utc(day(2026, 12, 2), 9, 0)));
+
+    // A check in the morning does not make the next one wait until the next morning.
+    const UpdateState morning = succeeded_at(make_utc(day(2026, 11, 2), 8, 0));
+    EXPECT_FALSE(due_at(morning, kDaily, make_utc(day(2026, 11, 2), 23, 0)));
+    EXPECT_TRUE(due_at(morning, kDaily, make_utc(day(2026, 11, 3), 0, 1)));
+}
+
+TEST(UpdaterSchedule, The_day_is_the_local_one)
+{
+    // 21:00 UTC is already 01:00 the next day at UTC+4, and still 16:00 the same day at UTC-5.
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 11, 2), 21, 0));
+    EXPECT_FALSE(due_at(checked, kDaily, make_utc(day(2026, 11, 3), 19, 59), 4h)) << "local 3 Nov 01:00 and 23:59";
+    EXPECT_TRUE(due_at(checked, kDaily, make_utc(day(2026, 11, 3), 20, 0), 4h)) << "local 4 Nov 00:00";
+    EXPECT_TRUE(due_at(checked, kDaily, make_utc(day(2026, 11, 3), 6, 0), -5h)) << "local 2 Nov 16:00 and 3 Nov 01:00";
+    EXPECT_FALSE(due_at(checked, kDaily, make_utc(day(2026, 11, 3), 4, 59), -5h)) << "local 2 Nov 16:00 and 23:59";
+}
+
+TEST(UpdaterSchedule, Once_a_week_is_due_in_a_new_ISO_week_starting_on_Monday)
+{
+    // Checked on Tuesday 17 Nov 2026 (week 47).
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 11, 17), 15, 53));
+    EXPECT_FALSE(due_at(checked, kWeekly, make_utc(day(2026, 11, 18), 9, 0)));
+    EXPECT_FALSE(due_at(checked, kWeekly, make_utc(day(2026, 11, 22), 23, 59, 59))) << "Sunday ends the week";
+    EXPECT_TRUE(due_at(checked, kWeekly, make_utc(day(2026, 11, 23), 0, 0))) << "Monday starts the next";
+    EXPECT_TRUE(due_at(checked, kWeekly, make_utc(day(2026, 12, 20), 12, 0)));
+
+    // Checked on a Sunday: the Monday after is a new week, one day later.
+    const UpdateState sunday = succeeded_at(make_utc(day(2026, 11, 22), 20, 0));
+    EXPECT_TRUE(due_at(sunday, kWeekly, make_utc(day(2026, 11, 23), 7, 0)));
+    // Checked on a Monday: the Sunday after is still the same week.
+    const UpdateState monday = succeeded_at(make_utc(day(2026, 11, 16), 0, 0));
+    EXPECT_FALSE(due_at(monday, kWeekly, make_utc(day(2026, 11, 22), 23, 0)));
+}
+
+TEST(UpdaterSchedule, Once_a_month_is_due_the_first_time_the_app_runs_in_a_new_month)
+{
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 11, 2), 10, 0));
+    EXPECT_FALSE(due_at(checked, kMonthly, make_utc(day(2026, 11, 30), 23, 59, 59)));
+    EXPECT_TRUE(due_at(checked, kMonthly, make_utc(day(2026, 12, 1), 0, 0)));
+    EXPECT_TRUE(due_at(checked, kMonthly, make_utc(day(2026, 12, 29), 18, 0))) << "the first start in December";
+
+    // Late in a month: the 1st is due although only a day has passed.
+    const UpdateState late = succeeded_at(make_utc(day(2026, 11, 30), 22, 0));
+    EXPECT_TRUE(due_at(late, kMonthly, make_utc(day(2026, 12, 1), 8, 0)));
+    // The local month: 30 Nov 22:00 UTC is already 1 Dec at UTC+3.
+    EXPECT_FALSE(due_at(late, kMonthly, make_utc(day(2026, 12, 1), 8, 0), 3h));
+}
+
+TEST(UpdaterSchedule, Year_boundaries_start_a_new_day_and_month_but_not_a_new_ISO_week)
+{
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 12, 31), 23, 0));  // Thursday, week 53
+    const wizz::UtcInstant new_year = make_utc(day(2027, 1, 1), 0, 30);
+    EXPECT_TRUE(due_at(checked, kDaily, new_year));
+    EXPECT_TRUE(due_at(checked, kMonthly, new_year));
+    EXPECT_FALSE(due_at(checked, kWeekly, new_year));
+    EXPECT_FALSE(due_at(checked, kWeekly, make_utc(day(2027, 1, 3), 23, 59))) << "Sunday 3 Jan 2027 is still week 53";
+    EXPECT_TRUE(due_at(checked, kWeekly, make_utc(day(2027, 1, 4), 0, 0))) << "week 1 of 2027";
+}
+
+TEST(UpdaterSchedule, Daylight_saving_time_uses_the_offset_each_instant_had)
+{
+    // Checked at 00:30 summer time on Sunday 25 Oct 2026 (22:30 UTC the day before).
+    const UpdateState checked = succeeded_at(make_utc(day(2026, 10, 24), 22, 30));
+    // 13:00 winter time the same Sunday: the same local day. With today's offset (UTC+1)
+    // the check would have been on 24 Oct, 23:30, and a check would wrongly be due.
+    EXPECT_FALSE(update::is_check_due(checked, kDaily, CentralEuropeClock{make_utc(day(2026, 10, 25), 12, 0)}));
+    EXPECT_FALSE(update::is_check_due(checked, kDaily, CentralEuropeClock{make_utc(day(2026, 10, 25), 22, 59)}))
+        << "23:59 winter time";
+    EXPECT_TRUE(update::is_check_due(checked, kDaily, CentralEuropeClock{make_utc(day(2026, 10, 25), 23, 0)}))
+        << "Monday 00:00 winter time";
+    EXPECT_TRUE(update::is_check_due(checked, kWeekly, CentralEuropeClock{make_utc(day(2026, 10, 25), 23, 0)}))
+        << "a new week too";
+
+    // The spring change: checked on Saturday 28 Mar 23:30 winter time (22:30 UTC).
+    const UpdateState spring = succeeded_at(make_utc(day(2026, 3, 28), 22, 30));
+    EXPECT_FALSE(update::is_check_due(spring, kDaily, CentralEuropeClock{make_utc(day(2026, 3, 28), 22, 59)}));
+    EXPECT_TRUE(update::is_check_due(spring, kDaily, CentralEuropeClock{make_utc(day(2026, 3, 28), 23, 0)}))
+        << "Sunday 00:00 winter time";
+    EXPECT_FALSE(update::is_check_due(succeeded_at(make_utc(day(2026, 3, 29), 0, 0)), kDaily,
+                                      CentralEuropeClock{make_utc(day(2026, 3, 29), 21, 59)}))
+        << "01:00 winter and 23:59 summer time on the same Sunday";
 }
 
 TEST(UpdaterSchedule, A_failed_check_waits_an_hour_before_the_next_try)
 {
-    const UpdateState failed{.last_success = std::nullopt, .latest_seen = std::nullopt, .last_failure = kT0};
-    EXPECT_FALSE(update::is_check_due(failed, kT0));
-    EXPECT_FALSE(update::is_check_due(failed, kT0 + 59min + 59s));
-    EXPECT_TRUE(update::is_check_due(failed, kT0 + 1h));
+    for (const CheckPolicy& policy : {kDaily, kWeekly, kMonthly}) {
+        const UpdateState failed{.last_success = std::nullopt, .latest_seen = std::nullopt, .last_failure = kT0};
+        EXPECT_FALSE(due_at(failed, policy, kT0));
+        EXPECT_FALSE(due_at(failed, policy, kT0 + 59min + 59s));
+        EXPECT_TRUE(due_at(failed, policy, kT0 + 1h));
 
-    const UpdateState old_success_then_failure{
-        .last_success = kT0 - 48h, .latest_seen = Version{1, 0, 0}, .last_failure = kT0};
-    EXPECT_FALSE(update::is_check_due(old_success_then_failure, kT0 + 30min));
-    EXPECT_TRUE(update::is_check_due(old_success_then_failure, kT0 + 1h));
+        const UpdateState old_success_then_failure{
+            .last_success = kT0 - 24h * 40, .latest_seen = Version{1, 0, 0}, .last_failure = kT0};
+        EXPECT_FALSE(due_at(old_success_then_failure, policy, kT0 + 30min));
+        EXPECT_TRUE(due_at(old_success_then_failure, policy, kT0 + 1h));
+    }
+    // The hour also holds across a period boundary.
+    const UpdateState failed_at_midnight{.last_success = make_utc(day(2026, 11, 2), 9, 0),
+                                         .latest_seen = std::nullopt,
+                                         .last_failure = make_utc(day(2026, 11, 2), 23, 30)};
+    EXPECT_FALSE(due_at(failed_at_midnight, kDaily, make_utc(day(2026, 11, 3), 0, 15)));
+    EXPECT_TRUE(due_at(failed_at_midnight, kDaily, make_utc(day(2026, 11, 3), 0, 30)));
 }
 
 TEST(UpdaterSchedule, Times_in_the_future_do_not_block_a_check)
 {
     const UpdateState future{.last_success = kT0 + 72h, .latest_seen = std::nullopt, .last_failure = kT0 + 2h};
-    EXPECT_TRUE(update::is_check_due(future, kT0));
+    for (const CheckPolicy& policy : {kDaily, kWeekly, kMonthly}) {
+        EXPECT_TRUE(due_at(future, policy, kT0));
+    }
+    // Later the same day, after the clock was set back by an hour.
+    EXPECT_TRUE(due_at(succeeded_at(kT0 + 1h), kDaily, kT0));
+}
+
+TEST(UpdaterSchedule, Turned_off_is_never_due)
+{
+    for (const CheckFrequency frequency : {CheckFrequency::daily, CheckFrequency::weekly, CheckFrequency::monthly}) {
+        const CheckPolicy off{.automatic = false, .frequency = frequency};
+        EXPECT_FALSE(due_at(UpdateState{}, off, kT0)) << "not even never checked";
+        EXPECT_FALSE(due_at(succeeded_at(kT0 - 24h * 400), off, kT0));
+        EXPECT_FALSE(due_at(UpdateState{.last_success = kT0 + 72h, .latest_seen = Version{2, 0, 0}, .last_failure = {}},
+                            off, kT0))
+            << "not for a future time or an update seen earlier either";
+    }
+}
+
+TEST(UpdaterSchedule, An_update_seen_earlier_and_not_installed_waits_for_the_next_period)
+{
+    // The owner's rule is the period alone (D-59): a version seen earlier and not
+    // installed (notify only, Later, a portable copy) sends no extra request in a new
+    // session; the next day, week or month checks as usual.
+    const UpdateState seen{.last_success = kT0 - 1h, .latest_seen = Version{1, 2, 0}, .last_failure = std::nullopt};
+    for (const CheckPolicy& policy : {kDaily, kWeekly, kMonthly}) {
+        EXPECT_FALSE(due_at(seen, policy, kT0)) << static_cast<int>(policy.frequency);
+    }
+    EXPECT_FALSE(due_at(seen, kMonthly, make_utc(day(2026, 11, 30), 22, 0))) << "the rest of November";
+    EXPECT_TRUE(due_at(seen, kMonthly, make_utc(day(2026, 12, 1), 8, 0))) << "December";
+}
+
+TEST(UpdaterSchedule, A_state_written_by_2_1_is_read_with_the_calendar_rules)
+{
+    // 2.1 wrote this after its check yesterday evening; 2.1 would wait 24 h, the calendar
+    // day starts a check this morning.
+    constexpr std::string_view k21 = "{\r\n"
+                                     "  \"LastSuccessfulCheckUtc\": \"2026-11-01T21:15:00Z\",\r\n"
+                                     "  \"LatestSeenVersion\": \"1.0.0\"\r\n"
+                                     "}";
+    const UpdateState state = UpdateState::parse(k21);
+    EXPECT_EQ(state, succeeded_at(make_utc(day(2026, 11, 1), 21, 15)));
+    EXPECT_EQ(state.to_json(), k21) << "the format is unchanged";
+    EXPECT_TRUE(due_at(state, kDaily, make_utc(day(2026, 11, 2), 8, 0)));
+    EXPECT_FALSE(due_at(state, kWeekly, make_utc(day(2026, 11, 1), 23, 0)));
 }
 
 TEST(UpdaterSchedule, State_round_trips_through_its_json)
@@ -1170,31 +1372,81 @@ TEST(UpdaterSchedule, Check_if_due_sends_nothing_when_not_due_and_records_the_re
     Harness h{[&](const RecordedRequest&) { return wizz::test::json_response(ReleaseJson{}.text(), status); }};
     const update::UpdateSchedule schedule{h.config.updates_dir(), h.clock};
 
-    const auto first = h.updater.check_if_due(schedule, {});
+    const auto first = h.updater.check_if_due(schedule, kDaily, {});
     ASSERT_TRUE(first.has_value());
     ASSERT_TRUE(first->has_value());
     EXPECT_EQ(schedule.load().latest_seen, (Version{1, 2, 0}));
 
-    h.clock->advance(23h);
-    EXPECT_FALSE(h.updater.check_if_due(schedule, {}).has_value());
+    h.clock->advance(13h);  // 23:00, the same day
+    EXPECT_FALSE(h.updater.check_if_due(schedule, kDaily, {}).has_value());
     EXPECT_EQ(h.transport->request_count(), 1u);
 
-    h.clock->advance(1h);
+    h.clock->advance(1h);  // midnight: a new day
     status = 502;
-    const auto failed = h.updater.check_if_due(schedule, {});
+    const auto failed = h.updater.check_if_due(schedule, kDaily, {});
     ASSERT_TRUE(failed.has_value());
     EXPECT_FALSE(failed->has_value());
-    EXPECT_EQ(schedule.load().last_failure, kT0 + 24h);
+    EXPECT_EQ(schedule.load().last_failure, kT0 + 14h);
 
     h.clock->advance(30min);
-    EXPECT_FALSE(h.updater.check_if_due(schedule, {}).has_value());
+    EXPECT_FALSE(h.updater.check_if_due(schedule, kDaily, {}).has_value());
     EXPECT_EQ(h.transport->request_count(), 2u);
 
     std::stop_source stop;
     stop.request_stop();
     h.clock->advance(30min);
-    EXPECT_THROW((void)h.updater.check_if_due(schedule, stop.get_token()), wizz::OperationCancelled);
-    EXPECT_EQ(schedule.load().last_failure, kT0 + 24h);  // a cancelled check records nothing
+    EXPECT_THROW((void)h.updater.check_if_due(schedule, kDaily, stop.get_token()), wizz::OperationCancelled);
+    EXPECT_EQ(schedule.load().last_failure, kT0 + 14h);  // a cancelled check records nothing
+}
+
+TEST(UpdaterSchedule, Turned_off_sends_no_request_at_all)
+{
+    Harness h{[](const RecordedRequest&) { return wizz::test::json_response(ReleaseJson{}.text()); }};
+    const update::UpdateSchedule schedule{h.config.updates_dir(), h.clock};
+    const CheckPolicy off{.automatic = false, .frequency = CheckFrequency::daily};
+    EXPECT_FALSE(h.updater.check_if_due(schedule, off, {}).has_value()) << "never checked, and still nothing";
+    h.clock->advance(24h * 365);
+    EXPECT_FALSE(h.updater.check_if_due(schedule, off, {}).has_value());
+    EXPECT_EQ(h.transport->request_count(), 0u);
+    EXPECT_EQ(schedule.load(), UpdateState{});
+}
+
+TEST(UpdaterSchedule, Check_now_always_runs_and_a_success_is_the_periods_check)
+{
+    int status = 200;
+    Harness h{[&](const RecordedRequest&) { return wizz::test::json_response(ReleaseJson{}.text(), status); }};
+    const update::UpdateSchedule schedule{h.config.updates_dir(), h.clock};
+
+    // Check now on a profile that never checked: the weekly check is then not due this week.
+    const auto manual = h.updater.check_now(schedule, {});
+    ASSERT_TRUE(manual.has_value()) << describe(manual);
+    EXPECT_EQ(schedule.load(), (UpdateState{.last_success = kT0, .latest_seen = Version{1, 2, 0}, .last_failure = {}}));
+    EXPECT_FALSE(h.updater.check_if_due(schedule, kWeekly, {}).has_value());
+    EXPECT_EQ(h.transport->request_count(), 1u);
+
+    // It runs whenever it is asked: right after another check, …
+    EXPECT_TRUE(h.updater.check_now(schedule, {}).has_value());
+    EXPECT_EQ(h.transport->request_count(), 2u);
+    // … within the hour after a failure (which it records, so the automatic check waits) …
+    status = 503;
+    h.clock->advance(5min);
+    EXPECT_FALSE(h.updater.check_now(schedule, {}).has_value());
+    EXPECT_EQ(schedule.load().last_failure, kT0 + 5min);
+    status = 200;
+    EXPECT_TRUE(h.updater.check_now(schedule, {}).has_value());
+    EXPECT_EQ(h.transport->request_count(), 4u);
+    EXPECT_EQ(schedule.load(), (UpdateState{.last_success = kT0 + 5min, .latest_seen = Version{1, 2, 0}, .last_failure = {}}));
+    // … and in the next period (Monday 9 Nov), after which the period is checked.
+    h.clock->set_utc_now(make_utc(day(2026, 11, 9), 8, 0));
+    EXPECT_TRUE(schedule.is_check_due(kWeekly));
+    EXPECT_TRUE(h.updater.check_now(schedule, {}).has_value());
+    EXPECT_FALSE(h.updater.check_if_due(schedule, kWeekly, {}).has_value());
+    EXPECT_EQ(h.transport->request_count(), 5u);
+
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_THROW((void)h.updater.check_now(schedule, stop.get_token()), wizz::OperationCancelled);
+    EXPECT_EQ(schedule.load().last_success, make_utc(day(2026, 11, 9), 8, 0)) << "a cancelled check records nothing";
 }
 
 // =====================================================================================
@@ -1253,11 +1505,13 @@ TEST(UpdaterInstall, Removes_only_stale_downloads)
     TempDirectory temp;
     const UpdateConfig config = config_for(temp.path(), "1.2.0");
     const fs::path dir = config.download_dir();
-    const std::vector<std::string> stale{"WizzairHelper-1.1.0-win64-setup.exe", "WizzairHelper-1.2.0-win64.zip",
-                                         "WizzairHelper-0.9.9-win64-setup.exe.tmp", "WizzairHelper-1.2.0-win64.zip.tmp"};
-    const std::vector<std::string> kept{"WizzairHelper-1.3.0-win64-setup.exe", "WizzairHelper-1.10.0-win64.zip",
-                                        "notes.txt", "WizzairHelper-1.0-win64.zip", "SHA256SUMS.txt",
-                                        "WizzairHelper-1.1.0-win64-setup.exe.bak"};
+    const std::vector<std::string> stale{"WizzairHelper-1.1.0-win64-setup.exe",        "WizzairHelper-1.2.0-win64.zip",
+                                         "WizzairHelper-0.9.9-win64-setup.exe.tmp",    "WizzairHelper-1.2.0-win64.zip.tmp",
+                                         "WizzairHelper-1.1.0-win64-setup.exe.sha256", "WizzairHelper-1.2.0-win64.zip.sha256"};
+    const std::vector<std::string> kept{"WizzairHelper-1.3.0-win64-setup.exe",        "WizzairHelper-1.10.0-win64.zip",
+                                        "notes.txt",                                  "WizzairHelper-1.0-win64.zip",
+                                        "SHA256SUMS.txt",                             "WizzairHelper-1.1.0-win64-setup.exe.bak",
+                                        "WizzairHelper-1.3.0-win64-setup.exe.sha256", "WizzairHelper-1.1.0-win64-setup.exe.sha256.tmp"};
     for (const auto& name : stale) {
         write_file(dir / name, "x");
     }
@@ -1277,6 +1531,90 @@ TEST(UpdaterInstall, Removes_only_stale_downloads)
 
     // No download folder yet: nothing to do.
     EXPECT_EQ(update::remove_stale_downloads(config_for(temp.path() / "elsewhere")), 0u);
+}
+
+TEST(UpdaterInstall, Finds_a_verified_download_by_hashing_it_against_its_kept_hash)
+{
+    // An update remembered from an earlier session finds its installer without a request:
+    // the file of the stable name whose bytes still match the hash download_verified kept
+    // next to it when it verified them against SHA256SUMS.txt (D-43).
+    TempDirectory temp;
+    const UpdateConfig config = config_for(temp.path(), "1.0.0");
+    const fs::path dir = config.download_dir();
+    const fs::path installer = dir / "WizzairHelper-1.2.0-win64-setup.exe";
+    const auto keep = [](const fs::path& file, std::string_view bytes, std::string_view name) {
+        write_file(fs::path{file} += ".sha256", std::format("{}  {}\n", wizz::test::sha256_hex(bytes), name));
+    };
+    const auto find = [&](Version version, AssetKind kind = AssetKind::installer) {
+        return update::find_verified_download(config, version, kind);
+    };
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "no download folder yet";
+
+    // Never verified: an unfinished download, another version, a directory, a file without a kept hash.
+    write_file(dir / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "an unfinished download");
+    keep(dir / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "an unfinished download", "WizzairHelper-1.2.0-win64-setup.exe");
+    write_file(dir / "WizzairHelper-1.1.0-win64-setup.exe", "another version");
+    keep(dir / "WizzairHelper-1.1.0-win64-setup.exe", "another version", "WizzairHelper-1.1.0-win64-setup.exe");
+    fs::create_directories(dir / "WizzairHelper-1.3.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "only the .tmp is there";
+    EXPECT_EQ(find(Version{1, 3, 0}), std::nullopt) << "not a file";
+    write_file(installer, "MZ placed by hand");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "no kept hash: never verified";
+
+    // A kept hash that does not vouch for these bytes.
+    keep(installer, "MZ verified earlier", "WizzairHelper-1.2.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "the bytes changed since they were verified";
+    keep(installer, "MZ placed by hand", "WizzairHelper-1.2.0-win64.zip");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "a line for another file";
+    write_file(fs::path{installer} += ".sha256", "not a checksum line\n");
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "malformed";
+    write_file(fs::path{installer} += ".sha256",
+               std::format("{}  WizzairHelper-1.2.0-win64-setup.exe\n{}", wizz::test::sha256_hex("MZ placed by hand"),
+                           std::string(5000, '\n')));
+    EXPECT_EQ(find(Version{1, 2, 0}), std::nullopt) << "far too long for a kept hash";
+
+    // Verified and unchanged.
+    keep(installer, "MZ placed by hand", "WizzairHelper-1.2.0-win64-setup.exe");
+    EXPECT_EQ(find(Version{1, 2, 0}), installer);
+    write_file(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip");
+    keep(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip", "WizzairHelper-1.2.0-win64.zip");
+    EXPECT_EQ(find(Version{1, 2, 0}, AssetKind::portable_zip), dir / "WizzairHelper-1.2.0-win64.zip");
+}
+
+TEST(UpdaterDownload, Keeps_the_hash_of_a_verified_file_next_to_it_for_a_later_session)
+{
+    const fs::path kept_name = std::string{kInstaller} + ".sha256";
+    const std::string kept_line = std::format("{}  {}\n", wizz::test::sha256_hex(kInstallerBytes), kInstaller);
+    {
+        // Downloaded and verified: the hash is kept, and a later session finds the file.
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response(kInstallerBytes); })};
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer,
+                                                      h.config.download_dir(), {});
+        ASSERT_TRUE(file.has_value()) << describe(file);
+        EXPECT_EQ(read_file(h.config.download_dir() / kept_name), kept_line);
+        EXPECT_EQ(update::find_verified_download(h.config, Version{1, 2, 0}, AssetKind::installer), file->path);
+    }
+    {
+        // Reused: the hash is kept too (a file verified by an older version had none).
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response(kInstallerBytes); })};
+        write_file(h.downloads() / kInstaller, kInstallerBytes);
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer, h.downloads(), {});
+        ASSERT_TRUE(file.has_value()) << describe(file);
+        EXPECT_TRUE(file->reused);
+        EXPECT_EQ(read_file(h.downloads() / kept_name), kept_line);
+    }
+    {
+        // A file that no longer matches goes with its kept hash; a download that then fails
+        // its check leaves neither.
+        Harness h{sums_then([](const RecordedRequest&) { return bytes_response("tampered bytes"); })};
+        write_file(h.downloads() / kInstaller, "changed since");
+        write_file(h.downloads() / kept_name, std::format("{}  {}\n", wizz::test::sha256_hex("changed since"), kInstaller));
+        const auto file = h.updater.download_verified(standard_release(h.config), AssetKind::installer, h.downloads(), {});
+        ASSERT_FALSE(file.has_value());
+        EXPECT_EQ(file.error().kind, UpdateErrorKind::checksum_mismatch);
+        EXPECT_FALSE(fs::exists(h.downloads() / kInstaller));
+        EXPECT_FALSE(fs::exists(h.downloads() / kept_name));
+    }
 }
 
 } // namespace

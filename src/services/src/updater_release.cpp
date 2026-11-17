@@ -215,6 +215,11 @@ std::string UpdateConfig::latest_release_url() const
     return std::format("https://api.github.com/repos/{}/{}/releases/latest", owner, repo);
 }
 
+std::string UpdateConfig::release_page_url(const Version& version) const
+{
+    return std::format("https://github.com/{}/{}/releases/tag/v{}", owner, repo, version.to_string());
+}
+
 std::string UpdateConfig::installer_name(const Version& version)
 {
     return std::format("{}{}{}", kAssetPrefix, version.to_string(), kInstallerSuffix);
