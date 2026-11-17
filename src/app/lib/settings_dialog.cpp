@@ -12,6 +12,7 @@
 #include <QFontMetrics>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
 #include <QMetaObject>
@@ -109,7 +110,7 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     status_line_->setAlignment(Qt::AlignLeft | Qt::AlignTop);  // right under the version; the room it keeps is below
     check_now_ = new QPushButton(to_qstring(strings::kCheckNow), card_);
     check_now_->setObjectName(QStringLiteral("checkNow"));
-    check_now_->setAutoDefault(false);
+    check_now_->setAutoDefault(false);  // Close stays the primary button; keyPressEvent clicks a focused one
     auto* top = new QGridLayout;
     top->setContentsMargins(0, 0, 0, 0);
     top->setHorizontalSpacing(kColumnGap);
@@ -324,12 +325,36 @@ void SettingsDialog::apply_status_colour()
 
 void SettingsDialog::update_enabled_states()
 {
-    // Disabling a control that has the focus moves it on; Check now gives it to the next
-    // control (the check box), as a disabled button would.
+    // Disabling the focused Check now would pass the focus to the check box, where the
+    // next Space (to check again, say) would turn automatic checks off and save that. The
+    // focus waits on the status line instead, which reports the check (a screen reader
+    // reads it), and comes back when Check now does — unless the user moved it meanwhile.
+    if (!status_.check_now_enabled && focusWidget() == check_now_) {
+        status_line_->setFocus(Qt::OtherFocusReason);
+        check_now_focus_parked_ = true;
+    }
     check_now_->setEnabled(status_.check_now_enabled);
+    if (status_.check_now_enabled && std::exchange(check_now_focus_parked_, false) && focusWidget() == status_line_) {
+        check_now_->setFocus(Qt::OtherFocusReason);
+    }
     automatic_->setEnabled(status_.options_enabled);
     frequency_->setEnabled(status_.options_enabled && automatic_->isChecked());
     when_found_group_->setEnabled(status_.when_found_enabled);
+}
+
+void SettingsDialog::keyPressEvent(QKeyEvent* event)
+{
+    // Enter clicks the focused push button, as in the main window (01 §6.3); QDialog would
+    // click the default button, Close, for a button that is not an auto-default one.
+    const bool enter = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+    if (enter && (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier) {
+        if (auto* button = qobject_cast<QPushButton*>(focusWidget()); button != nullptr && button->isEnabled()) {
+            button->click();
+            event->accept();
+            return;
+        }
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void SettingsDialog::changeEvent(QEvent* event)

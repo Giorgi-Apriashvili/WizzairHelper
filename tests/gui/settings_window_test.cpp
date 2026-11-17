@@ -128,6 +128,18 @@ void wait_idle(UpdateRig& rig)
     gui::settle();
 }
 
+/// Presses Tab (or Shift+Tab) `count` times in `dialog`; the widgets the focus visited.
+[[nodiscard]] std::vector<QWidget*> press_tab(SettingsDialog& dialog, int count, bool back = false)
+{
+    std::vector<QWidget*> visited;
+    for (int i = 0; i < count; ++i) {
+        gui::send_key(dialog.focusWidget(), QEvent::KeyPress, back ? Qt::Key_Backtab : Qt::Key_Tab,
+                      back ? Qt::ShiftModifier : Qt::NoModifier);
+        visited.push_back(dialog.focusWidget());
+    }
+    return visited;
+}
+
 /// Pixels of `image` within `tolerance` of `colour` in every channel.
 [[nodiscard]] int pixels_near(const QImage& image, const QRect& area, const QColor& colour, int tolerance)
 {
@@ -251,6 +263,76 @@ TEST(SettingsButton, Follows_the_result_tabs_in_the_Tab_order_and_opens_with_the
 // ---------------------------------------------------------------------------
 // The window
 // ---------------------------------------------------------------------------
+
+TEST(SettingsWindow, Enter_clicks_the_focused_button_and_otherwise_Close)
+{
+    UpdateRig rig;
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    ASSERT_EQ(dialog.focusWidget(), dialog.check_now_button());
+    gui::send_key(dialog.check_now_button(), QEvent::KeyPress, Qt::Key_Return);
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->manual_checks(), 1) << "Enter on Check now checks";
+    EXPECT_EQ(rig.window().settings_dialog(), &dialog) << "and leaves the window open";
+    EXPECT_TRUE(dialog.isVisible());
+    EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button());
+
+    // On a control that is not a push button, Enter clicks the default button, Close.
+    dialog.check_automatically_box()->setFocus(Qt::TabFocusReason);
+    gui::send_key(dialog.check_automatically_box(), QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier);
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    EXPECT_TRUE(rig.window().isVisible());
+    EXPECT_TRUE(rig.controller()->options().check_automatically) << "the check box was not toggled";
+    EXPECT_EQ(rig.backend->manual_checks(), 1);
+}
+
+TEST(SettingsWindow, Check_now_keeps_the_keyboard_focus_through_its_check)
+{
+    // Disabled while it runs, Check now must not pass the focus to the check box: a second
+    // Space (to check again) would turn automatic checks off and save that.
+    UpdateRig rig;
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    QPushButton* check_now = dialog.check_now_button();
+    ASSERT_EQ(dialog.focusWidget(), check_now);
+    gui::tap_key(check_now, Qt::Key_Space);
+    EXPECT_FALSE(check_now->isEnabled()) << "busy";
+    EXPECT_EQ(dialog.focusWidget(), dialog.status_label()) << "the focus waits on the status line";
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->manual_checks(), 1);
+    EXPECT_EQ(dialog.focusWidget(), check_now) << "and comes back with Check now";
+
+    gui::tap_key(dialog.focusWidget(), Qt::Key_Space);
+    wait_idle(rig);
+    EXPECT_EQ(rig.backend->manual_checks(), 2) << "Space again checks again";
+    EXPECT_TRUE(dialog.check_automatically_box()->isChecked()) << "automatic checks untouched";
+    EXPECT_TRUE(rig.controller()->options().check_automatically);
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig.window_rig))) << "no option changed, nothing saved";
+
+    // A download keeps it disabled longer; the focus still comes back when it ends.
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.backend->hold_downloads();
+    gui::tap_key(check_now, Qt::Key_Space);
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_EQ(dialog.status().kind, UpdateStatusKind::downloading);
+    EXPECT_EQ(dialog.focusWidget(), dialog.status_label());
+    rig.backend->release_downloads();
+    wait_idle(rig);
+    ASSERT_EQ(dialog.status().kind, UpdateStatusKind::ready);
+    EXPECT_EQ(dialog.focusWidget(), check_now);
+
+    // Moved away meanwhile, the focus stays where the user put it.
+    rig.clock->advance(std::chrono::minutes{1});
+    rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::network, "no route to host"))});
+    gui::tap_key(check_now, Qt::Key_Space);
+    EXPECT_EQ(dialog.focusWidget(), dialog.status_label());
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.check_automatically_box()}))
+        << "Tab moves on from the status line";
+    wait_idle(rig);
+    EXPECT_TRUE(check_now->isEnabled());
+    EXPECT_EQ(dialog.focusWidget(), dialog.check_automatically_box());
+}
 
 TEST(SettingsWindow, Is_a_fixed_modal_window_of_the_main_window_and_closes_with_Close_or_Esc)
 {
@@ -507,6 +589,40 @@ TEST(SettingsWindow, Switching_from_notify_only_to_install_on_close_downloads_at
     EXPECT_FALSE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
 }
 
+TEST(SettingsWindow, With_checks_off_an_offered_update_keeps_Update_now_when_the_choice_changes)
+{
+    // Only tell me, checks off: Check now finds 1.2.0 and the bar offers Update now. Picking
+    // a choice that downloads sends nothing on its own (the box is off), so the bar keeps
+    // the offer and its action rather than losing both.
+    UpdateRig rig{rig_options(options(WhenFound::notify_only, false))};
+    rig.start();
+    ASSERT_EQ(rig.backend->checks(), 0);
+    SettingsDialog& dialog = open_settings(rig.window());
+    rig.backend->script_checks({release_info(kNewVersion)});
+    dialog.check_now_button()->click();
+    wait_idle(rig);
+    ASSERT_TRUE(rig.bar().isVisible());
+    ASSERT_EQ(rig.bar().action_button()->text(), "Update now");
+
+    for (const WhenFound choice : {WhenFound::install_on_close, WhenFound::download_then_ask}) {
+        dialog.when_found_button(choice)->click();
+        gui::settle();
+        EXPECT_EQ(saved(rig.window_rig).updates, options(choice, false));
+        EXPECT_TRUE(rig.backend->downloaded().empty()) << "checks are off: nothing is sent on its own";
+        ASSERT_TRUE(rig.bar().isVisible()) << static_cast<int>(choice);
+        EXPECT_EQ(rig.bar().message_label()->text(), "WizzairHelper 1.2.0 is available.");
+        EXPECT_EQ(rig.bar().action_button()->text(), "Update now");
+        EXPECT_EQ(dialog.status_label()->text(), "WizzairHelper 1.2.0 is available.");
+    }
+
+    dialog.close_button()->click();
+    rig.bar().action_button()->click();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); })) << "downloaded, verified, restarted";
+    EXPECT_EQ(rig.backend->downloaded(), std::vector<Version>{kNewVersion});
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_TRUE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
+}
+
 TEST(SettingsWindow, A_portable_copy_shows_the_install_choices_disabled_with_the_reason)
 {
     UpdateRig rig{rig_options(options(WhenFound::install_on_close), InstallKind::portable)};
@@ -590,10 +706,22 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     QRadioButton* install = dialog.when_found_button(WhenFound::install_on_close);
     QRadioButton* ask = dialog.when_found_button(WhenFound::download_then_ask);
     QRadioButton* notify = dialog.when_found_button(WhenFound::notify_only);
-    EXPECT_EQ(gui::tab_stops(dialog), (std::vector<QWidget*>{dialog.check_now_button(), dialog.check_automatically_box(),
-                                                             dialog.frequency_box(), install, ask, notify,
-                                                             dialog.close_button()}));
     EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "focus starts on the first control";
+    // Real Tab presses: an exclusive radio group is one stop, its selected choice (D-63).
+    EXPECT_EQ(press_tab(dialog, 5), (std::vector<QWidget*>{dialog.check_automatically_box(), dialog.frequency_box(),
+                                                            install, dialog.close_button(), dialog.check_now_button()}));
+    EXPECT_EQ(press_tab(dialog, 2, true), (std::vector<QWidget*>{dialog.close_button(), install}));
+    // The arrow keys move among the choices and select each one, which applies it at once.
+    gui::send_key(install, QEvent::KeyPress, Qt::Key_Down);
+    EXPECT_EQ(dialog.focusWidget(), ask);
+    EXPECT_TRUE(ask->isChecked());
+    EXPECT_EQ(rig.controller()->options().when_found, WhenFound::download_then_ask);
+    EXPECT_EQ(saved(rig.window_rig).updates.when_found, WhenFound::download_then_ask);
+    gui::send_key(ask, QEvent::KeyPress, Qt::Key_Down);
+    EXPECT_EQ(dialog.focusWidget(), notify);
+    EXPECT_EQ(rig.controller()->options().when_found, WhenFound::notify_only);
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.close_button()})) << "then on to Close";
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{notify})) << "back to the selected choice";
 
     EXPECT_EQ(dialog.updates_card()->accessibleName(), "Updates");
     EXPECT_EQ(dialog.updates_card()->title_label()->text(), "Updates");

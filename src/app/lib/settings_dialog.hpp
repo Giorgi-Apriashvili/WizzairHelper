@@ -33,9 +33,13 @@
 //   * The drop-down is enabled only while automatic checks are on; the three choices are
 //     disabled for a portable copy, with the note under them; everything but Close is
 //     disabled in a run without updates (--autotest, --replay).
-//   * Close is the default (primary) button; Esc and the title bar's close box close too.
-//   * Tab order: Check now, the check box, the drop-down, the three choices, Close. Focus
-//     starts on the first of them that is enabled.
+//   * Close is the default (primary) button; Enter clicks the focused push button (Check
+//     now or Close), else Close; Esc and the title bar's close box close too.
+//   * Tab order: Check now, the check box, the drop-down, the selected choice (the arrow
+//     keys move among the three and select — and so apply — each one, as an exclusive
+//     radio group does), Close. Focus starts on the first of them that is enabled. When
+//     Check now is disabled under the focus (its check or a download runs), the focus
+//     waits on the status line and returns to Check now when it is enabled again.
 //   * Look (D-53): the window colour behind a SectionCard, the UI font, ModernStyle's
 //     controls (radio buttons included), every colour taken from the theme again when the
 //     look changes; High Contrast uses the plain native style and the system colours.
@@ -107,6 +111,7 @@ Q_SIGNALS:
     void check_now_requested();
 
 protected:
+    void keyPressEvent(QKeyEvent* event) override;
     void changeEvent(QEvent* event) override;
 
 private:
@@ -131,6 +136,8 @@ private:
     QPushButton* close_ = nullptr;
     bool showing_ = false;
     bool fitting_ = false;
+    /// Check now had the focus when it was disabled: the status line holds it until then.
+    bool check_now_focus_parked_ = false;
 };
 
 } // namespace wizz::app
