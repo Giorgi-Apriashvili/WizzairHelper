@@ -8,7 +8,8 @@
 // client area), -combo-list, -place-list (the From list around "Stockholm"), -completer, -calendar, -context-menu, -tooltip,
 // -messagebox-question, -messagebox-error, -chooser (with the title bar), -update-bar,
 // -disabled, -hover, -focus-*; win10-light-window*.png (WIZZ_FONTS=windows10) and
-// contrast-window*.png (the High Contrast fallback, probe forced on).
+// contrast-window*.png (the High Contrast fallback, probe forced on). Everything is drawn
+// with the run's WIZZ_TEXT_RENDERING (D-58: the default, or hinted / natural to compare).
 
 #include "app_test_support.hpp"
 #include "busy_panel.hpp"
@@ -465,7 +466,11 @@ TEST(LookSnapshots, Render_every_surface_in_both_schemes)
                                       Qt::UI_FadeTooltip}) {
         QApplication::setEffectEnabled(effect, false);
     }
+    const QByteArray rendering = qgetenv("WIZZ_TEXT_RENDERING");
     const wizz::test::look::LookGuard guard;  // puts the suite's look back afterwards
+    if (!rendering.isEmpty()) {
+        qputenv("WIZZ_TEXT_RENDERING", rendering);  // the run's rendering, to compare renderings
+    }
 
     for (const char* scheme : {"light", "dark"}) {
         qputenv("WIZZ_COLOR_SCHEME", scheme);

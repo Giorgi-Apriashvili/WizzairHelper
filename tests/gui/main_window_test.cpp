@@ -212,8 +212,9 @@ TEST(MainWindowLayout, The_minimum_window_shows_every_page_without_clipping)
 TEST(MainWindowLayout, Fourteen_round_trips_are_in_view_at_the_default_window)
 {
     // D-53: the cards, tabs, grid bar and header are tight enough that 14 round trips show at
-    // the default 1320 x 820 window (the prototype showed 12); 9 px of slack are left, so any
-    // growth of the cards or the header shows here.
+    // the default 1320 x 820 window (the prototype showed 12); 2 px of slack are left since the
+    // natural rendering's 18 px lines (D-58; 9 before), so any growth of the cards or the
+    // header shows here.
     WindowRig rig;
     rig.start();
     run_section11_searches(rig);
