@@ -8,6 +8,8 @@
 //   * push buttons: rounded neutral buttons; a dialog's default button is the
 //     accent (primary) button; flat buttons only show a fill under the mouse;
 //   * check boxes: rounded boxes, accent fill and a white tick when checked;
+//     radio buttons (the Settings window): the same colours on a circle, an accent
+//     circle with a white dot when checked;
 //   * tabs: text tabs with an accent underline on the selected one, the pane is
 //     a rounded card;
 //   * table headers: flat, semibold secondary text, a short divider between
@@ -17,8 +19,8 @@
 //     the surface colour with a 1 px border; a selected list or menu item is the
 //     selection tint with a 3 px accent pill at its left, like a focused grid row;
 //     a menu's default action is bold;
-//   * focus: a visible accent ring on buttons, check boxes, inputs, tabs and
-//     calendar days;
+//   * focus: a visible accent ring on buttons, check boxes, radio buttons, inputs,
+//     tabs and calendar days;
 //   * mnemonic underlines: shown while Alt is held, or always when Windows'
 //     "Underline access keys" setting is on (SPI_GETKEYBOARDCUES), as on Windows.
 // Everything not listed is Fusion with the theme palette. No style sheet is

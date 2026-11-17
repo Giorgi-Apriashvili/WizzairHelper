@@ -25,6 +25,7 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QStandardItemModel>
 #include <QTableView>
 #include <QStyleOptionHeader>
@@ -190,6 +191,45 @@ TEST(ModernStyle, Tabs_headers_scroll_bars_and_check_boxes_keep_their_metrics)
     EXPECT_EQ(s.pixelMetric(QStyle::PM_CheckBoxLabelSpacing), 8);
     const QCheckBox box(QStringLiteral("Return to the airport I left from"));
     EXPECT_GE(box.sizeHint().height(), 18 + 4);
+}
+
+TEST(ModernStyle, Radio_buttons_are_circles_in_the_check_box_colours)
+{
+    // The Settings window's choices (D-63): an 18 px circle 8 px before the text, the check
+    // box's input colours, an accent circle with a white dot when checked, and the accent
+    // ring only after a keyboard focus change.
+    QStyle& s = app_style();
+    EXPECT_EQ(s.pixelMetric(QStyle::PM_ExclusiveIndicatorWidth), 18);
+    EXPECT_EQ(s.pixelMetric(QStyle::PM_ExclusiveIndicatorHeight), 18);
+    EXPECT_EQ(s.pixelMetric(QStyle::PM_RadioButtonLabelSpacing), 8);
+    QRadioButton radio(QStringLiteral("Only tell me that an update is available"));
+    EXPECT_GE(radio.sizeHint().height(), 18 + 4);
+
+    const style::Theme& theme = style::theme();
+    const auto draw = [&radio, &theme](QStyle::State state) {
+        QStyleOptionButton option;
+        option.initFrom(&radio);
+        option.state = state | QStyle::State_Enabled;
+        option.rect = QRect(0, 0, 220, 26);  // the circle: x 0..17, y 4..21, centre (9, 13)
+        option.text = radio.text();
+        QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(theme.surface);
+        QPainter painter(&image);
+        QApplication::style()->drawControl(QStyle::CE_RadioButton, &option, &painter, &radio);
+        return image;
+    };
+    const QImage on = draw(QStyle::State_On);
+    EXPECT_EQ(on.pixelColor(9, 13), theme.on_accent) << "the dot";
+    EXPECT_EQ(on.pixelColor(3, 13), theme.accent) << "the circle";
+    EXPECT_EQ(on.pixelColor(9, 2), theme.surface) << "no ring without keyboard focus";
+    const QImage off = draw(QStyle::State_Off);
+    EXPECT_EQ(off.pixelColor(9, 13), theme.input);
+    EXPECT_EQ(off.pixelColor(3, 13), theme.input);
+    EXPECT_EQ(pixels_of(off, theme.accent), 0) << "no accent while unchecked";
+    const QImage mouse_focus = draw(QStyle::State_On | QStyle::State_HasFocus);
+    EXPECT_EQ(mouse_focus.pixelColor(9, 2), theme.surface) << "a click shows no ring";
+    const QImage keyboard_focus = draw(QStyle::State_On | QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange);
+    EXPECT_EQ(keyboard_focus.pixelColor(9, 2), theme.accent_line) << "the ring above the circle";
 }
 
 TEST(ModernStyle, Popup_list_and_menu_items_are_roomy)

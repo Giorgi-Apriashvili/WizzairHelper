@@ -192,6 +192,14 @@ void draw_focus_ring(QPainter* painter, const QRect& rect, const QColor& colour,
     painter->restore();
 }
 
+/// The 18 px circle of a radio button in `rect`: centred across it, and down it like the
+/// check box's square (a pixel below the centre).
+[[nodiscard]] QRect radio_indicator_rect(const QRect& rect)
+{
+    return QRect(rect.left() + (rect.width() - kIndicatorSize) / 2, rect.center().y() - kIndicatorSize / 2 + 1,
+                 kIndicatorSize, kIndicatorSize);
+}
+
 [[nodiscard]] bool parent_is_spin_box(const QWidget* widget)
 {
     return widget != nullptr && qobject_cast<const QAbstractSpinBox*>(widget->parentWidget()) != nullptr;
@@ -475,6 +483,7 @@ int ModernStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, con
     case PM_ExclusiveIndicatorHeight:
         return kIndicatorSize;
     case PM_CheckBoxLabelSpacing:
+    case PM_RadioButtonLabelSpacing:
         return 8;
     case PM_ButtonDefaultIndicator:
     case PM_ButtonShiftHorizontal:
@@ -583,7 +592,8 @@ QSize ModernStyle::sizeFromContents(ContentsType type, const QStyleOption* optio
         }
         return QSize(width, text.height() + 2 * kHeaderVPadding);
     }
-    case CT_CheckBox: {
+    case CT_CheckBox:
+    case CT_RadioButton: {
         const QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
         return QSize(result.width(), std::max(result.height(), kIndicatorSize + 4));
     }
@@ -883,6 +893,29 @@ void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* op
         painter->restore();
         return;
     }
+    case PE_IndicatorRadioButton: {
+        // The check box's colours on a circle; a checked one is the accent with a white dot.
+        const bool enabled = option->state.testFlag(State_Enabled);
+        const bool checked = option->state.testFlag(State_On);
+        const bool hovered = option->state.testFlag(State_MouseOver);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        const QRectF circle = QRectF(radio_indicator_rect(option->rect)).adjusted(0.5, 0.5, -0.5, -0.5);
+        if (checked) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(!enabled ? t().text_disabled : hovered ? t().accent_hover : t().accent);
+            painter->drawEllipse(circle);
+            painter->setBrush(t().on_accent);
+            const qreal dot = enabled && hovered ? 4.0 : 3.5;
+            painter->drawEllipse(circle.center(), dot, dot);
+        } else {
+            painter->setPen(QPen(!enabled ? t().border : hovered ? t().text_secondary : t().input_underline, 1.0));
+            painter->setBrush(!enabled ? t().input_disabled : hovered ? t().hover : t().input);
+            painter->drawEllipse(circle);
+        }
+        painter->restore();
+        return;
+    }
     case PE_IndicatorArrowDown:
     case PE_IndicatorArrowUp:
     case PE_IndicatorArrowLeft:
@@ -970,6 +1003,22 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
                 const QRect square(box->rect.left(), box->rect.center().y() - kIndicatorSize / 2 + 1, kIndicatorSize,
                                    kIndicatorSize);
                 draw_focus_ring(painter, square.adjusted(-3, -3, 3, 3), t().accent_line, 6);
+            }
+        }
+        return;
+    case CE_RadioButton:
+        if (const auto* button = qstyleoption_cast<const QStyleOptionButton*>(option)) {
+            QStyleOptionButton part = *button;
+            part.rect = QRect(button->rect.left(), button->rect.top(), kIndicatorSize, button->rect.height());
+            proxy()->drawPrimitive(PE_IndicatorRadioButton, &part, painter, widget);
+            part.rect = button->rect.adjusted(
+                kIndicatorSize + proxy()->pixelMetric(PM_RadioButtonLabelSpacing, button, widget), 0, 0, 0);
+            QProxyStyle::drawControl(CE_RadioButtonLabel, &part, painter, widget);
+            if (button->state.testFlag(State_HasFocus) && button->state.testFlag(State_KeyboardFocusChange)) {
+                // A round ring around the circle, like the check box's around its box.
+                const QRect circle = radio_indicator_rect(
+                    QRect(button->rect.left(), button->rect.top(), kIndicatorSize, button->rect.height()));
+                draw_focus_ring(painter, circle.adjusted(-3, -3, 3, 3), t().accent_line, (kIndicatorSize + 6 - 2) / 2.0);
             }
         }
         return;
