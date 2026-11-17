@@ -16,6 +16,7 @@
 //   * popups (combo lists, the place completer, the calendar, menus, tooltips):
 //     the surface colour with a 1 px border; a selected list or menu item is the
 //     selection tint with a 3 px accent pill at its left, like a focused grid row;
+//     a menu's default action is bold;
 //   * focus: a visible accent ring on buttons, check boxes, inputs, tabs and
 //     calendar days;
 //   * mnemonic underlines: shown while Alt is held, or always when Windows'
@@ -32,6 +33,7 @@
 
 class QComboBox;
 class QFontMetrics;
+class QStyleOptionMenuItem;
 
 namespace wizz::app {
 
@@ -42,8 +44,16 @@ public:
 
     /// Whether the application's style is a ModernStyle (not High Contrast's).
     [[nodiscard]] static bool is_active();
-    /// The height of every input and push button for `metrics` (the UI font).
+    /// The height of every input and push button for `metrics` (the UI font): max(26, its
+    /// line_height() + 10).
     [[nodiscard]] static int control_height(const QFontMetrics& metrics);
+    /// The height of one line of text in `metrics`' font as Qt lays it out (QLabel, QComboBox,
+    /// headers): the ascent plus the descent, rounded up. Without hinting (D-58) that can be a
+    /// pixel more than QFontMetrics::height().
+    [[nodiscard]] static int line_height(const QFontMetrics& metrics);
+    /// The font a menu item is measured and drawn in: its option's font, bold for the menu's
+    /// default action, with the weight axis of the face that picks (style::fit_text_rendering).
+    [[nodiscard]] static QFont menu_item_font(const QStyleOptionMenuItem& item);
     /// Corner radius of inputs and buttons.
     static constexpr qreal kRadius = 5.0;
     /// Corner radius of cards (input sections, the tab pane).

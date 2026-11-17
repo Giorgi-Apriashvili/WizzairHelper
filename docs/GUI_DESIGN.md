@@ -15,7 +15,8 @@ without a window.
   DPI v2 comes from the application manifest (`resources/WizzairHelper.manifest`), so the early
   crash box is DPI aware too (Qt finds the awareness it would set);
   `style::apply_application_look()` (the look of D-53: Fusion under `ModernStyle`, the light, dark or
-  High Contrast tokens Windows asks for, Segoe UI Variable Text 10 pt; it then follows Windows'
+  High Contrast tokens Windows asks for, Segoe UI Variable Text 10 pt drawn natural and slightly
+  heavier with an event filter that keeps every widget's font so, D-58; it then follows Windows'
   changes, D-56); `FontWarmup` (a worker resolves the busy panel's "⏳" font fallback and the look's
   fonts, 0.2–0.4 s the first time, D-33); `AppServices::create`
   (`ServiceConfig::for_run`: CurlTransport / ReplayTransport, SystemClock / FixedClock, user
@@ -79,7 +80,7 @@ without a window.
 | `UpdateBar` (QWidget) | D-46, D-53 (not in the spec) | The slim card between the input panel and the tabs, inset like the input cards, hidden unless an update is offered: wrapping plain-text message (UI font, theme text) on a magenta tint with a 4 px accent at its left, a `SearchButton`-style action (`Restart and update` / `Download`) and a flat, text-sized `Later`; fixed-size buttons; renders `ui::UpdateBarView`, never takes the focus. |
 | `UpdateController` (QObject) | D-45, D-47 | The updater's lifecycle over `ui::UpdateModel` and an `UpdateBackend` (`CoreUpdateBackend` = the services' `Updater` + `UpdateSchedule`): first evaluation at the first Shown, then hourly (`QTimer`); check and download on its own `JobRunner` workers; Log lines; bar refresh on results and on `Controller::working_changed`; `Later`; `Restart and update` → `restart_requested` (the window closes); `on_window_closing` (from `closeEvent`, after the settings) releases the `AppMutex` and starts a verified installer through the injectable `InstallerLauncher` (`launch_detached`). |
 
-## The look (DECISIONS D-53..D-56)
+## The look (DECISIONS D-53..D-58)
 
 Fusion under `ModernStyle` (`modern_style.hpp`), colour tokens in `style::Theme`
 (`ui_style.hpp`), no style sheets. The 01 look (windowsvista, Segoe UI 9 pt, WinForms metrics and
@@ -93,10 +94,13 @@ of cards side by side line up), 5 px to the body, 6 px between body rows.
 Fixed widths: radius 76, dates 142, adults 64, fare 206, currency 88, nights 64; the place boxes
 stretch (minimum 180). The resolved line follows 4 px below in 9 pt muted text. The results sit
 4 px below in one rounded card under underline tabs (16, 4, 16, 8 around it); the grid's top bar
-has padding (12, 4, 12, 4). Inputs and buttons are `ModernStyle::control_height` = max(26, font
-height + 10) tall; grid rows are the 9 pt data font's height + 12 (28 px at 100 %); header cells
-have 9 / 5 px padding. With these, 14 round trips are in view at the default 1320 x 820 window
-(`MainWindowLayout.*` checks it in CTest, `LookSnapshots` on the real platform); the prototype had 12 and the windowsvista look 19.
+has padding (12, 4, 12, 4). Inputs and buttons are `ModernStyle::control_height` = max(26, line
+height + 10) tall, the line as Qt lays it out (`ModernStyle::line_height`: the ascent plus the descent
+rounded up, 18 px for the UI font without hinting, so 28 px at 100 %; D-58); grid rows are the 9 pt
+data font's height + 12 (28 px at 100 %); header cells have 9 / 5 px padding around one line
+(28 px). With these, 14 round trips are in view at the default 1320 x 820 window, with 2 px to
+spare (`MainWindowLayout.*` checks it in CTest, `LookSnapshots` on the real platform); the prototype
+had 12 and the windowsvista look 19.
 
 **Fonts.** UI: Segoe UI Variable Text 10 pt; grid cells: Segoe UI Variable Text 9 pt with
 semibold 10 pt headers; captions: Segoe UI Variable Small Semibold 8 pt, upper case, +0.8 px;
@@ -106,6 +110,28 @@ text renders nothing for these private-use code points. Windows 10: Segoe UI, Se
 Consolas (Cascadia Mono only with Windows Terminal) and Segoe MDL2 Assets (same code points).
 Semibold is always the semibold family (`style::semibold_face()` for text that takes its size from
 elsewhere: the Total cells, the wait note); a weight of 600 on Segoe UI Variable Text gives its Bold.
+
+**Text rendering** (D-58). Every font is drawn natural and slightly heavier: `QFont::PreferNoHinting`
+(DirectWrite ClearType natural symmetric, grid fitting off: curves smoothed vertically too, glyphs at
+fractional positions), and every face with a weight axis 50 units heavier than the face Qt picks
+(`style::weight_axis_for`): Segoe UI Variable regular 450, semibold 650, Bold 700 (the axis ends
+there), Cascadia Mono 450 / 650. The Windows 10 fallbacks have no weight axis and are plain natural.
+ui_style's fonts carry it: each names its face (its families, and the regular ones their weight) and
+has the hinting and the axis as its own, so `resolve()` keeps them and the font draws as built
+whatever font it is resolved against (a model's Qt::FontRole, QPainter::setFont, a widget's own
+font under its parent's). The application font is one of them, and `style::keep_text_rendering()`,
+an application event filter, fits every widget's font on Polish and FontChange in every look: a
+copy of a font keeps its axis, so a setBold() copy (the calendar's month and year buttons) or a
+QFont built without ui_style would otherwise draw at the wrong weight. ModernStyle draws menu items
+in a fitted font (a default action bold). A font the app derives for painting alone, with another
+weight or family, goes through `style::fit_text_rendering()` too; it makes the axis the font's own
+only when the font names its families (one that takes them from the font it is resolved against
+takes that font's axis along). Labels, message boxes and tooltips are plain text: rich text makes
+its bold (`<b>`, font-weight) in a text format of its own, which nothing fits, so it would draw at
+the regular axis (`TextRendering.*` fails on a visible rich-text label). High Contrast keeps the
+rendering. Unhinted metrics are fractional: lines are measured as Qt lays them out
+(`ModernStyle::line_height`), and widths that Qt elides by a fraction of a pixel unrounded (ElidedLabel,
+the grids' cut-cell tooltips).
 
 **Tokens.** All text tokens are at least 4.5:1 on window, surface, surface_alt, input, selection,
 hover and the update tint; accent lines, the input stroke, selected text against the input, the
@@ -164,10 +190,13 @@ no weekend colour, a search button is Highlight with HighlightedText (a disabled
 outline), the spinner and the bar use opaque system colours. The app font stays. High Contrast
 wins over `WIZZ_COLOR_SCHEME`.
 
-**Switches** (D-56, BUILDING.md): `WIZZ_COLOR_SCHEME=light|dark` forces a scheme (the title bar
-follows), `WIZZ_HIGH_CONTRAST=1|0` overrides the contrast check, `WIZZ_FONTS=windows10` leaves out
+**Switches** (D-56, D-58, BUILDING.md): `WIZZ_COLOR_SCHEME=light|dark` forces a scheme (the title
+bar follows), `WIZZ_HIGH_CONTRAST=1|0` overrides the contrast check, `WIZZ_FONTS=windows10` leaves out
 the Windows 11 families. They are read at every evaluation of the look, so tests switch a running
-window by changing them and calling `style::refresh_appearance()`.
+window by changing them and calling `style::refresh_appearance()`. `WIZZ_TEXT_RENDERING=hinted|natural`
+draws text as 2.0.0 did (its layout too at 100 %) or without the extra weight, for comparisons and bug
+reports; it is read when a font is built, so it is set before the app starts (tests install the look
+again).
 
 **Tests** (D-57). The GUI tests run under this look (light, High Contrast pinned off; the test main
 installs it like `main()`), on the minimal platform with its Windows font database
@@ -180,14 +209,17 @@ accessible names of D-54 and the minimum window; `FlightGridWidget.*` grabs the 
 the row bars and the ring of a focused grid;
 `MainWindowLayout.*` the whole window at the client area of 980 x 600 (no clipping, 5 round trips
 in view) and of 1320 x 820 (14 round trips); `BusyPanelTest.An_idle_bar_is_completely_still_D_34`
-the still bar. End to end, `named_destination`, `cancel_retrying` and `heavy_cached` also run in
-dark, and `named_destination` at the minimum window, and every run checks the look it showed.
+the still bar; `TextRendering.*` the rendering in every font, widget, popup, dialog and grid cell
+(default, natural, hinted, High Contrast, Windows 10 fonts), Qt's bold copies and the overrides. End
+to end, `named_destination`, `cancel_retrying` and `heavy_cached` also run in dark, and
+`named_destination` at the minimum window, and every run checks the look it showed and the text
+rendering (`diagnostics.json`: the rendering, the UI font's hinting and weight axis).
 
 **Review.** `wizzairhelper_gui_tests --gtest_filter=LookSnapshots.*` with
 `WIZZ_GUI_SNAPSHOT_DIR=<dir>` on the real windows platform renders the window at the default and
 the minimum size and every surface above in light and dark, the Windows 10 fonts and the High
-Contrast fallback, and checks their layout. `check_autotest.py --color-scheme`, `--window 980x600`
-and `--fonts windows10` do the same end to end.
+Contrast fallback, and checks their layout. `check_autotest.py --color-scheme`, `--window 980x600`,
+`--fonts windows10` and `--text-rendering` do the same end to end.
 
 ## Controller and threading (01 §7, §11, §14; 06 §2)
 
@@ -244,7 +276,9 @@ closes unless `--keep-open`. Hidden companions `--data-root`, `--replay` and `--
   screenshots excluded), `EventWatchdog` (exclusive time of every UI-thread dispatch via
   `Application::notify`), the cancel record, per-search requests and durations, the final grids
   against the stored results (rows not in the result, duplicate keys), display/DPI data, the
-  look in use (`environment.look`, the palette's window colour, the style, the UI font's family) and
+  look in use (`environment.look`, the palette's window colour, the style, the UI font's family, the
+  text rendering with the UI font's hinting and weight axis, and the face and weight axis of the UI,
+  semibold, caption and monospace fonts, D-58) and
   `layout_problems()` (`layout_check.hpp`: clipped, cut-off, overlapping widgets, cut texts, tabs
   that do not fit, Cancel fully visible) at every screenshot.
 

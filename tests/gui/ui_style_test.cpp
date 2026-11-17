@@ -34,7 +34,10 @@ TEST(UiStyle, Fonts_follow_the_look_with_their_Windows_10_fallbacks)
     // The semibold face alone takes the size of the font it is resolved against (bold grid
     // cells at 9 pt, the wait note at the panel's size).
     EXPECT_EQ(style::semibold_face().families(), semibold.families());
-    EXPECT_EQ(style::semibold_face().resolveMask(), QFont::FamiliesResolved);
+    // Its families and the text rendering (D-58, which a resolve() must not take from the
+    // other font), no size or weight of its own.
+    EXPECT_EQ(style::semibold_face().resolveMask(),
+              QFont::FamiliesResolved | QFont::HintingPreferenceResolved | QFont::VariableAxesResolved);
     EXPECT_DOUBLE_EQ(style::semibold_face().resolve(style::data_font()).pointSizeF(), 9.0);
     // Grid cells: 9 pt, denser than the UI.
     EXPECT_EQ(style::data_font().families(), form.families());

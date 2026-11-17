@@ -131,7 +131,10 @@ void GridTableView::fit_header_height()
         const QRect label = columns->style()->subElementRect(QStyle::SE_HeaderLabel, &option, columns);
         const QRect text = metrics.boundingRect(QRect{0, 0, std::max(1, label.width()), metrics.height() * 16},
                                                 Qt::AlignLeft | Qt::TextWordWrap, option.text);
-        extra = std::max(extra, text.height() - metrics.height());
+        // Against the same text on one line, as the header's size hint measures it: with natural
+        // rendering (D-58) a line is 17.27 px, laid out as 18, while QFontMetrics::height() rounds
+        // ascent and descent apart (17), which made every one-line header a pixel "taller".
+        extra = std::max(extra, text.height() - metrics.size(0, option.text).height());
     }
     const int minimum = extra > 0 ? columns->sizeHint().height() + extra : 0;
     if (columns->minimumHeight() != minimum) {

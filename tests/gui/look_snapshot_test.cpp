@@ -5,10 +5,11 @@
 // no text): run the test binary directly, optionally with QT_SCALE_FACTOR.
 //
 // Files (<scheme> = light, dark): <scheme>-window.png and -window-980x600.png (the
-// client area), -combo-list, -completer, -calendar, -context-menu, -tooltip,
+// client area), -combo-list, -place-list (the From list around "Stockholm"), -completer, -calendar, -context-menu, -tooltip,
 // -messagebox-question, -messagebox-error, -chooser (with the title bar), -update-bar,
 // -disabled, -hover, -focus-*; win10-light-window*.png (WIZZ_FONTS=windows10) and
-// contrast-window*.png (the High Contrast fallback, probe forced on).
+// contrast-window*.png (the High Contrast fallback, probe forced on). Everything is drawn
+// with the run's WIZZ_TEXT_RENDERING (D-58: the default, or hinted / natural to compare).
 
 #include "app_test_support.hpp"
 #include "busy_panel.hpp"
@@ -17,6 +18,8 @@
 #include "fractional_spin_box.hpp"
 #include "place_combo.hpp"
 #include "flight_grid.hpp"
+#include "grid_row_delegate.hpp"
+#include "heavy_replay.hpp"
 #include "grid_table_view.hpp"
 #include "layout_check.hpp"
 #include "log_view.hpp"
@@ -29,6 +32,8 @@
 #include "update_bar.hpp"
 #include "window_capture.hpp"
 
+#include "wizz/core/catalog.hpp"
+#include "wizz/core/locale.hpp"
 #include "wizz/ui/strings.hpp"
 #include "wizz/ui/update_model.hpp"
 
@@ -46,12 +51,14 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
+#include <QStyleOption>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolTip>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -170,6 +177,42 @@ void run_searches(WindowRig& rig)
     return table.viewport()->height() / table.row_height();
 }
 
+/// "Header: n, ..." for the columns with cells whose text is cut (elided) among the rows in view.
+[[nodiscard]] std::string cut_cells(const wizz::app::GridTableView& table)
+{
+    const QAbstractItemModel& model = *table.model();
+    std::string text;
+    for (int column = 0; column < model.columnCount(); ++column) {
+        if (table.isColumnHidden(column)) {
+            continue;
+        }
+        int cut = 0;
+        for (int row = 0; row < model.rowCount(); ++row) {
+            const QModelIndex index = model.index(row, column);
+            const QRect rect = table.visualRect(index);
+            if (!rect.isValid() || rect.top() >= table.viewport()->height()) {
+                continue;
+            }
+            QStyleOptionViewItem option;
+            option.rect = rect;
+            option.text = index.data(Qt::DisplayRole).toString();
+            option.font = table.font();
+            if (const QVariant font = index.data(Qt::FontRole); font.isValid()) {
+                option.font = qvariant_cast<QFont>(font).resolve(table.font());
+            }
+            option.fontMetrics = QFontMetrics(option.font);
+            if (!option.text.isEmpty() && wizz::app::GridRowDelegate::text_truncated(option, &table)) {
+                ++cut;
+            }
+        }
+        if (cut > 0) {
+            text += (text.empty() ? "" : ", ") + model.headerData(column, Qt::Horizontal).toString().toStdString() + ": " +
+                    std::to_string(cut);
+        }
+    }
+    return text.empty() ? std::string{"none"} : text;
+}
+
 void expect_clean_layout(WindowRig& rig, const std::string& what)
 {
     for (const wizz::app::MainWindow::Page page :
@@ -196,6 +239,8 @@ void render_windows(const QString& prefix, bool count_rows)
         std::printf("%s: %dx%d client, %d round-trip rows in view (viewport %d, row %d, header %d, font %s)\n",
                     qPrintable(prefix), rig.window().width(), rig.window().height(), rows, trips.viewport()->height(),
                     trips.row_height(), trips.horizontalHeader()->height(), qPrintable(trips.font().toString()));
+        std::printf("%s: cut cells in view: round trips %s; outbound %s\n", qPrintable(prefix), cut_cells(trips).c_str(),
+                    cut_cells(*rig.outbound().table()).c_str());
         // The default 1320 x 820 window, unless a small screen (or a large scale) clamped it.
         const QSize outer = rig.window().normal_outer_device_size();
         const QSize wanted = wizz::app::MainWindow::kDefaultSize * rig.window().devicePixelRatioF();
@@ -233,6 +278,32 @@ void render_surfaces(const QString& scheme)
         save(compose(window, {popup}, in_window(*fare, window)), name("combo-list"));
     }
     fare->hidePopup();
+
+    // The From place list around "Stockholm" (the names of the 2.0.0 font report), with the
+    // suggestions of the frozen live map, as the app shows them.
+    wizz::app::PlaceCombo* from_list = input.from_box();
+    const QStringList rig_names = from_list->suggestions();
+    const std::vector<std::string> live_names =
+        wizz::AirportCatalog::from_map_json(wizz::test::app::read_file(wizz::test::app::live_map_path()),
+                                            wizz::Locale::en_us())
+            ->suggestion_names();
+    input.set_suggestions(live_names);
+    from_list->setCurrentIndex(std::max(0, from_list->findText(QStringLiteral("Stockholm"))));
+    from_list->showPopup();
+    pump();
+    from_list->view()->scrollTo(from_list->model()->index(std::max(0, from_list->findText(QStringLiteral("Split"))), 0),
+                                QAbstractItemView::PositionAtTop);  // Split, Stavanger, Stockholm, ... as reported
+    pump();
+    if (QWidget* popup = from_list->view()->window(); popup->isVisible()) {
+        save(compose(window, {popup}, in_window(*from_list, window)), name("place-list"));
+    }
+    from_list->hidePopup();
+    std::vector<std::string> names;
+    for (const QString& rig_name : rig_names) {
+        names.push_back(rig_name.toStdString());
+    }
+    input.set_suggestions(names);
+    input.set_from_text("Budapest");
 
     // Place completer.
     QLineEdit* from = input.from_box()->lineEdit();
@@ -395,7 +466,11 @@ TEST(LookSnapshots, Render_every_surface_in_both_schemes)
                                       Qt::UI_FadeTooltip}) {
         QApplication::setEffectEnabled(effect, false);
     }
+    const QByteArray rendering = qgetenv("WIZZ_TEXT_RENDERING");
     const wizz::test::look::LookGuard guard;  // puts the suite's look back afterwards
+    if (!rendering.isEmpty()) {
+        qputenv("WIZZ_TEXT_RENDERING", rendering);  // the run's rendering, to compare renderings
+    }
 
     for (const char* scheme : {"light", "dark"}) {
         qputenv("WIZZ_COLOR_SCHEME", scheme);

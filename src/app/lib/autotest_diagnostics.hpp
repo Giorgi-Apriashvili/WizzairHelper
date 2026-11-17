@@ -109,6 +109,14 @@ struct LayoutDiagnostics {
     void merge(std::string_view state, const LayoutDiagnostics& check);
 };
 
+/// One of the look's fonts as this machine draws it (D-58).
+struct FontDiagnostics {
+    std::string role;                         ///< "ui", "semibold", "caption", "mono" (the log), "monoSemibold" (elapsed time)
+    std::string face;                         ///< the family of the face Qt picks for it
+    int weight = 0;                           ///< that face's own weight (QFontInfo without the weight axis)
+    std::optional<double> weight_axis;        ///< the "wght" value it draws with; none when it has none
+};
+
 struct EnvironmentDiagnostics {
     std::string os;                           ///< QSysInfo::prettyProductName()
     std::string kernel;                       ///< QSysInfo::kernelVersion()
@@ -118,6 +126,10 @@ struct EnvironmentDiagnostics {
     std::string look;                         ///< "light", "dark" or "high_contrast" (style::appearance())
     std::string window_colour;                ///< the palette's Window colour, "#rrggbb"
     std::string font_family;                  ///< the family the UI font resolved to
+    std::string text_rendering;               ///< the text rendering (style::text_rendering(), D-58)
+    std::string font_hinting;                 ///< the UI font's hinting preference: "default", "none", "vertical", "full"
+    std::optional<double> font_weight_axis;   ///< the UI font's "wght" axis value; none when it has none
+    std::vector<FontDiagnostics> fonts;       ///< the UI, semibold, caption and monospace fonts, in that order
 };
 
 struct AutoTestDiagnostics {

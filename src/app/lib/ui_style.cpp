@@ -4,7 +4,10 @@
 
 #include <QAccessibilityHints>
 #include <QApplication>
+#include <QEvent>
 #include <QFontDatabase>
+#include <QFontInfo>
+#include <QFontVariableAxis>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -15,6 +18,7 @@
 #include <QToolTip>
 #include <QWidget>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <tuple>
@@ -47,6 +51,20 @@ struct State {
     return instance;
 }
 
+[[nodiscard]] constexpr QFont::Tag weight_axis()
+{
+    return QFont::Tag("wght");
+}
+
+/// The fonts the app hands out: `font`, which names its families, with the rendering's hinting
+/// and weight axis as its own (a default-constructed QFont has the application font's only as
+/// copied values, which resolve() replaces).
+[[nodiscard]] QFont finished(QFont font)
+{
+    fit_text_rendering(font);
+    return font;
+}
+
 [[nodiscard]] QFont with_families(const QStringList& list, qreal point_size)
 {
     QFont font;
@@ -54,6 +72,30 @@ struct State {
     font.setPointSizeF(point_size);
     return font;
 }
+
+/// Fits the font of every widget that is polished or whose font changes (keep_text_rendering).
+class TextRenderingKeeper final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if ((event->type() == QEvent::FontChange || event->type() == QEvent::Polish) && watched->isWidgetType()) {
+            auto& widget = *static_cast<QWidget*>(watched);
+            // A font the widget inherits from a parent that needs fitting itself is fitted
+            // there: Qt sends the parent's FontChange after its children's (a parent is
+            // polished before them), and its fitted font reaches them. Fitting the child would
+            // make the inherited weight its own, so it would stay bold when the parent is not.
+            const QWidget* parent = widget.isWindow() ? nullptr : widget.parentWidget();
+            QFont inherited = parent != nullptr ? parent->font() : QFont();
+            if (parent == nullptr || !fit_text_rendering(inherited)) {
+                fit_text_rendering(widget);
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
 
 /// `windows11` first unless WIZZ_FONTS=windows10, then the fallbacks.
 [[nodiscard]] QStringList families(std::initializer_list<const char*> windows11, std::initializer_list<const char*> rest)
@@ -68,6 +110,15 @@ struct State {
         list.push_back(QString::fromLatin1(family));
     }
     return list;
+}
+
+/// Segoe UI Variable Text (Segoe UI) at `point_size`, regular. The weight is the font's own like
+/// its axis: resolved against a bold font, it asks for the face it is drawn in, not for Bold.
+[[nodiscard]] QFont regular_ui_font(qreal point_size)
+{
+    QFont font = with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), point_size);
+    font.setWeight(QFont::Normal);
+    return finished(std::move(font));
 }
 
 [[nodiscard]] bool system_high_contrast()
@@ -441,6 +492,7 @@ void set_text_tone(QWidget& widget, TextTone tone)
 
 bool apply_application_look()
 {
+    keep_text_rendering();
     QApplication::setFont(form_font());
     const bool fusion = QStyleFactory::keys().contains(QStringLiteral("Fusion"), Qt::CaseInsensitive);
     state().appearance.reset();  // install whatever is chosen now
@@ -501,14 +553,113 @@ bool windows10_fonts()
     return qgetenv("WIZZ_FONTS").trimmed().toLower() == "windows10";
 }
 
+std::optional<TextRendering> parse_text_rendering(QByteArrayView value)
+{
+    const QByteArray text = value.toByteArray().trimmed().toLower();
+    for (const TextRendering rendering : {TextRendering::natural_heavier, TextRendering::natural, TextRendering::hinted}) {
+        if (text == text_rendering_name(rendering)) {
+            return rendering;
+        }
+    }
+    return std::nullopt;
+}
+
+TextRendering text_rendering()
+{
+    return parse_text_rendering(qgetenv("WIZZ_TEXT_RENDERING")).value_or(TextRendering::natural_heavier);
+}
+
+const char* text_rendering_name(TextRendering rendering) noexcept
+{
+    switch (rendering) {
+    case TextRendering::natural:
+        return "natural";
+    case TextRendering::hinted:
+        return "hinted";
+    case TextRendering::natural_heavier:
+        break;
+    }
+    return "natural-heavier";
+}
+
+std::optional<float> weight_axis_for(const QFont& font, TextRendering rendering)
+{
+    if (rendering != TextRendering::natural_heavier) {
+        return std::nullopt;
+    }
+    // The face Qt picks does not depend on an axis value, but QFontInfo reports the axis as the
+    // weight: ask without it. QFont caches its engines, so this is a lookup after the first time.
+    QFont plain = font;
+    plain.unsetVariableAxis(weight_axis());
+    const QFontInfo face(plain);
+    for (const QFontVariableAxis& axis : face.variableAxes()) {
+        if (axis.tag() == weight_axis()) {
+            return std::clamp(static_cast<float>(face.weight() + kHeavierBy), static_cast<float>(axis.minimumValue()),
+                              static_cast<float>(axis.maximumValue()));
+        }
+    }
+    return std::nullopt;  // a face without a weight axis (Segoe UI, Consolas) ignores one
+}
+
+bool fit_text_rendering(QFont& font)
+{
+    // A value is set when it differs, and also when the font has it only from the font it was
+    // copied from, so that resolve() keeps it: always the hinting, and the weight axis of a font
+    // that names its own families (its face is its own; a font that takes its families from the
+    // font it is resolved against takes that font's axis along). Only a different value is a
+    // change: a widget whose font already draws right keeps it as it is.
+    const TextRendering rendering = text_rendering();
+    const uint own = font.resolveMask();
+    bool changed = false;
+    const QFont::HintingPreference hinting =
+        rendering == TextRendering::hinted ? QFont::PreferDefaultHinting : QFont::PreferNoHinting;
+    if (font.hintingPreference() != hinting || !(own & QFont::HintingPreferenceResolved)) {
+        changed = font.hintingPreference() != hinting;
+        font.setHintingPreference(hinting);
+    }
+    const std::optional<float> axis = weight_axis_for(font, rendering);
+    const std::optional<float> current = font.isVariableAxisSet(weight_axis())
+                                             ? std::optional<float>(font.variableAxisValue(weight_axis()))
+                                             : std::nullopt;
+    const bool own_face = (own & (QFont::FamiliesResolved | QFont::FamilyResolved)) != 0;
+    if (current != axis || (own_face && !(own & QFont::VariableAxesResolved))) {
+        changed = changed || current != axis;
+        if (axis) {
+            font.setVariableAxis(weight_axis(), *axis);
+        } else {
+            font.unsetVariableAxis(weight_axis());  // explicitly none: resolve() keeps no other font's
+        }
+    }
+    return changed;
+}
+
+bool fit_text_rendering(QWidget& widget)
+{
+    QFont font = widget.font();
+    if (!fit_text_rendering(font)) {
+        return false;
+    }
+    widget.setFont(font);
+    return true;
+}
+
+void keep_text_rendering()
+{
+    static QPointer<TextRenderingKeeper> keeper;
+    if (keeper.isNull()) {
+        keeper = new TextRenderingKeeper(QCoreApplication::instance());
+        QCoreApplication::instance()->installEventFilter(keeper.data());
+    }
+}
+
 QFont form_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), kFormPointSize);
+    return regular_ui_font(kFormPointSize);
 }
 
 QFont data_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
+    return regular_ui_font(9.0);
 }
 
 QFont semibold_face()
@@ -517,7 +668,7 @@ QFont semibold_face()
     // weight 600 of "Segoe UI Variable Text" would give its Bold.
     QFont font;
     font.setFamilies(families({"Segoe UI Variable Text Semibold"}, {"Segoe UI Semibold"}));
-    return font;
+    return finished(std::move(font));
 }
 
 QFont semibold_font(qreal point_size)
@@ -534,7 +685,8 @@ QFont bold_form_font()
 
 QFont caption_font()
 {
-    QFont font = with_families(families({"Segoe UI Variable Small Semibold"}, {"Segoe UI Semibold"}), 8.0);
+    QFont font =
+        finished(with_families(families({"Segoe UI Variable Small Semibold"}, {"Segoe UI Semibold"}), 8.0));
     font.setCapitalization(QFont::AllUppercase);
     font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     return font;
@@ -542,19 +694,19 @@ QFont caption_font()
 
 QFont hint_font()
 {
-    return with_families(families({"Segoe UI Variable Text"}, {"Segoe UI"}), 9.0);
+    return regular_ui_font(9.0);
 }
 
 QFont mono_font(qreal point_size, bool semibold)
 {
     // Windows 10 has Cascadia Mono only with Windows Terminal: Consolas then.
-    QFont font = with_families(families({"Cascadia Mono"}, {"Consolas", "Courier New"}), point_size);
+    QFont font;
+    font.setFamilies(families({"Cascadia Mono"}, {"Consolas", "Courier New"}));
+    font.setPointSizeF(point_size);
     font.setStyleHint(QFont::TypeWriter);
     font.setFixedPitch(true);
-    if (semibold) {
-        font.setWeight(QFont::DemiBold);
-    }
-    return font;
+    font.setWeight(semibold ? QFont::DemiBold : QFont::Normal);
+    return finished(std::move(font));  // after the weight: the face it picks sets the axis
 }
 
 QFont icon_font(qreal point_size)

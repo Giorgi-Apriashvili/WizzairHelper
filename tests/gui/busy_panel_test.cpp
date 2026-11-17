@@ -15,6 +15,7 @@
 
 #include <QFont>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QLabel>
 #include <QLayout>
 #include <QPainter>
@@ -27,6 +28,7 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include <QTimer>
+#include <QtMath>
 
 #include <gtest/gtest.h>
 
@@ -967,17 +969,19 @@ TEST_F(BusyPanelLayoutTest, A_status_slightly_too_long_is_drawn_1_pt_smaller_bef
     EXPECT_EQ(label->compact_font()->families(), panel_->font().families());
     EXPECT_DOUBLE_EQ(label->compact_font()->pointSizeF(), panel_->font().pointSizeF() - 1.0);
     const QString text = QString::fromStdString(wizz::ui::strings::request_cap(6794, 148));
-    const int full = QFontMetrics(panel_->font()).horizontalAdvance(text);
-    const int compact = QFontMetrics(*label->compact_font()).horizontalAdvance(text);
+    // The widths the text needs: natural rendering (D-58) places glyphs at fractional positions.
+    const int full = qCeil(QFontMetricsF(panel_->font()).horizontalAdvance(text));
+    const int compact = qCeil(QFontMetricsF(*label->compact_font()).horizontalAdvance(text));
     ASSERT_LT(compact, full);
 
     panel_->end(wizz::ui::strings::request_cap(6794, 148), false);
+    panel_->layout()->activate();  // the label's width once the ended panel is laid out
     const int status_x = label->x();
     const auto width_for_label = [&](int label_width) { return panel_->width() - label->width() + label_width; };
     panel_->resize(width_for_label((full + compact) / 2), panel_->height());
     panel_->layout()->activate();
-    ASSERT_LT(label->contentsRect().width(), full);
-    ASSERT_GE(label->contentsRect().width(), compact);
+    ASSERT_LT(label->contentsRect().width(), full) << "compact " << compact;
+    ASSERT_GE(label->contentsRect().width(), compact) << "full " << full;
     EXPECT_FALSE(label->is_elided()) << "fits 1 pt smaller";
     EXPECT_EQ(label->painted_font(), *label->compact_font());
     EXPECT_TRUE(label->tooltip_text().isEmpty());

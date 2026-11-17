@@ -12,8 +12,10 @@
 
 #include <QComboBox>
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QImage>
 #include <QLineEdit>
+#include <QtMath>
 
 #include <gtest/gtest.h>
 
@@ -93,8 +95,9 @@ TEST(SearchButton, As_tall_as_the_inputs_and_as_wide_as_icon_text_and_padding)
 {
     // ModernStyle::control_height is the height of every input and push button; the search
     // buttons share it so a row of fields and its button line up (D-53).
+    // The UI font's line rounded up (ModernStyle::line_height, D-58) and 10 px.
     const int control = ModernStyle::control_height(QFontMetrics(style::form_font()));
-    EXPECT_EQ(control, std::max(26, QFontMetrics(style::form_font()).height() + 10));
+    EXPECT_EQ(control, std::max(26, qCeil(QFontMetricsF(style::form_font()).height()) + 10));
     QLineEdit edit;
     QComboBox combo;
     combo.addItem(QStringLiteral("Regular fares"));

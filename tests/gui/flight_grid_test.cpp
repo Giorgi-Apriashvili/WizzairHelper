@@ -16,16 +16,20 @@
 
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QFontMetricsF>
 #include <QHeaderView>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QStyle>
 #include <QStyleOptionViewItem>
+#include <QtMath>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -130,7 +134,9 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     // Semibold: the semibold family (a weight of 600 on the Text family gives its Bold), at the
     // view's size.
     EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().families(), app::style::semibold_face().families());
-    EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().resolveMask(), QFont::FamiliesResolved);
+    // Its families and the text rendering (D-58); the size and weight are the view's.
+    EXPECT_EQ(total.data(Qt::FontRole).value<QFont>().resolveMask(),
+              QFont::FamiliesResolved | QFont::HintingPreferenceResolved | QFont::VariableAxesResolved);
     EXPECT_FALSE(f.grid.model()->index(0, col(FlightColumn::per_person)).data(Qt::FontRole).isValid());
     EXPECT_EQ(total.data(Qt::TextAlignmentRole).value<Qt::Alignment>(), Qt::AlignRight | Qt::AlignVCenter);
     EXPECT_EQ(f.grid.model()->flags(total), Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemNeverHasChildren);
@@ -500,6 +506,37 @@ TEST(FlightGridWidget, Truncated_cells_qualify_for_a_tooltip)
     EXPECT_FALSE(app::GridRowDelegate::text_truncated(option, f.grid.table()));
     option.rect = QRect{0, 0, text_width / 2, 20};
     EXPECT_TRUE(app::GridRowDelegate::text_truncated(option, f.grid.table()));
+}
+
+TEST(FlightGridWidget, A_cell_cut_by_a_fraction_of_a_pixel_qualifies_for_a_tooltip)
+{
+    // Without hinting (D-58) a text is, say, 61.4 px wide: QCommonStyle elides it in a 61 px
+    // text rect, so it needs a tooltip, although its advance rounds to 61.
+    Fixture f;
+    f.grid.set_results(fss01(), "EUR", "");
+    const app::GridRowDelegate delegate;
+    const int margin = f.grid.table()->style()->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, f.grid.table()) + 1;
+    int fractional = 0;
+    for (int row = 0; row < f.grid.model()->rowCount(); ++row) {
+        for (int column = 0; column < f.grid.model()->columnCount(); ++column) {
+            QStyleOptionViewItem option;
+            option.initFrom(f.grid.table()->viewport());
+            delegate.initStyleOption(&option, f.grid.model()->index(row, column));
+            const qreal width = QFontMetricsF(option.fontMetrics).horizontalAdvance(option.text);
+            if (option.text.isEmpty() || width == std::floor(width)) {
+                continue;
+            }
+            ++fractional;
+            option.rect = QRect{0, 0, static_cast<int>(std::floor(width)) + 2 * margin, 20};
+            EXPECT_TRUE(app::GridRowDelegate::text_truncated(option, f.grid.table()))
+                << option.text.toStdString() << ": " << width << " px in " << option.rect.width() - 2 * margin;
+            option.rect.setWidth(qCeil(width) + 2 * margin);
+            EXPECT_FALSE(app::GridRowDelegate::text_truncated(option, f.grid.table())) << option.text.toStdString();
+        }
+    }
+    if (f.grid.table()->font().hintingPreference() == QFont::PreferNoHinting) {
+        EXPECT_GT(fractional, 20) << "natural rendering: most advances are fractional";
+    }
 }
 
 } // namespace

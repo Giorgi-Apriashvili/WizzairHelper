@@ -2,6 +2,7 @@
 
 #include "busy_panel.hpp"
 #include "layout_check.hpp"
+#include "log_view.hpp"
 #include "main_window.hpp"
 #include "modern_style.hpp"
 #include "qt_strings.hpp"
@@ -71,6 +72,22 @@ void write_strings(json::Writer& writer, const std::vector<std::string>& values)
         writer.string(value);
     }
     writer.end_array();
+}
+
+[[nodiscard]] FontDiagnostics describe_font(std::string role, const QFont& font)
+{
+    const QFont::Tag weight_axis("wght");
+    QFont plain = font;
+    plain.unsetVariableAxis(weight_axis);  // QFontInfo reports a set axis as the weight
+    const QFontInfo face(plain);
+    FontDiagnostics described;
+    described.role = std::move(role);
+    described.face = to_utf8(face.family());
+    described.weight = face.weight();
+    if (font.isVariableAxisSet(weight_axis)) {
+        described.weight_axis = font.variableAxisValue(weight_axis);
+    }
+    return described;
 }
 
 void write_timer(json::Writer& writer, const TimerGapProbe::Stats& timer)
@@ -245,6 +262,29 @@ EnvironmentDiagnostics describe_environment(const Locale& locale)
     }
     environment.window_colour = to_utf8(QApplication::palette().color(QPalette::Window).name());
     environment.font_family = to_utf8(QFontInfo(QApplication::font()).family());
+    environment.text_rendering = style::text_rendering_name(style::text_rendering());
+    switch (QApplication::font().hintingPreference()) {
+    case QFont::PreferDefaultHinting:
+        environment.font_hinting = "default";
+        break;
+    case QFont::PreferNoHinting:
+        environment.font_hinting = "none";
+        break;
+    case QFont::PreferVerticalHinting:
+        environment.font_hinting = "vertical";
+        break;
+    case QFont::PreferFullHinting:
+        environment.font_hinting = "full";
+        break;
+    }
+    if (const QFont font = QApplication::font(); font.isVariableAxisSet(QFont::Tag("wght"))) {
+        environment.font_weight_axis = font.variableAxisValue(QFont::Tag("wght"));
+    }
+    // The faces the minimal platform of the tests does not have as the app asks for them (D-57):
+    // only the real platform shows their weight axis.
+    environment.fonts = {describe_font("ui", QApplication::font()), describe_font("semibold", style::bold_form_font()),
+                         describe_font("caption", style::caption_font()), describe_font("mono", LogView::log_font()),
+                         describe_font("monoSemibold", BusyPanel::elapsed_font())};
     return environment;
 }
 
@@ -332,6 +372,29 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("look").string(environment.look);
     writer.key("windowColour").string(environment.window_colour);
     writer.key("fontFamily").string(environment.font_family);
+    writer.key("textRendering").string(environment.text_rendering);
+    writer.key("fontHinting").string(environment.font_hinting);
+    writer.key("fontWeightAxis");
+    if (environment.font_weight_axis) {
+        writer.number(*environment.font_weight_axis);
+    } else {
+        writer.null();
+    }
+    writer.key("fonts").begin_array();
+    for (const FontDiagnostics& font : environment.fonts) {
+        writer.begin_object();
+        writer.key("role").string(font.role);
+        writer.key("face").string(font.face);
+        writer.key("weight").integer(font.weight);
+        writer.key("weightAxis");
+        if (font.weight_axis) {
+            writer.number(*font.weight_axis);
+        } else {
+            writer.null();
+        }
+        writer.end_object();
+    }
+    writer.end_array();
     writer.end_object();
 
     writer.end_object();

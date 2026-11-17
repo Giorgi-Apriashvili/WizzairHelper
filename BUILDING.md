@@ -192,8 +192,9 @@ Example (an isolated profile and a replayed network):
 
 The checker runs a named scenario and validates everything; `--scale 1.5` / `--scale 2` run it at
 150 % / 200 % (`QT_SCALE_FACTOR`), `--window 980x600` starts the window at that size (through the
-isolated profile's settings.json), `--color-scheme light|dark`, `--high-contrast` and
-`--fonts windows10` set the look's switches below, and `--exe` can point at a packaged exe:
+isolated profile's settings.json), `--color-scheme light|dark`, `--high-contrast`,
+`--fonts windows10` and `--text-rendering hinted|natural|natural-heavier` set the look's switches
+below, and `--exe` can point at a packaged exe:
 
 ```powershell
 python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\WizzairHelper.exe `
@@ -207,16 +208,33 @@ Scenarios: `named_destination`, `anywhere_return_from_top`, `not_served`, `same_
 ### The look's diagnostic switches
 
 The app follows Windows: light or dark from the app mode, High Contrast with the system's colours
-and the plain native style, and it changes along while it runs (DECISIONS D-53..D-56). For tests,
-screenshots and diagnosis these environment variables override what Windows says, like
-`QT_SCALE_FACTOR`; a normal installation never needs them:
+and the plain native style, and it changes along while it runs (DECISIONS D-53..D-56). Its text is
+drawn natural and slightly heavier (D-58). For tests, screenshots and diagnosis these environment
+variables override what Windows says and how text is drawn, like `QT_SCALE_FACTOR`; a normal
+installation never needs them:
 
 | Variable | Effect |
 |---|---|
 | `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
 | `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
 | `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
+| `WIZZ_TEXT_RENDERING=hinted` / `natural` | Draws all text, popups and dialogs included, another way than the default, `natural-heavier` (ClearType without hinting, Segoe UI Variable and Cascadia Mono 50 units heavier on their weight axis; D-58): `hinted` as 2.0.0 did (Qt's default hinting, at 100 % DirectWrite GDI-classic ClearType: glyphs snapped to whole pixels), for comparisons and bug reports: 2.0.0's text, and at 100 % its layout too (at 150 % and 200 % lines are measured as laid out, so the window's lower part can sit 2 px lower than in 2.0.0); `natural` without the extra weight. Read when a font is built, so set it before the app starts; unknown values mean the default. `diagnostics.json` reports the rendering, the UI font's hinting and its weight axis (`environment.textRendering`, `fontHinting`, `fontWeightAxis`) and the face and weight axis of the UI, semibold, caption and monospace fonts (`environment.fonts`) |
 
 The GUI test binary reads them too: `WIZZ_COLOR_SCHEME=dark` runs the whole suite in the dark look
 (its tests compare with the theme's tokens, not with fixed colours), `WIZZ_FONTS=windows10` with the
-Windows 10 families. Tests that change the look restore these variables afterwards.
+Windows 10 families, `WIZZ_TEXT_RENDERING=hinted` with 2.0.0's text and metrics. Tests that change the look
+(`LookGuard`) run with the defaults and restore these variables afterwards.
+
+To compare a rendering in the built app without touching your own profile, run it as an autotest
+(`--data-root` counts only with `--autotest`) on a replay and keep the window open afterwards. The
+`heavy_cached` check writes a replay with the whole frozen route map (189 airports in the place
+lists) into its work directory:
+
+```powershell
+python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\WizzairHelper.exe `
+    --replay-root tests\replay --scenario heavy_cached --work-dir C:\Temp\autotest\heavy
+$env:WIZZ_TEXT_RENDERING = 'hinted'
+build\msvc-x64\src\app\Release\WizzairHelper.exe --autotest C:\Temp\wizz-hinted\out `
+    --data-root C:\Temp\wizz-hinted\data --replay C:\Temp\autotest\heavy\replay `
+    --fixed-now 2026-11-02T10:00:00Z --from Budapest --from-radius 0 --out 2026-11-03:2026-12-14 --keep-open
+```
