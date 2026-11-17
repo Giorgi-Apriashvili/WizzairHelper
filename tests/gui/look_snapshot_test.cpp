@@ -62,6 +62,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QStyleOption>
 #include <QTabBar>
 #include <QTabWidget>
@@ -73,6 +74,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -602,6 +604,31 @@ void render_settings(const QString& look)
         pump();
         EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{}) << where << " " << state.toStdString();
         save(capture_top_level(dialog), name(QStringLiteral("settings-") + state));
+        dialog.close();
+    }
+
+    // The keyboard focus on the check box and on the selected choice: whole rings (D-63).
+    for (const auto& [state, status] : settings_states()) {
+        if (state != QStringLiteral("latest")) {
+            continue;
+        }
+        wizz::app::SettingsDialog dialog{wizz::update::UpdateOptions{}, status, &window};
+        dialog.show();
+        dialog.activateWindow();
+        pump();
+        const std::pair<QString, QWidget*> focused[] = {
+            {QStringLiteral("settings-focus-check-box"), dialog.check_automatically_box()},
+            {QStringLiteral("settings-focus-choice"), dialog.when_found_button(wizz::update::WhenFound::install_on_close)},
+        };
+        for (const auto& [what, widget] : focused) {
+            dialog.setAttribute(Qt::WA_KeyboardFocusChange);
+            widget->setFocus(Qt::TabFocusReason);
+            pump();
+            dialog.setAttribute(Qt::WA_KeyboardFocusChange);
+            widget->update();
+            pump();
+            save(capture_top_level(dialog), name(what));
+        }
         dialog.close();
     }
 

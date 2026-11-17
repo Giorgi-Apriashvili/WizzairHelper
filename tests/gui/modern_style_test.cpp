@@ -38,6 +38,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace {
 
@@ -191,13 +192,38 @@ TEST(ModernStyle, Tabs_headers_scroll_bars_and_check_boxes_keep_their_metrics)
     EXPECT_EQ(s.pixelMetric(QStyle::PM_CheckBoxLabelSpacing), 8);
     const QCheckBox box(QStringLiteral("Return to the airport I left from"));
     EXPECT_GE(box.sizeHint().height(), 18 + 4);
+    // The box 3 px in from the left, so its keyboard focus ring (3 px around it) is whole.
+    QStyleOptionButton box_option;
+    box_option.initFrom(&box);
+    box_option.rect = QRect(0, 0, 260, 26);  // the box: x 3..20, y 4..21
+    box_option.text = box.text();
+    EXPECT_EQ(s.subElementRect(QStyle::SE_CheckBoxIndicator, &box_option, &box).left(), 3);
+    EXPECT_EQ(s.subElementRect(QStyle::SE_CheckBoxContents, &box_option, &box).left(), 3 + 18 + 8);
+    const style::Theme& theme = style::theme();
+    const auto draw = [&box_option, &box, &theme](QStyle::State state) {
+        QStyleOptionButton drawn = box_option;
+        drawn.state = state;
+        QImage image(drawn.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(theme.surface);
+        QPainter painter(&image);
+        QApplication::style()->drawControl(QStyle::CE_CheckBox, &drawn, &painter, &box);
+        return image;
+    };
+    const QImage focused =
+        draw(QStyle::State_Off | QStyle::State_Enabled | QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange);
+    EXPECT_EQ(focused.pixelColor(1, 13), theme.accent_line) << "the ring's left side is inside the check box";
+    EXPECT_EQ(focused.pixelColor(12, 13), theme.input);
+    const QImage disabled = draw(QStyle::State_Off);
+    EXPECT_EQ(disabled.pixelColor(12, 13), theme.input_disabled);
+    EXPECT_EQ(disabled.pixelColor(3, 13), theme.text_disabled) << "a disabled box keeps a visible outline";
 }
 
 TEST(ModernStyle, Radio_buttons_are_circles_in_the_check_box_colours)
 {
-    // The Settings window's choices (D-63): an 18 px circle 8 px before the text, the check
-    // box's input colours, an accent circle with a white dot when checked, and the accent
-    // ring only after a keyboard focus change.
+    // The Settings window's choices (D-63): an 18 px circle 8 px before the text, 3 px in
+    // from the left so the focus ring around it is whole, the check box's input colours, an
+    // accent circle with a white dot when checked, the accent ring only after a keyboard
+    // focus change, and a disabled circle outlined in the disabled text colour.
     QStyle& s = app_style();
     EXPECT_EQ(s.pixelMetric(QStyle::PM_ExclusiveIndicatorWidth), 18);
     EXPECT_EQ(s.pixelMetric(QStyle::PM_ExclusiveIndicatorHeight), 18);
@@ -209,8 +235,8 @@ TEST(ModernStyle, Radio_buttons_are_circles_in_the_check_box_colours)
     const auto draw = [&radio, &theme](QStyle::State state) {
         QStyleOptionButton option;
         option.initFrom(&radio);
-        option.state = state | QStyle::State_Enabled;
-        option.rect = QRect(0, 0, 220, 26);  // the circle: x 0..17, y 4..21, centre (9, 13)
+        option.state = state;
+        option.rect = QRect(0, 0, 220, 26);  // the circle: x 3..20, y 4..21, centre (12, 13)
         option.text = radio.text();
         QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(theme.surface);
@@ -218,18 +244,39 @@ TEST(ModernStyle, Radio_buttons_are_circles_in_the_check_box_colours)
         QApplication::style()->drawControl(QStyle::CE_RadioButton, &option, &painter, &radio);
         return image;
     };
-    const QImage on = draw(QStyle::State_On);
-    EXPECT_EQ(on.pixelColor(9, 13), theme.on_accent) << "the dot";
-    EXPECT_EQ(on.pixelColor(3, 13), theme.accent) << "the circle";
-    EXPECT_EQ(on.pixelColor(9, 2), theme.surface) << "no ring without keyboard focus";
-    const QImage off = draw(QStyle::State_Off);
-    EXPECT_EQ(off.pixelColor(9, 13), theme.input);
-    EXPECT_EQ(off.pixelColor(3, 13), theme.input);
+    const QImage on = draw(QStyle::State_On | QStyle::State_Enabled);
+    EXPECT_EQ(on.pixelColor(12, 13), theme.on_accent) << "the dot";
+    EXPECT_EQ(on.pixelColor(6, 13), theme.accent) << "the circle";
+    EXPECT_EQ(on.pixelColor(1, 13), theme.surface) << "3 px of room before the circle";
+    EXPECT_EQ(on.pixelColor(12, 2), theme.surface) << "no ring without keyboard focus";
+    const QImage off = draw(QStyle::State_Off | QStyle::State_Enabled);
+    EXPECT_EQ(off.pixelColor(12, 13), theme.input);
+    EXPECT_EQ(off.pixelColor(6, 13), theme.input);
     EXPECT_EQ(pixels_of(off, theme.accent), 0) << "no accent while unchecked";
-    const QImage mouse_focus = draw(QStyle::State_On | QStyle::State_HasFocus);
-    EXPECT_EQ(mouse_focus.pixelColor(9, 2), theme.surface) << "a click shows no ring";
-    const QImage keyboard_focus = draw(QStyle::State_On | QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange);
-    EXPECT_EQ(keyboard_focus.pixelColor(9, 2), theme.accent_line) << "the ring above the circle";
+    const QImage mouse_focus = draw(QStyle::State_On | QStyle::State_Enabled | QStyle::State_HasFocus);
+    EXPECT_EQ(mouse_focus.pixelColor(12, 2), theme.surface) << "a click shows no ring";
+    const QImage keyboard_focus = draw(QStyle::State_Off | QStyle::State_Enabled | QStyle::State_HasFocus |
+                                       QStyle::State_KeyboardFocusChange);
+    EXPECT_EQ(keyboard_focus.pixelColor(12, 2), theme.accent_line) << "the ring above the circle";
+    EXPECT_EQ(keyboard_focus.pixelColor(1, 13), theme.accent_line) << "and left of it, inside the button";
+    EXPECT_EQ(keyboard_focus.pixelColor(22, 13), theme.accent_line) << "and right of it";
+
+    QStyleOptionButton geometry;
+    geometry.initFrom(&radio);
+    geometry.rect = QRect(0, 0, 220, 26);
+    geometry.text = radio.text();
+    EXPECT_EQ(s.subElementRect(QStyle::SE_RadioButtonIndicator, &geometry, &radio).left(), 3);
+    EXPECT_EQ(s.subElementRect(QStyle::SE_RadioButtonContents, &geometry, &radio).left(), 3 + 18 + 8);
+
+    const QImage disabled = draw(QStyle::State_Off);
+    EXPECT_EQ(disabled.pixelColor(12, 13), theme.input_disabled);
+    const QColor edge = disabled.pixelColor(3, 13);  // the circle's left edge, antialiased
+    const auto near = [](const QColor& a, const QColor& b) {
+        return std::abs(a.red() - b.red()) <= 24 && std::abs(a.green() - b.green()) <= 24 &&
+               std::abs(a.blue() - b.blue()) <= 24;
+    };
+    EXPECT_TRUE(near(edge, theme.text_disabled)) << "outlined in the disabled text colour, not "
+                                                 << edge.name().toStdString();
 }
 
 TEST(ModernStyle, Popup_list_and_menu_items_are_roomy)

@@ -46,6 +46,9 @@ constexpr int kHeaderHPadding = 9;
 constexpr int kHeaderVPadding = 5;
 constexpr int kHeaderArrowSpace = 14;
 constexpr int kIndicatorSize = 18;
+/// Room before a check box's or radio button's indicator for the left side of its focus
+/// ring, which lies 3 px around the indicator (a painter cannot draw outside the widget).
+constexpr int kIndicatorRingMargin = 3;
 constexpr int kScrollBarExtent = 12;
 
 [[nodiscard]] const style::Theme& t()
@@ -595,7 +598,7 @@ QSize ModernStyle::sizeFromContents(ContentsType type, const QStyleOption* optio
     case CT_CheckBox:
     case CT_RadioButton: {
         const QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
-        return QSize(result.width(), std::max(result.height(), kIndicatorSize + 4));
+        return QSize(result.width() + kIndicatorRingMargin, std::max(result.height(), kIndicatorSize + 4));
     }
     case CT_ItemViewItem: {
         QSize result = QProxyStyle::sizeFromContents(type, option, size, widget);
@@ -752,6 +755,16 @@ QRect ModernStyle::subElementRect(SubElement element, const QStyleOption* option
         const QRect r = option->rect;
         return QRect(r.right() - kHeaderHPadding - 10 + 1, r.center().y() - 5, 10, 10);
     }
+    case SE_CheckBoxIndicator:
+    case SE_RadioButtonIndicator:
+        return QProxyStyle::subElementRect(element, option, widget).translated(kIndicatorRingMargin, 0);
+    case SE_CheckBoxContents:
+    case SE_RadioButtonContents: {
+        // Where CE_CheckBox / CE_RadioButton draw the label.
+        const int spacing = proxy()->pixelMetric(
+            element == SE_CheckBoxContents ? PM_CheckBoxLabelSpacing : PM_RadioButtonLabelSpacing, option, widget);
+        return option->rect.adjusted(kIndicatorRingMargin + kIndicatorSize + spacing, 0, 0, 0);
+    }
     case SE_TabWidgetTabContents: {
         // Inside the pane's 1 px frame; the bottom keeps clear of the rounded corners.
         const QRect pane = proxy()->subElementRect(SE_TabWidgetTabPane, option, widget);
@@ -886,7 +899,8 @@ void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* op
             painter->drawPolyline(QPolygonF() << o + QPointF(s * 0.25, s * 0.52) << o + QPointF(s * 0.43, s * 0.70)
                                               << o + QPointF(s * 0.76, s * 0.33));
         } else {
-            painter->setPen(QPen(!enabled ? t().border : hovered ? t().text_secondary : t().input_underline, 1.0));
+            // Disabled: the disabled text colour, so the box still reads as one (D-63).
+            painter->setPen(QPen(!enabled ? t().text_disabled : hovered ? t().text_secondary : t().input_underline, 1.0));
             painter->setBrush(!enabled ? t().input_disabled : hovered ? t().hover : t().input);
             painter->drawRoundedRect(box, 4, 4);
         }
@@ -909,7 +923,7 @@ void ModernStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* op
             const qreal dot = enabled && hovered ? 4.0 : 3.5;
             painter->drawEllipse(circle.center(), dot, dot);
         } else {
-            painter->setPen(QPen(!enabled ? t().border : hovered ? t().text_secondary : t().input_underline, 1.0));
+            painter->setPen(QPen(!enabled ? t().text_disabled : hovered ? t().text_secondary : t().input_underline, 1.0));
             painter->setBrush(!enabled ? t().input_disabled : hovered ? t().hover : t().input);
             painter->drawEllipse(circle);
         }
@@ -994,13 +1008,15 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
     case CE_CheckBox:
         if (const auto* box = qstyleoption_cast<const QStyleOptionButton*>(option)) {
             QStyleOptionButton part = *box;
-            part.rect = QRect(box->rect.left(), box->rect.top(), kIndicatorSize, box->rect.height());
+            const int indicator_left = box->rect.left() + kIndicatorRingMargin;
+            part.rect = QRect(indicator_left, box->rect.top(), kIndicatorSize, box->rect.height());
             proxy()->drawPrimitive(PE_IndicatorCheckBox, &part, painter, widget);
-            part.rect = box->rect.adjusted(kIndicatorSize + proxy()->pixelMetric(PM_CheckBoxLabelSpacing, box, widget),
+            part.rect = box->rect.adjusted(kIndicatorRingMargin + kIndicatorSize +
+                                               proxy()->pixelMetric(PM_CheckBoxLabelSpacing, box, widget),
                                            0, 0, 0);
             QProxyStyle::drawControl(CE_CheckBoxLabel, &part, painter, widget);
             if (box->state.testFlag(State_HasFocus) && box->state.testFlag(State_KeyboardFocusChange)) {
-                const QRect square(box->rect.left(), box->rect.center().y() - kIndicatorSize / 2 + 1, kIndicatorSize,
+                const QRect square(indicator_left, box->rect.center().y() - kIndicatorSize / 2 + 1, kIndicatorSize,
                                    kIndicatorSize);
                 draw_focus_ring(painter, square.adjusted(-3, -3, 3, 3), t().accent_line, 6);
             }
@@ -1009,15 +1025,17 @@ void ModernStyle::drawControl(ControlElement element, const QStyleOption* option
     case CE_RadioButton:
         if (const auto* button = qstyleoption_cast<const QStyleOptionButton*>(option)) {
             QStyleOptionButton part = *button;
-            part.rect = QRect(button->rect.left(), button->rect.top(), kIndicatorSize, button->rect.height());
+            const QRect indicator(button->rect.left() + kIndicatorRingMargin, button->rect.top(), kIndicatorSize,
+                                  button->rect.height());
+            part.rect = indicator;
             proxy()->drawPrimitive(PE_IndicatorRadioButton, &part, painter, widget);
-            part.rect = button->rect.adjusted(
-                kIndicatorSize + proxy()->pixelMetric(PM_RadioButtonLabelSpacing, button, widget), 0, 0, 0);
+            part.rect = button->rect.adjusted(kIndicatorRingMargin + kIndicatorSize +
+                                                  proxy()->pixelMetric(PM_RadioButtonLabelSpacing, button, widget),
+                                              0, 0, 0);
             QProxyStyle::drawControl(CE_RadioButtonLabel, &part, painter, widget);
             if (button->state.testFlag(State_HasFocus) && button->state.testFlag(State_KeyboardFocusChange)) {
                 // A round ring around the circle, like the check box's around its box.
-                const QRect circle = radio_indicator_rect(
-                    QRect(button->rect.left(), button->rect.top(), kIndicatorSize, button->rect.height()));
+                const QRect circle = radio_indicator_rect(indicator);
                 draw_focus_ring(painter, circle.adjusted(-3, -3, 3, 3), t().accent_line, (kIndicatorSize + 6 - 2) / 2.0);
             }
         }
