@@ -419,6 +419,9 @@ TEST(SettingsWindow, Unchecking_the_box_stops_the_automatic_checks_but_not_Check
     ASSERT_EQ(rig.backend->checks(), 1) << "a fresh profile checks once";
     SettingsDialog& dialog = open_settings(rig.window());
     dialog.check_automatically_box()->click();
+    // An evaluation already on its worker carries the policy from before the click; let it
+    // end before the clock moves, so the new period meets only the switched-off policy.
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller()->is_running(); }));
     rig.clock->advance(std::chrono::days{40});  // a new day, week and month
     const int evaluations = rig.backend->evaluations();
     ASSERT_TRUE(gui::wait_until([&] { return rig.backend->evaluations() >= evaluations + 3; }));
