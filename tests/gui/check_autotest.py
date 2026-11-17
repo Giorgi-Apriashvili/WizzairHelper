@@ -22,8 +22,9 @@ inherits the caller's environment. Every run checks that the app shows the look 
 (DECISIONS D-53..D-56): High Contrast when Windows (or WIZZ_HIGH_CONTRAST) says so, else
 WIZZ_COLOR_SCHEME, else the Windows app mode (AppsUseLightTheme) - in diagnostics.json (the look, its
 palette's window colour, ModernStyle) and in the first screenshot, whose most common colour must be
-the look's window or surface colour - and draws its text as D-58 says: natural, the UI font 50 units
-heavier on its weight axis where it has one, unless WIZZ_TEXT_RENDERING asks for another rendering.
+the look's window or surface colour - and draws its text as D-58 says: natural, the UI, semibold,
+caption and monospace fonts 50 units heavier on their weight axis where their face has one, unless
+WIZZ_TEXT_RENDERING asks for another rendering.
 
 The replay directory is tests/replay/<scenario>, except for the heavy cached
 replays (heavy_cached, cancel_cached), whose timetables are generated into
@@ -65,6 +66,12 @@ DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'cancel', 'searches', 'grids', 'display
 # The window and surface colours of the light and dark looks (style::Theme, DECISIONS D-53).
 LOOK_COLOURS = {'light': ('#f3f2f6', '#ffffff'), 'dark': ('#131217', '#1d1c22')}
 TEXT_RENDERINGS = ('natural-heavier', 'natural', 'hinted')
+# D-58: the weight axis natural-heavier gives each face the app draws, by the face Qt picks and its own
+# weight (environment.fonts); a face that is not listed (Segoe UI, Consolas: no weight axis) has none.
+CHOSEN_AXES = {('Segoe UI Variable Text', 400): 450, ('Segoe UI Variable Text', 700): 700,
+               ('Segoe UI Variable Text Semibold', 600): 650, ('Segoe UI Variable Small Semibold', 600): 650,
+               ('Cascadia Mono', 400): 450, ('Cascadia Mono', 600): 650, ('Cascadia Mono', 700): 700}
+FONT_ROLES = ['ui', 'semibold', 'caption', 'mono', 'monoSemibold']
 CANCELLING = 'Cancelling… (finishing the current request)'
 PRESSES = ['Esc', 'Cancel button', 'Esc', 'Cancel handler']
 
@@ -265,6 +272,15 @@ class Checker:
         self.diag_equal('environment.fontHinting', 'default' if expected == 'hinted' else 'none')
         variable = (self.diag('environment.fontFamily') or '').startswith('Segoe UI Variable')
         self.diag_equal('environment.fontWeightAxis', 450 if expected == 'natural-heavier' and variable else None)
+        # The semibold, caption and monospace faces too: the tests' minimal platform lacks two of them (D-57).
+        fonts = self.diag('environment.fonts') or []
+        roles = [font.get('role') for font in fonts]
+        self.expect(roles == FONT_ROLES, 'diagnostics environment.fonts: roles %r, expected %r' % (roles, FONT_ROLES))
+        for font in fonts:
+            face, weight, axis = font.get('face'), font.get('weight'), font.get('weightAxis')
+            wanted = CHOSEN_AXES.get((face, weight)) if expected == 'natural-heavier' else None
+            self.expect(axis == wanted, 'diagnostics environment.fonts %s: %s %s draws with weight axis %r, D-58 '
+                        'gives it %r' % (font.get('role'), face, weight, axis, wanted))
 
     def diagnostics_common(self, max_gap_ms, scale):
         d = self.diagnostics
@@ -1077,7 +1093,7 @@ def main():
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
           'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
-          'work area %s; look %s (%s, %s, text rendering %s, hinting %s, weight axis %s); %s' %
+          'work area %s; look %s (%s, %s, text rendering %s, hinting %s, weight axis %s; %s); %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
@@ -1087,6 +1103,8 @@ def main():
            diagnostics.get('environment', {}).get('style'), diagnostics.get('environment', {}).get('fontFamily'),
            diagnostics.get('environment', {}).get('textRendering'), diagnostics.get('environment', {}).get('fontHinting'),
            diagnostics.get('environment', {}).get('fontWeightAxis'),
+           ', '.join('%s %s %s' % (font.get('role'), font.get('face'), font.get('weightAxis'))
+                     for font in diagnostics.get('environment', {}).get('fonts') or []),
            diagnostics.get('environment', {}).get('os')))
     if checker.failures:
         for failure in checker.failures:

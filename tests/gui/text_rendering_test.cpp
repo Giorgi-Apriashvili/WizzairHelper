@@ -6,7 +6,8 @@
 // of the main window's pages, of every popup and of every dialog, and the fonts the item views'
 // models give their cells; that the fonts Qt derives from a widget font (setBold() copies: the
 // calendar's month and year buttons, the header's measuring copy, a menu's default action) keep
-// the weight they ask for; and that WIZZ_TEXT_RENDERING=natural|hinted override the default.
+// the weight they ask for; that ui_style's fonts draw as they were built whatever font they are
+// resolved against; and that WIZZ_TEXT_RENDERING=natural|hinted override the default.
 
 #include "app_test_support.hpp"
 #include "autotest_diagnostics.hpp"
@@ -41,6 +42,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QStyleOptionMenuItem>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
@@ -91,8 +93,9 @@ constexpr wizz::Date d(int year, unsigned month, unsigned day)
     return std::ranges::any_of(face.variableAxes(), [](const QFontVariableAxis& axis) { return axis.tag() == kWeight; });
 }
 
-/// The owner's choice, written out (D-58): what natural-heavier gives the faces the app uses.
-[[nodiscard]] std::optional<float> chosen_axis(const QFontInfo& face)
+/// The owner's choice, written out (D-58): what natural-heavier gives the faces the app uses, by
+/// the face's family and its own weight (check_autotest.py's CHOSEN_AXES).
+[[nodiscard]] std::optional<float> chosen_axis(const QString& family, int weight)
 {
     static const std::map<std::pair<QString, int>, float> kChosen{
         {{QStringLiteral("Segoe UI Variable Text"), 400}, 450.0F},
@@ -103,8 +106,13 @@ constexpr wizz::Date d(int year, unsigned month, unsigned day)
         {{QStringLiteral("Cascadia Mono"), 600}, 650.0F},
         {{QStringLiteral("Cascadia Mono"), 700}, 700.0F},
     };
-    const auto found = kChosen.find({face.family(), face.weight()});
+    const auto found = kChosen.find({family, weight});
     return found == kChosen.end() ? std::nullopt : std::optional<float>(found->second);
+}
+
+[[nodiscard]] std::optional<float> chosen_axis(const QFontInfo& face)
+{
+    return chosen_axis(face.family(), face.weight());
 }
 
 [[nodiscard]] std::string describe(const QFont& font)
@@ -183,6 +191,15 @@ public:
             const std::string name = std::format("{}: {} '{}'", where, widget->metaObject()->className(),
                                                  widget->objectName().toStdString());
             font(widget->font(), name);
+            // Rich text takes the weight of <b> and font-weight from the label's font in a text
+            // format of its own, which nothing fits (D-58): it would draw "bold" at the regular axis.
+            if (const auto* label = qobject_cast<const QLabel*>(widget); label != nullptr) {
+                const Qt::TextFormat format = label->textFormat();
+                if (format == Qt::RichText || format == Qt::MarkdownText ||
+                    (format == Qt::AutoText && Qt::mightBeRichText(label->text()))) {
+                    problems_.push_back(name + ": rich text '" + label->text().toStdString() + "'");
+                }
+            }
             if (const auto* view = qobject_cast<const QAbstractItemView*>(widget); view != nullptr && view->model()) {
                 cells(*view, name);
             }
@@ -413,6 +430,21 @@ void check_everything(Collector& check)
     return has_weight_axis(face_of(style::form_font()));
 }
 
+/// The fonts ui_style hands out, by name: the first five name their weight (the regular ones and the
+/// monospace semibold), the semibold families leave it open (they have one face).
+[[nodiscard]] std::vector<std::pair<std::string, QFont>> look_fonts()
+{
+    return {{"form_font", style::form_font()},
+            {"data_font", style::data_font()},
+            {"hint_font", style::hint_font()},
+            {"mono_font", style::mono_font(9.5)},
+            {"mono_font semibold", style::mono_font(10.0, true)},
+            {"bold_form_font", style::bold_form_font()},
+            {"semibold_font", style::semibold_font(9.0)},
+            {"semibold_face", style::semibold_face()},
+            {"caption_font", style::caption_font()}};
+}
+
 TEST(TextRendering, Names_round_trip_and_the_default_is_natural_heavier)
 {
     for (const TextRendering rendering : kRenderings) {
@@ -463,6 +495,86 @@ TEST(TextRendering, The_look_fonts_draw_natural_and_their_variable_faces_50_unit
     } else {
         GTEST_SKIP() << "no Segoe UI Variable on this machine: plain natural rendering";
     }
+}
+
+TEST(TextRendering, A_look_font_draws_as_built_whatever_font_it_is_resolved_against)
+{
+    // A model's Qt::FontRole, QPainter::setFont and a widget's own font are resolved against another
+    // font, and resolve() takes every attribute a font only copied from that font: a font that
+    // names its face (its families, and its weight where the family has more than one face) must
+    // have its hinting and its weight axis as its own too.
+    const LookGuard guard;
+    for (const TextRendering rendering : kRenderings) {
+        for (const bool windows10 : {false, true}) {
+            SCOPED_TRACE(std::format("{}{}", style::text_rendering_name(rendering), windows10 ? ", Windows 10 fonts" : ""));
+            if (rendering == TextRendering::natural_heavier) {
+                qunsetenv("WIZZ_TEXT_RENDERING");
+            } else {
+                qputenv("WIZZ_TEXT_RENDERING", style::text_rendering_name(rendering));
+            }
+            if (windows10) {
+                qputenv("WIZZ_FONTS", "windows10");
+            } else {
+                qunsetenv("WIZZ_FONTS");
+            }
+            ASSERT_TRUE(style::apply_application_look());
+            const std::vector<std::pair<std::string, QFont>> fonts = look_fonts();
+            for (std::size_t i = 0; i < fonts.size(); ++i) {
+                const auto& [name, font] = fonts[i];
+                EXPECT_TRUE(font.resolveMask() & QFont::HintingPreferenceResolved) << name;
+                EXPECT_TRUE(font.resolveMask() & QFont::VariableAxesResolved) << name << " " << describe(font);
+                EXPECT_EQ(i < 5, (font.resolveMask() & QFont::WeightResolved) != 0) << name << ": a weight of its own";
+                EXPECT_EQ(font_problem(font, rendering), "") << name;
+            }
+            // A font the app builds for painting alone, fitted as GUI_DESIGN asks: one that names
+            // its families gets its own axis, one that takes them from elsewhere takes the axis along.
+            QFont named;
+            named.setFamilies(style::form_font().families());
+            named.setWeight(QFont::Normal);
+            style::fit_text_rendering(named);
+            EXPECT_TRUE(named.resolveMask() & QFont::HintingPreferenceResolved);
+            EXPECT_TRUE(named.resolveMask() & QFont::VariableAxesResolved);
+            EXPECT_FALSE(style::fit_text_rendering(named)) << "fitted";
+            QFont derived;
+            derived.setPointSizeF(8.0);
+            EXPECT_FALSE(style::fit_text_rendering(derived)) << "the application font's values are right";
+            EXPECT_TRUE(derived.resolveMask() & QFont::HintingPreferenceResolved);
+            EXPECT_FALSE(derived.resolveMask() & QFont::VariableAxesResolved) << "its families are not its own";
+        }
+    }
+    qunsetenv("WIZZ_TEXT_RENDERING");
+    qunsetenv("WIZZ_FONTS");
+    ASSERT_TRUE(style::apply_application_look());
+    if (!variable_ui_face()) {
+        GTEST_SKIP() << "no Segoe UI Variable on this machine";
+    }
+    QFont bold = style::form_font();
+    bold.setBold(true);
+    style::fit_text_rendering(bold);
+    ASSERT_EQ(axis_of(bold), 700.0F);
+    // A regular font resolved against a semibold family (its axis 650) or a bold font (Bold, 700)
+    // stays regular: the face it asks for and the axis it draws with are its own.
+    const std::vector<std::pair<std::string, QFont>> bases{
+        {"bold_form_font", style::bold_form_font()}, {"caption_font", style::caption_font()}, {"a bold copy", bold}};
+    for (const auto& [name, regular] : {std::pair<std::string, QFont>{"form_font", style::form_font()},
+                                        {"data_font", style::data_font()}, {"hint_font", style::hint_font()}}) {
+        for (const auto& [base_name, base] : bases) {
+            const QFont resolved = regular.resolve(base);
+            EXPECT_EQ(resolved.weight(), QFont::Normal) << name << " against " << base_name;
+            EXPECT_EQ(axis_of(resolved), 450.0F) << name << " against " << base_name << " " << describe(resolved);
+            EXPECT_EQ(font_problem(resolved, TextRendering::natural_heavier), "") << name << " against " << base_name;
+        }
+    }
+    // The semibold family has one face: against a bold font it stays semibold.
+    EXPECT_EQ(axis_of(style::semibold_face().resolve(bold)), 650.0F);
+    // A fitted font that takes its families from the font it is resolved against (QPainter::setFont
+    // in a semibold widget) takes that font's axis with them.
+    QFont derived;
+    derived.setPointSizeF(8.0);
+    style::fit_text_rendering(derived);
+    const QFont in_semibold = derived.resolve(style::bold_form_font());
+    EXPECT_EQ(axis_of(in_semibold), 650.0F) << describe(in_semibold);
+    EXPECT_EQ(font_problem(in_semibold, TextRendering::natural_heavier), "");
 }
 
 TEST(TextRendering, A_bold_copy_draws_bold_and_a_semibold_family_semibold)
@@ -634,6 +746,17 @@ TEST(TextRendering, Every_rendering_reaches_every_font_widget_popup_and_dialog)
         EXPECT_EQ(environment.font_hinting, c.rendering == TextRendering::hinted ? "default" : "none");
         const bool heavier = c.rendering == TextRendering::natural_heavier && !c.windows10 && variable_ui_face();
         EXPECT_EQ(environment.font_weight_axis, heavier ? std::optional(450.0) : std::nullopt);
+        const std::vector<std::string> roles{"ui", "semibold", "caption", "mono", "monoSemibold"};
+        ASSERT_EQ(environment.fonts.size(), roles.size());
+        for (std::size_t i = 0; i < roles.size(); ++i) {
+            const wizz::app::FontDiagnostics& font = environment.fonts[i];
+            EXPECT_EQ(font.role, roles[i]);
+            const std::optional<float> chosen = c.rendering == TextRendering::natural_heavier
+                                                    ? chosen_axis(QString::fromStdString(font.face), font.weight)
+                                                    : std::nullopt;
+            EXPECT_EQ(font.weight_axis, chosen ? std::optional<double>(*chosen) : std::nullopt)
+                << font.role << ": " << font.face << " " << font.weight;
+        }
 
         Collector check{c.rendering};
         check_everything(check);

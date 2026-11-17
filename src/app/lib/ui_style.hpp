@@ -32,9 +32,10 @@
 //   WIZZ_HIGH_CONTRAST=1|0         says High Contrast is on / off instead of asking Windows;
 //   WIZZ_FONTS=windows10           leaves out the Windows 11 families (Segoe UI Variable,
 //                                  Cascadia, Segoe Fluent Icons) to check the fallbacks;
-//   WIZZ_TEXT_RENDERING=hinted|natural  draws text as 2.0.0 did (hinted) or without the extra
-//                                  weight (natural), for comparisons and bug reports. Read when
-//                                  a font is built: set it before the app starts.
+//   WIZZ_TEXT_RENDERING=hinted|natural  draws text as 2.0.0 did (hinted: its glyphs, and at 100 %
+//                                  its layout) or without the extra weight (natural), for
+//                                  comparisons and bug reports. Read when a font is built: set it
+//                                  before the app starts.
 
 #include <QByteArrayView>
 #include <QColor>
@@ -214,9 +215,13 @@ inline constexpr int kHeavierBy = 50;
 /// other face), and a bold copy of a regular font (setBold(), weight 700) gets 700.
 [[nodiscard]] std::optional<float> weight_axis_for(const QFont& font, TextRendering rendering);
 /// Gives `font` the hinting preference of the rendering WIZZ_TEXT_RENDERING asks for and the
-/// weight axis of weight_axis_for() (or none), both set explicitly so that they survive
-/// QFont::resolve(); returns whether a value changed. The fonts below come out of it; a copy
-/// of one with another weight (Qt's setBold() copies) needs it again.
+/// weight axis of weight_axis_for() (or none); returns whether a value changed. A model's
+/// Qt::FontRole, QPainter::setFont and a widget's own font are resolved against another font, and
+/// QFont::resolve() replaces what a font only copied: so the hinting becomes the font's own, and so
+/// does the axis of a font that names its own families, also where the values were already right.
+/// A font that takes its families from the font it is resolved against takes that font's axis
+/// along, which is the right one for those families when that font is fitted. The fonts below come
+/// out of it; a copy of one with another weight or family (Qt's setBold() copies) needs it again.
 bool fit_text_rendering(QFont& font);
 /// fit_text_rendering() for `widget`'s font: sets it when it changed, which makes every
 /// attribute the widget inherited its own; returns whether it did.
@@ -231,6 +236,11 @@ bool fit_text_rendering(QWidget& widget);
 /// never holds a weight it only inherited. apply_application_look() installs it; later calls
 /// do nothing.
 void keep_text_rendering();
+// Each font below names its face: its families, and the regular ones their weight (QFont::Normal),
+// so its hinting and weight axis are its own too (fit_text_rendering): resolved against a bolder
+// font, it still draws as it was built. The semibold families leave the weight open: they have one
+// face.
+
 /// The UI font: Segoe UI Variable Text 10 pt, Segoe UI 10 pt on Windows 10.
 [[nodiscard]] QFont form_font();
 /// The result grids' cells: Segoe UI Variable Text 9 pt (Segoe UI 9 pt), denser than the
