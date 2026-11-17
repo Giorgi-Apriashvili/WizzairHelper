@@ -218,11 +218,11 @@ installation never needs them:
 | `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
 | `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
 | `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
-| `WIZZ_TEXT_RENDERING=hinted` / `natural` | Draws all text, popups and dialogs included, another way than the default, `natural-heavier` (ClearType without hinting, Segoe UI Variable and Cascadia Mono 50 units heavier on their weight axis; D-58): `hinted` as 2.0.0 did (Qt's default hinting, at 100 % DirectWrite GDI-classic ClearType: glyphs snapped to whole pixels), for comparisons and bug reports; `natural` without the extra weight. Read when a font is built, so set it before the app starts; unknown values mean the default. `diagnostics.json` reports the rendering, the UI font's hinting and its weight axis (`environment.textRendering`, `fontHinting`, `fontWeightAxis`) |
+| `WIZZ_TEXT_RENDERING=hinted` / `natural` | Draws all text, popups and dialogs included, another way than the default, `natural-heavier` (ClearType without hinting, Segoe UI Variable and Cascadia Mono 50 units heavier on their weight axis; D-58): `hinted` as 2.0.0 did (Qt's default hinting, at 100 % DirectWrite GDI-classic ClearType: glyphs snapped to whole pixels), for comparisons and bug reports: 2.0.0's text, and at 100 % its layout too (at 150 % and 200 % lines are measured as laid out, so the window's lower part can sit 2 px lower than in 2.0.0); `natural` without the extra weight. Read when a font is built, so set it before the app starts; unknown values mean the default. `diagnostics.json` reports the rendering, the UI font's hinting and its weight axis (`environment.textRendering`, `fontHinting`, `fontWeightAxis`) and the face and weight axis of the UI, semibold, caption and monospace fonts (`environment.fonts`) |
 
 The GUI test binary reads them too: `WIZZ_COLOR_SCHEME=dark` runs the whole suite in the dark look
 (its tests compare with the theme's tokens, not with fixed colours), `WIZZ_FONTS=windows10` with the
-Windows 10 families, `WIZZ_TEXT_RENDERING=hinted` with 2.0.0's text. Tests that change the look
+Windows 10 families, `WIZZ_TEXT_RENDERING=hinted` with 2.0.0's text and metrics. Tests that change the look
 (`LookGuard`) run with the defaults and restore these variables afterwards.
 
 To compare a rendering in the built app without touching your own profile, run it as an autotest

@@ -116,13 +116,20 @@ elsewhere: the Total cells, the wait note); a weight of 600 on Segoe UI Variable
 fractional positions), and every face with a weight axis 50 units heavier than the face Qt picks
 (`style::weight_axis_for`): Segoe UI Variable regular 450, semibold 650, Bold 700 (the axis ends
 there), Cascadia Mono 450 / 650. The Windows 10 fallbacks have no weight axis and are plain natural.
-ui_style's fonts carry it (hinting and axis set explicitly, so `resolve()` keeps them), the application
-font is one of them, and `style::keep_text_rendering()`, an application event filter, fits every
-widget's font on Polish and FontChange in every look: a copy of a font keeps its axis, so a setBold()
-copy (the calendar's month and year buttons) or a QFont built without ui_style would otherwise draw
-at the wrong weight. ModernStyle draws menu items in a fitted font (a default action bold). A font
-the app derives for painting alone, with another weight or family, goes through
-`style::fit_text_rendering()` too. High Contrast keeps the rendering. Unhinted metrics are fractional: lines are measured as Qt lays them out
+ui_style's fonts carry it: each names its face (its families, and the regular ones their weight) and
+has the hinting and the axis as its own, so `resolve()` keeps them and the font draws as built
+whatever font it is resolved against (a model's Qt::FontRole, QPainter::setFont, a widget's own
+font under its parent's). The application font is one of them, and `style::keep_text_rendering()`,
+an application event filter, fits every widget's font on Polish and FontChange in every look: a
+copy of a font keeps its axis, so a setBold() copy (the calendar's month and year buttons) or a
+QFont built without ui_style would otherwise draw at the wrong weight. ModernStyle draws menu items
+in a fitted font (a default action bold). A font the app derives for painting alone, with another
+weight or family, goes through `style::fit_text_rendering()` too; it makes the axis the font's own
+only when the font names its families (one that takes them from the font it is resolved against
+takes that font's axis along). Labels, message boxes and tooltips are plain text: rich text makes
+its bold (`<b>`, font-weight) in a text format of its own, which nothing fits, so it would draw at
+the regular axis (`TextRendering.*` fails on a visible rich-text label). High Contrast keeps the
+rendering. Unhinted metrics are fractional: lines are measured as Qt lays them out
 (`ModernStyle::line_height`), and widths that Qt elides by a fraction of a pixel unrounded (ElidedLabel,
 the grids' cut-cell tooltips).
 
@@ -187,8 +194,9 @@ wins over `WIZZ_COLOR_SCHEME`.
 bar follows), `WIZZ_HIGH_CONTRAST=1|0` overrides the contrast check, `WIZZ_FONTS=windows10` leaves out
 the Windows 11 families. They are read at every evaluation of the look, so tests switch a running
 window by changing them and calling `style::refresh_appearance()`. `WIZZ_TEXT_RENDERING=hinted|natural`
-draws text as 2.0.0 did or without the extra weight, for comparisons and bug reports; it is read when a
-font is built, so it is set before the app starts (tests install the look again).
+draws text as 2.0.0 did (its layout too at 100 %) or without the extra weight, for comparisons and bug
+reports; it is read when a font is built, so it is set before the app starts (tests install the look
+again).
 
 **Tests** (D-57). The GUI tests run under this look (light, High Contrast pinned off; the test main
 installs it like `main()`), on the minimal platform with its Windows font database
@@ -269,7 +277,8 @@ closes unless `--keep-open`. Hidden companions `--data-root`, `--replay` and `--
   `Application::notify`), the cancel record, per-search requests and durations, the final grids
   against the stored results (rows not in the result, duplicate keys), display/DPI data, the
   look in use (`environment.look`, the palette's window colour, the style, the UI font's family, the
-  text rendering with the UI font's hinting and weight axis, D-58) and
+  text rendering with the UI font's hinting and weight axis, and the face and weight axis of the UI,
+  semibold, caption and monospace fonts, D-58) and
   `layout_problems()` (`layout_check.hpp`: clipped, cut-off, overlapping widgets, cut texts, tabs
   that do not fit, Cancel fully visible) at every screenshot.
 
