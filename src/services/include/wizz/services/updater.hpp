@@ -113,6 +113,10 @@ struct UpdateConfig {
     [[nodiscard]] std::string user_agent() const;
     /// "https://api.github.com/repos/<owner>/<repo>/releases/latest".
     [[nodiscard]] std::string latest_release_url() const;
+    /// "https://github.com/<owner>/<repo>/releases/tag/v<X.Y.Z>": the release page of a
+    /// version, as GitHub's `html_url` names it, for an update remembered from an earlier
+    /// session without asking GitHub again.
+    [[nodiscard]] std::string release_page_url(const Version& version) const;
     /// "WizzairHelper-<X.Y.Z>-win64-setup.exe".
     [[nodiscard]] static std::string installer_name(const Version& version);
     /// "WizzairHelper-<X.Y.Z>-win64.zip".
@@ -447,5 +451,13 @@ struct InstallerCommand {
 /// leftover `.tmp` files) from `config.download_dir()`; other files and newer versions
 /// stay. Returns how many files were deleted; errors are ignored.
 std::size_t remove_stale_downloads(const UpdateConfig& config);
+
+/// The verified download of `version`'s asset (`kind`) in `config.download_dir()`: the
+/// regular file of the asset's stable name, nullopt when there is none. Nothing is
+/// requested and nothing is hashed: only download_verified gives a file that name, after
+/// it matched SHA256SUMS.txt on disk (a download is written to `<name>.tmp` and renamed;
+/// a mismatching file of that name is deleted), so the name is the proof (D-43, D-61).
+[[nodiscard]] std::optional<std::filesystem::path> find_verified_download(const UpdateConfig& config,
+                                                                         const Version& version, AssetKind kind);
 
 } // namespace wizz::update

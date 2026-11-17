@@ -259,4 +259,17 @@ std::size_t remove_stale_downloads(const UpdateConfig& config)
     return removed;
 }
 
+std::optional<std::filesystem::path> find_verified_download(const UpdateConfig& config, const Version& version,
+                                                            AssetKind kind)
+{
+    const std::string name =
+        kind == AssetKind::installer ? UpdateConfig::installer_name(version) : UpdateConfig::zip_name(version);
+    std::filesystem::path path = config.download_dir() / win32::to_wide(name);
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) {
+        return std::nullopt;
+    }
+    return path;
+}
+
 } // namespace wizz::update

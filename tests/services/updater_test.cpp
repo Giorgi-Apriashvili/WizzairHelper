@@ -309,6 +309,9 @@ TEST(UpdaterConfig, App_configuration_names_the_repository_user_agent_and_the_up
     EXPECT_EQ(config.current_version, (Version{1, 0, 0}));
     EXPECT_EQ(config.user_agent(), kUserAgent);
     EXPECT_EQ(config.latest_release_url(), kLatestUrl);
+    EXPECT_EQ(config.release_page_url(Version{1, 2, 0}),
+              "https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.2.0")
+        << "the page GitHub's html_url names, for an update remembered from an earlier session";
     EXPECT_EQ(UpdateConfig::installer_name(Version{1, 2, 0}), kInstaller);
     EXPECT_EQ(UpdateConfig::zip_name(Version{1, 2, 0}), kZip);
 
@@ -1526,6 +1529,30 @@ TEST(UpdaterInstall, Removes_only_stale_downloads)
 
     // No download folder yet: nothing to do.
     EXPECT_EQ(update::remove_stale_downloads(config_for(temp.path() / "elsewhere")), 0u);
+}
+
+TEST(UpdaterInstall, Finds_a_verified_download_by_its_stable_name)
+{
+    // Only download_verified gives a file its stable name, after the SHA-256 check (D-43):
+    // an update remembered from an earlier session finds its installer without a request.
+    TempDirectory temp;
+    const UpdateConfig config = config_for(temp.path(), "1.0.0");
+    const fs::path dir = config.download_dir();
+    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer), std::nullopt)
+        << "no download folder yet";
+
+    write_file(dir / "WizzairHelper-1.2.0-win64-setup.exe.tmp", "an unfinished download");
+    write_file(dir / "WizzairHelper-1.1.0-win64-setup.exe", "another version");
+    write_file(dir / "WizzairHelper-1.2.0-win64.zip", "the portable zip");
+    fs::create_directories(dir / "WizzairHelper-1.3.0-win64-setup.exe");  // not a file
+    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer), std::nullopt);
+    EXPECT_EQ(update::find_verified_download(config, Version{1, 3, 0}, AssetKind::installer), std::nullopt);
+    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::portable_zip),
+              dir / "WizzairHelper-1.2.0-win64.zip");
+
+    write_file(dir / "WizzairHelper-1.2.0-win64-setup.exe", "MZ");
+    EXPECT_EQ(update::find_verified_download(config, Version{1, 2, 0}, AssetKind::installer),
+              dir / "WizzairHelper-1.2.0-win64-setup.exe");
 }
 
 } // namespace
