@@ -107,7 +107,9 @@ public:
     /// 4. stage "Fetching fares" (no report of its own); for each planned request i:
     ///    Completed = i; a later chunk of an (origin, group) pair answered
     ///    InvalidMarket is skipped silently; otherwise report "{From} → {GroupLabel}
-    ///    {d MMM} – {d MMM}" (three spaces, en dash) and fetch it. Fares outside
+    ///    {d MMM} – {d MMM}" (three spaces, en dash) and fetch it with the client's reuse
+    ///    window as it was when the search began (D-66, D-68), counting the requests
+    ///    answered from reused fares in full or in part (D-70). Fares outside
     ///    [EffectiveFrom, EffectiveTo] are dropped; fares from an airport that is
     ///    not a plan origin are dropped with one warning per (queried → answering)
     ///    pair; the rest are priced (pricing::build_result) and de-duplicated by
@@ -127,6 +129,8 @@ public:
     /// A stop requested before the route-map or rate stage starts throws
     /// OperationCancelled after that stage's report; inside the loop the stop is
     /// also checked after each request's report, so a fully cached run notices it.
+    /// However the search ends, the client then saves its reused fares on this thread
+    /// (`WizzApiClient::save_timetables`, D-67: only when they changed).
     [[nodiscard]] LegSearchResultPtr search(const LegSearchRequest& request, const ProgressSink& progress,
                                             const PartialResultsSink& partial_results, std::stop_token stop);
 

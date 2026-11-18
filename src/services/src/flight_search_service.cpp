@@ -10,6 +10,7 @@
 #include "wizz/core/result_views.hpp"
 #include "wizz/services/wizz_errors.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -82,6 +83,7 @@ public:
           clock_(clock),
           locale_(locale),
           started_(clock.monotonic_now()),
+          reuse_window_(wizz.timetable_reuse_window()),
           step_started_(clock.utc_now())
     {
     }
@@ -185,7 +187,8 @@ private:
                                                                                  .end_date = planned.end_date,
                                                                                  .price_type = request_.price_type,
                                                                                  .adults = request_.adults},
-                                                                  notices, stop_);
+                                                                  notices, stop_, reuse_window_);
+            count_reuse(timetable);
             consecutive_failures_ = 0;
             if (timetable.route_not_served) {
                 not_served_.emplace(from, planned.group_key);  // success-like: no warning
@@ -213,6 +216,19 @@ private:
             }
         }
         return true;
+    }
+
+    /// Counts a planned request answered from reused fares, in full or in part (D-70).
+    void count_reuse(const TimetableResult& timetable)
+    {
+        if (timetable.from_cache) {
+            ++requests_from_cache_;
+        } else if (timetable.partly_cached) {
+            ++requests_partly_cached_;
+        }
+        if (timetable.oldest_reused && (!oldest_reused_ || *timetable.oldest_reused < *oldest_reused_)) {
+            oldest_reused_ = timetable.oldest_reused;
+        }
     }
 
     /// 03 §5.5: date filter, foreign-origin safety net, BuildResult, de-duplication, batch.
@@ -270,6 +286,11 @@ private:
             .cancelled = cancelled_,
             .abort_reason = std::move(abort_reason_),
             .elapsed = clock_.monotonic_now() - started_,
+            .requests_from_cache = requests_from_cache_,
+            .requests_partly_cached = requests_partly_cached_,
+            .oldest_reused_age = oldest_reused_ ? std::optional<Duration>{std::max(Duration::zero(),
+                                                                                    clock_.utc_now() - *oldest_reused_)}
+                                                : std::nullopt,
         });
     }
 
@@ -283,6 +304,7 @@ private:
     const Clock& clock_;
     const Locale& locale_;
     const Ticks started_;  ///< monotonic, after the thread hop (03 §5.1 Elapsed, 06 §3)
+    const Duration reuse_window_;  ///< the client's reuse window when the search began (D-68)
 
     // Progress state
     std::string_view stage_ = FlightSearchService::kStageLoadingMap;
@@ -305,6 +327,25 @@ private:
     int consecutive_failures_ = 0;
     bool cancelled_ = false;
     std::optional<std::string> abort_reason_;
+    int requests_from_cache_ = 0;
+    int requests_partly_cached_ = 0;
+    std::optional<UtcInstant> oldest_reused_;
+};
+
+/// Writes the client's reused fares to fares.json when the search ends, however it ends
+/// (D-67): on the search's own worker thread, never on a UI thread.
+class SaveFaresAtTheEnd {
+public:
+    explicit SaveFaresAtTheEnd(WizzApiClient& wizz) noexcept : wizz_(wizz) {}
+    ~SaveFaresAtTheEnd() { wizz_.save_timetables(); }
+
+    SaveFaresAtTheEnd(const SaveFaresAtTheEnd&) = delete;
+    SaveFaresAtTheEnd& operator=(const SaveFaresAtTheEnd&) = delete;
+    SaveFaresAtTheEnd(SaveFaresAtTheEnd&&) = delete;
+    SaveFaresAtTheEnd& operator=(SaveFaresAtTheEnd&&) = delete;
+
+private:
+    WizzApiClient& wizz_;
 };
 
 } // namespace
@@ -451,6 +492,7 @@ LegSearchResultPtr FlightSearchService::search(const LegSearchRequest& request, 
     const std::shared_ptr<CurrencyService> fx = fx_;
     const std::shared_ptr<const Clock> clock = clock_;
     const std::shared_ptr<const Locale> locale = locale_;
+    const SaveFaresAtTheEnd save{*wizz};  // after the run, also when it throws
     SearchRun run{request, progress, partial_results, std::move(stop), *wizz, *fx, *clock, *locale};
     return run.run();
 }

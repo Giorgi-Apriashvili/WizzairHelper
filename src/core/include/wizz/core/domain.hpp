@@ -171,6 +171,12 @@ struct LegSearchResult {
     bool cancelled = false;
     std::optional<std::string> abort_reason;
     Duration elapsed{};
+    /// Planned requests answered from fares fetched earlier without sending anything (D-70).
+    int requests_from_cache = 0;
+    /// Planned requests that asked Wizz Air only for the days not fetched yet (D-70).
+    int requests_partly_cached = 0;
+    /// How old the oldest reused fare was when the search ended; nullopt when nothing was reused.
+    std::optional<Duration> oldest_reused_age;
 };
 using LegSearchResultPtr = std::shared_ptr<const LegSearchResult>;
 
