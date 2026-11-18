@@ -15,6 +15,17 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 | [2.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.0.0) | 2026-11-16 | `3c399d2` | The grouped-cards look: inputs in four titled sections, a modern theme in light and dark that follows Windows, High Contrast respected, a new Tab order (DECISIONS D-53 to D-57). |
 | [2.1.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.1.0) | 2026-11-17 | `935cf43` | Smooth text: natural ClearType rendering, Segoe UI Variable a touch heavier on Windows 11 (DECISIONS D-58). |
 | [2.2.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.2.0) | 2026-11-18 | `be62626` | The Settings window: manual update check, automatic checks once a day / week / month, three choices for what happens with an update, reminders for a put-off update (DECISIONS D-59..D-63); the first work starts after Windows' open animation (D-65). |
+| [2.3.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.0) | 2026-11-18 | `edfd6af` | Fares reused per route and day and kept on disk (`fares.json`, at most 6 h), the "Reuse fares fetched within" setting, exchange rates fetched at start, the reused-fares Log line (DECISIONS D-66..D-70). |
+
+v2.3.0 verification: CI run 44394123991 on the merge `fe1ca23` and the tag's run 44398047292 on `edfd6af` passed on all
+three legs and published the release. Locally the merged code passed 1700 / 1700 tests in Release (all 24 end-to-end runs,
+including the new `autotest.restart_shifted`), 1676 / 1676 in Debug and with clang-cl. Measured with replays and fakes,
+not live traffic: 3 routes x 3 chunks sent 9 requests first, 0 on a repeat, 3 shifted by one day, 0 after a restart within
+the window; the heavy replay sent 186 timetable requests, then 62 when repeated a day later in its dates after a restart
+(124 of 186 answered from reused fares). `tools/release_check.ps1 -Tag v2.3.0`: three assets (installer 10,189,274 bytes,
+ZIP 11,756,129 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
+`WizzairHelper 2.3.0`, and `releases/latest` is v2.3.0. Not verified: the request counts against the live site (needs the
+owner's consent), a real update run by the installed app.
 
 v2.2.0 verification: the tag's CI run 44314475295 on `be62626` passed on all three legs (msvc-release with the 23
 end-to-end runs, msvc-debug, clang-cl-release now with LLVM 22.1.8 like local work) and published the release; on the
