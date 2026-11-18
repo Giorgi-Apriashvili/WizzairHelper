@@ -38,4 +38,13 @@ namespace wizz {
 /// `yyyy-MM-ddTHH:mm:ss.fffffffZ` when the instant has a sub-second part.
 [[nodiscard]] std::string format_iso_utc(UtcInstant instant);
 
+/// The naive date-time as `yyyy-MM-ddTHH:mm:ss`, or `yyyy-MM-ddTHH:mm:ss.fffffff` when
+/// it has a sub-second part (fares.json, D-67); `parse_local_datetime` reads it back exactly.
+[[nodiscard]] std::string format_iso_local(LocalDateTime time);
+
+/// Reads exactly `yyyy-MM-ddTHH:mm:ssZ` or `yyyy-MM-ddTHH:mm:ss.f…Z` (one to seven
+/// fraction digits): what `format_iso_utc` writes. nullopt for anything else (white
+/// space, an offset, a missing `Z`, a calendar-invalid value).
+[[nodiscard]] std::optional<UtcInstant> parse_iso_utc(std::string_view text);
+
 } // namespace wizz

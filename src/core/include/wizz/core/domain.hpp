@@ -65,6 +65,9 @@ struct DayFare {
     Money price_per_person;                 ///< amount 0 when check_on_site
     FareStatus status = FareStatus::available;
     bool has_mac_flight = false;
+
+    /// Field-wise; the price compares by value (Money ignores the decimal's scale).
+    friend bool operator==(const DayFare&, const DayFare&) = default;
 };
 
 /// A resolved location (02 §2.10).
