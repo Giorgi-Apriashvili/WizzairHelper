@@ -8,9 +8,17 @@
 
 #include "support/fixtures.hpp"
 
+#include <atomic>
 #include <format>
+#include <fstream>
+#include <ios>
+#include <iterator>
+#include <memory>
+#include <random>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace wizz::test::search {
 
@@ -90,6 +98,55 @@ std::string timetable_json(std::span<const FareRow> rows)
     }
     body += R"(],"returnFlights":null})";
     return body;
+}
+
+Responder daily_fares_responder()
+{
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    return [calls, fallback = default_responder()](const RecordedRequest& request) {
+        if (!is_timetable_request(request)) {
+            return fallback(request);
+        }
+        const int call = calls->fetch_add(1) + 1;
+        const json::Value root = json::parse(request.body.value_or("{}"));
+        const json::Value& item = root.find("flightList")->at(0);
+        const std::optional<Date> first = Date::parse_iso(item.get_string("from").value_or(""));
+        const std::optional<Date> last = Date::parse_iso(item.get_string("to").value_or(""));
+        if (!first || !last) {
+            throw std::logic_error("a timetable request without its window");
+        }
+        std::vector<FareRow> rows;
+        for (Date date = *first; date <= *last; date = date.add_days(1)) {
+            rows.push_back(FareRow{.from = departure_station(request),
+                                   .to = arrival_station(request),
+                                   .departure = date.iso() + "T06:00:00",
+                                   .amount = std::format("{}.0", call)});
+        }
+        return json_response(timetable_json(rows));
+    };
+}
+
+ScratchDirectory::ScratchDirectory()
+{
+    std::random_device entropy;
+    path_ = std::filesystem::temp_directory_path() /
+            std::format("wizzairhelper-test-{:08x}{:08x}{:08x}", entropy(), entropy(), entropy());
+    std::filesystem::create_directories(path_);
+}
+
+ScratchDirectory::~ScratchDirectory()
+{
+    std::error_code ignored;  // deletion errors are ignored (05 §1.5)
+    std::filesystem::remove_all(path_, ignored);
+}
+
+std::string ScratchDirectory::read(std::string_view name) const
+{
+    std::ifstream stream{file(name), std::ios::binary};
+    if (!stream) {
+        throw std::runtime_error(std::format("cannot read {}", file(name).string()));
+    }
+    return std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 }
 
 // ---------------------------------------------------------------------------

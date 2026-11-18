@@ -23,6 +23,7 @@ namespace {
 using namespace wizz::ui;
 namespace fs = std::filesystem;
 namespace json = wizz::json;
+using wizz::fare_days::ReuseWindow;
 using wizz::update::CheckFrequency;
 using wizz::update::UpdateOptions;
 using wizz::update::WhenFound;
@@ -80,8 +81,29 @@ constexpr std::string_view kExample = R"({
   "Maximized": false
 })";
 
-/// The same settings as this version writes them: the update options follow the twelve (D-60).
+/// The same settings as this version writes them: the update options follow the twelve (D-60),
+/// then the reuse window of fetched fares (D-68).
 constexpr std::string_view kExampleWithUpdates = R"({
+  "From": "Budapest",
+  "To": "London",
+  "FromRadiusKm": 250,
+  "ToRadiusKm": 100,
+  "Adults": 1,
+  "DiscountClub": false,
+  "Currency": "EUR",
+  "MinNights": 2,
+  "MaxNights": 10,
+  "WindowWidth": 1320,
+  "WindowHeight": 820,
+  "Maximized": false,
+  "CheckForUpdates": true,
+  "UpdateCheckFrequency": "Daily",
+  "WhenUpdateFound": "InstallOnClose",
+  "ReuseFaresWithin": "ThirtyMinutes"
+})";
+
+/// The same settings as 2.2 wrote them: the twelve and the update options.
+constexpr std::string_view kExampleOf22 = R"({
   "From": "Budapest",
   "To": "London",
   "FromRadiusKm": 250,
@@ -194,6 +216,8 @@ TEST(Settings, Defaults)
     EXPECT_TRUE(settings.updates.check_automatically);
     EXPECT_EQ(settings.updates.check_frequency, CheckFrequency::daily);
     EXPECT_EQ(settings.updates.when_found, WhenFound::install_on_close);
+    // Fares are reused for 30 minutes, as before 2.3 (D-68).
+    EXPECT_EQ(settings.fare_reuse, ReuseWindow::thirty_minutes);
 }
 
 TEST(Settings, Reads_the_example_of_01_13)
@@ -221,11 +245,11 @@ TEST(Settings, Update_options_are_written_after_the_twelve_with_their_json_names
     };
     const Case cases[] = {
         {{.check_automatically = true, .check_frequency = CheckFrequency::daily, .when_found = WhenFound::install_on_close},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
         {{.check_automatically = false, .check_frequency = CheckFrequency::weekly, .when_found = WhenFound::download_then_ask},
-         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\"\r\n}"},
+         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
         {{.check_automatically = true, .check_frequency = CheckFrequency::monthly, .when_found = WhenFound::notify_only},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
     };
     for (const Case& c : cases) {
         AppSettings settings;
@@ -357,6 +381,88 @@ TEST(Settings, A_wrong_type_for_an_update_option_gives_all_defaults)
          }) {
         EXPECT_EQ(AppSettings::parse(bad), AppSettings{}) << bad;
     }
+}
+
+TEST(Settings, A_file_of_2_2_reads_the_reuse_window_as_its_default)
+{
+    AppSettings expected;
+    expected.window_width = 1320;
+    expected.window_height = 820;
+    const AppSettings settings = AppSettings::parse(kExampleOf22);
+    EXPECT_EQ(settings, expected);
+    EXPECT_EQ(settings.fare_reuse, ReuseWindow::thirty_minutes);
+}
+
+TEST(Settings, The_reuse_window_is_written_last_with_its_json_name_and_round_trips)
+{
+    const std::pair<ReuseWindow, std::string_view> cases[] = {
+        {ReuseWindow::thirty_minutes, "ThirtyMinutes"},
+        {ReuseWindow::one_hour, "OneHour"},
+        {ReuseWindow::three_hours, "ThreeHours"},
+        {ReuseWindow::six_hours, "SixHours"},
+    };
+    for (const auto& [window, name] : cases) {
+        AppSettings settings;
+        settings.fare_reuse = window;
+        const std::string text = settings.to_json();
+        EXPECT_TRUE(text.ends_with("  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"" +
+                                   std::string{name} + "\"\r\n}"))
+            << text;
+        EXPECT_EQ(AppSettings::parse(text), settings);
+        EXPECT_EQ(json_name(window), name);
+        EXPECT_EQ(parse_reuse_window(name), window);
+    }
+}
+
+TEST(Settings, Reuse_window_values_ignore_ascii_case_but_the_name_does_not)
+{
+    EXPECT_EQ(AppSettings::parse(R"({"ReuseFaresWithin": "onehour"})").fare_reuse, ReuseWindow::one_hour);
+    EXPECT_EQ(AppSettings::parse(R"({"ReuseFaresWithin": "SIXHOURS"})").fare_reuse, ReuseWindow::six_hours);
+    EXPECT_EQ(AppSettings::parse(R"({"ReuseFaresWithin": "threeHours"})").fare_reuse, ReuseWindow::three_hours);
+    EXPECT_EQ(parse_reuse_window("thirtyminutes"), ReuseWindow::thirty_minutes);
+    // The property name is case-sensitive: an unknown property, ignored.
+    EXPECT_EQ(AppSettings::parse(R"({"reuseFaresWithin": "SixHours"})"), AppSettings{});
+}
+
+TEST(Settings, An_unknown_reuse_window_gives_that_property_its_default_only)
+{
+    for (const std::string_view unknown : {"TwoHours", "", " OneHour", "OneHour ", "1 hour", "30"}) {
+        const std::string text = R"({"MaxNights": 12, "CheckForUpdates": false, "UpdateCheckFrequency": "Weekly", )"
+                                 R"("ReuseFaresWithin": ")" + std::string{unknown} + R"("})";
+        const AppSettings settings = AppSettings::parse(text);
+        EXPECT_EQ(settings.max_nights, 12) << text;
+        EXPECT_FALSE(settings.updates.check_automatically) << text;
+        EXPECT_EQ(settings.updates.check_frequency, CheckFrequency::weekly) << text;
+        EXPECT_EQ(settings.fare_reuse, ReuseWindow::thirty_minutes) << text;
+    }
+    EXPECT_EQ(parse_reuse_window("TwoHours"), std::nullopt);
+}
+
+TEST(Settings, A_wrong_type_for_the_reuse_window_gives_all_defaults)
+{
+    for (const std::string_view bad : {
+             R"({"MaxNights": 12, "ReuseFaresWithin": 60})",
+             R"({"MaxNights": 12, "ReuseFaresWithin": null})",
+             R"({"MaxNights": 12, "ReuseFaresWithin": true})",
+             R"({"MaxNights": 12, "ReuseFaresWithin": ["OneHour"]})",
+             R"({"MaxNights": 12, "ReuseFaresWithin": {"Value": "OneHour"}})",
+         }) {
+        EXPECT_EQ(AppSettings::parse(bad), AppSettings{}) << bad;
+    }
+}
+
+TEST(Settings, A_file_with_the_reuse_window_read_by_the_rules_of_2_1_keeps_its_twelve_values)
+{
+    AppSettings settings;
+    settings.from = "Wien";
+    settings.adults = 2;
+    settings.max_nights = 7;
+    settings.fare_reuse = ReuseWindow::six_hours;
+    const std::optional<Settings21> old = read_like_2_1(settings.to_json());
+    ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
+    EXPECT_EQ(old->from, "Wien");
+    EXPECT_EQ(old->adults, 2);
+    EXPECT_EQ(old->max_nights, 7);
 }
 
 TEST(Settings, Every_value_round_trips_including_unicode)

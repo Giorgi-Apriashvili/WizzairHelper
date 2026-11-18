@@ -1,6 +1,6 @@
 // CurrencyService (03 §7.2): 05 §3.5 CT-FX-05, CT-LATENT-01 end to end, the 05 §7
 // scenarios P-13 (FX caches) and P-14 (the texts that belong to this service), plus
-// memory staleness, single flight and cancellation. Fake transport only; caches use
+// memory staleness, single flight, cancellation and the prefetch at start (D-69). Fake transport only; caches use
 // temporary directories; the clock is FIXED unless a case says SYSTEM.
 
 #include "wizz/services/currency_service.hpp"
@@ -1091,6 +1091,125 @@ TEST(CurrencyService, Waiting_for_the_lock_is_cancellable)
     gate.open();
     EXPECT_EQ(first.get()->source, "Frankfurter");
     EXPECT_EQ(h.transport->request_count(), 1u);
+}
+
+// --- prefetch at start (DECISIONS D-69) ------------------------------------------------
+
+TEST(CurrencyServicePrefetch, Prefetched_rates_answer_the_first_search_without_a_request_or_a_notice)
+{
+    const TempDirectory dir;
+    Harness h{frankfurter_answers(frankfurter_body()), dir.cache()};
+    EXPECT_TRUE(h.service.prefetch({}));
+    EXPECT_EQ(h.transport->urls(), std::vector<std::string>{std::string{kFrankfurterUrl}});
+    EXPECT_TRUE(fs::exists(dir.fx_json()));
+
+    const FxRatesPtr rates = h.get();
+    EXPECT_EQ(rates->source, "Frankfurter");
+    EXPECT_FALSE(rates->is_approximate);
+    EXPECT_EQ(h.transport->request_count(), 1u);
+    EXPECT_TRUE(h.log.notices().empty());
+
+    // Fresh memory: a second prefetch does nothing either.
+    EXPECT_TRUE(h.service.prefetch({}));
+    EXPECT_EQ(h.transport->request_count(), 1u);
+}
+
+TEST(CurrencyServicePrefetch, A_fresh_fx_json_is_enough)
+{
+    const TempDirectory dir;
+    write_fx_json(dir, live_fx_json(), 1h);
+    Harness h{must_not_be_called(), dir.cache()};
+    EXPECT_TRUE(h.service.prefetch({}));
+    EXPECT_EQ(h.get()->per_eur, fx::parse_rates_cache(live_fx_json()).per_eur);
+    EXPECT_EQ(h.transport->request_count(), 0u);
+    EXPECT_TRUE(h.log.notices().empty());
+}
+
+TEST(CurrencyServicePrefetch, When_every_source_fails_it_keeps_nothing_and_a_search_within_a_minute_skips_the_sources)
+{
+    // A stale fx.json: the prefetch does not fall back to it, the search does, with its notice.
+    const TempDirectory dir;
+    write_fx_json(dir, live_fx_json(), 13h);
+    Harness h{offline(), dir.cache()};
+    EXPECT_FALSE(h.service.prefetch({}));
+    EXPECT_EQ(h.transport->request_count(), 3u);
+    EXPECT_EQ(read_bytes(dir.fx_json()), live_fx_json());
+
+    h.clock->advance(wizz::CurrencyService::kRetryAfterFailedPrefetch - wizz::Ticks{1});
+    const FxRatesPtr stale = h.get();
+    EXPECT_TRUE(stale->is_approximate);
+    EXPECT_EQ(stale->per_eur, fx::parse_rates_cache(live_fx_json()).per_eur);
+    EXPECT_EQ(h.log.messages(), std::vector<std::string>{std::string{kNoticeCached}});
+    EXPECT_EQ(h.transport->request_count(), 3u);  // no second wait for the sources
+
+    // Without any cache: the built-in table, with its notice.
+    Harness bare{offline()};
+    EXPECT_FALSE(bare.service.prefetch({}));
+    EXPECT_EQ(bare.get().get(), fx::built_in_rates().get());
+    EXPECT_EQ(bare.log.messages(), std::vector<std::string>{std::string{kNoticeBuiltIn}});
+    EXPECT_EQ(bare.transport->request_count(), 3u);
+}
+
+TEST(CurrencyServicePrefetch, A_minute_after_a_failed_prefetch_a_search_tries_the_sources_again)
+{
+    auto online = std::make_shared<std::atomic<bool>>(false);
+    Harness h{[online](const RecordedRequest&) -> ScriptedResponse {
+        if (!online->load()) {
+            throw http::TransportError("offline");
+        }
+        return wizz::test::json_response(frankfurter_body());
+    }};
+    EXPECT_FALSE(h.service.prefetch({}));
+    online->store(true);
+    h.clock->advance(wizz::CurrencyService::kRetryAfterFailedPrefetch);
+
+    const FxRatesPtr rates = h.get();
+    EXPECT_EQ(rates->source, "Frankfurter");
+    EXPECT_FALSE(rates->is_approximate);
+    EXPECT_EQ(h.log.messages(), std::vector<std::string>{std::string{kNoticeFrankfurter}});
+    EXPECT_EQ(h.transport->request_count(), 4u);
+}
+
+TEST(CurrencyServicePrefetch, Cancellation_propagates_and_leaves_nothing_behind)
+{
+    Harness cancelled_before{must_not_be_called()};
+    std::stop_source before;
+    before.request_stop();
+    EXPECT_THROW((void)cancelled_before.service.prefetch(before.get_token()), wizz::OperationCancelled);
+
+    std::stop_source cancel;
+    std::atomic<int> calls{0};
+    Harness h{[&](const RecordedRequest&) -> ScriptedResponse {
+        if (calls.fetch_add(1) == 0) {
+            cancel.request_stop();  // the window closes during the download
+            throw wizz::OperationCancelled{};
+        }
+        return wizz::test::json_response(frankfurter_body());
+    }};
+    EXPECT_THROW((void)h.service.prefetch(cancel.get_token()), wizz::OperationCancelled);
+    // Not a failed prefetch: the search asks the sources at once.
+    EXPECT_EQ(h.get()->source, "Frankfurter");
+    EXPECT_EQ(h.log.messages(), std::vector<std::string>{std::string{kNoticeFrankfurter}});
+    EXPECT_EQ(h.transport->request_count(), 2u);
+}
+
+TEST(CurrencyServicePrefetch, A_search_asking_during_the_prefetch_waits_and_sends_nothing_of_its_own)
+{
+    Gate gate;
+    Harness h{gate.responder()};
+
+    auto prefetch = std::async(std::launch::async, [&] { return h.service.prefetch({}); });
+    gate.wait_until_entered();
+    auto search = std::async(std::launch::async, [&] { return h.get(); });
+    const Gate::OpenOnExit open_on_exit{gate};
+    ASSERT_TRUE(wait_until([&] { return h.service.lock_waiters() == 1; })) << "the search never queued";
+    EXPECT_EQ(search.wait_for(0s), std::future_status::timeout);
+    gate.open();
+
+    EXPECT_TRUE(prefetch.get());
+    EXPECT_EQ(search.get()->source, "Frankfurter");
+    EXPECT_EQ(h.transport->request_count(), 1u);
+    EXPECT_TRUE(h.log.notices().empty());
 }
 
 } // namespace

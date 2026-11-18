@@ -19,10 +19,12 @@
 #include "wizz/core/catalog.hpp"
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/datetime_parse.hpp"
+#include "wizz/core/fare_days.hpp"
 #include "wizz/core/fx_rates.hpp"
 #include "wizz/core/http.hpp"
 #include "wizz/core/pricing.hpp"
 #include "wizz/core/result_views.hpp"
+#include "wizz/services/file_cache.hpp"
 #include "wizz/services/wizz_errors.hpp"
 #include "wizz/services/wizz_protocol.hpp"
 
@@ -36,6 +38,7 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
@@ -1399,6 +1402,157 @@ TEST(FlightSearchService, Searches_may_run_concurrently_and_finished_workers_are
     }
     // Later searches still work after earlier workers finished (they are reaped on the next call).
     EXPECT_EQ(run_search(*harness.service, budapest_to_london(harness, 30, 2))->flights.size(), 12u);
+}
+
+// ===========================================================================
+// Reused fares (DECISIONS D-66..D-68, D-70)
+// ===========================================================================
+
+TEST(FlightSearchServiceReuse, Counters_and_the_age_of_the_oldest_reused_fare)
+{
+    SearchHarness harness{daily_fares_responder()};
+    harness.warm_map();
+    const LegSearchRequest request = budapest_to_london(harness, 30, 2);  // three planned requests
+
+    const LegSearchResultPtr first = run_search(*harness.service, request);
+    EXPECT_EQ(first->requests_from_cache, 0);
+    EXPECT_EQ(first->requests_partly_cached, 0);
+    EXPECT_EQ(first->oldest_reused_age, std::nullopt);
+    EXPECT_EQ(harness.timetable_count(), 3u);
+
+    harness.clock->advance(10min);
+    const LegSearchResultPtr repeat = run_search(*harness.service, request);
+    EXPECT_EQ(repeat->requests_from_cache, 3);
+    EXPECT_EQ(repeat->requests_partly_cached, 0);
+    EXPECT_EQ(repeat->oldest_reused_age, Duration{10min});
+    EXPECT_EQ(repeat->requests_completed, 3);  // progress counts every planned request as before
+    EXPECT_EQ(repeat->flights.size(), first->flights.size());
+    EXPECT_EQ(harness.timetable_count(), 3u);
+
+    harness.clock->advance(2min);
+    LegSearchRequest shifted = request;
+    shifted.from = day(2026, 11, 11);
+    shifted.to = day(2026, 11, 21);
+    const LegSearchResultPtr partly = run_search(*harness.service, shifted);
+    EXPECT_EQ(partly->requests_from_cache, 0);
+    EXPECT_EQ(partly->requests_partly_cached, 3);
+    EXPECT_EQ(partly->oldest_reused_age, Duration{12min});
+    EXPECT_EQ(harness.timetable_count(), 6u);
+    EXPECT_EQ(harness.timetable_bodies().back(), body("DEB", "LTN", "2026-11-21", "2026-11-21", 2));
+
+    // A currency change keeps them (pricing::reprice copies the result).
+    const LegSearchResultPtr repriced = FlightSearchService::reprice(*partly, "HUF");
+    EXPECT_EQ(repriced->requests_partly_cached, 3);
+    EXPECT_EQ(repriced->oldest_reused_age, Duration{12min});
+}
+
+TEST(FlightSearchServiceReuse, A_not_served_route_answered_from_its_mark_counts_as_reused)
+{
+    SearchHarness harness{route_responder()};  // DEB is not served
+    harness.warm_map();
+    const LegSearchRequest request = budapest_to_london(harness, 30, 2);
+    (void)run_search(*harness.service, request);
+    ASSERT_EQ(harness.timetable_count(), 3u);
+
+    const LegSearchResultPtr repeat = run_search(*harness.service, request);
+    EXPECT_EQ(repeat->requests_from_cache, 3);
+    EXPECT_EQ(repeat->routes_not_served, 1);
+    EXPECT_EQ(harness.timetable_count(), 3u);
+}
+
+TEST(FlightSearchServiceReuse, Skipped_chunks_of_a_route_a_reused_mark_says_is_not_served_count_as_reused)
+{
+    SearchHarness harness{route_responder()};  // DEB is not served
+    harness.warm_map();
+    // Three routes over two chunks each (42 + 41 days); DEB→LTN's second chunk is skipped.
+    LegSearchRequest request = budapest_to_london(harness, 30, 2);
+    request.to = day(2027, 1, 31);
+    const LegSearchResultPtr first = run_search(*harness.service, request);
+    ASSERT_EQ(first->plan.requests.size(), 6u);
+    EXPECT_EQ(harness.timetable_count(), 5u);
+    EXPECT_EQ(first->requests_from_cache, 0);  // a mark fetched by this search is no reuse
+    EXPECT_EQ(first->routes_not_served, 1);
+
+    // The repeat sends nothing: the Log says "6 of 6 requests answered from them", not 5 of 6.
+    const LegSearchResultPtr repeat = run_search(*harness.service, request);
+    EXPECT_EQ(harness.timetable_count(), 5u);
+    EXPECT_EQ(repeat->requests_from_cache, 6);
+    EXPECT_EQ(repeat->requests_partly_cached, 0);
+    EXPECT_EQ(repeat->requests_completed, 6);
+    EXPECT_EQ(repeat->routes_not_served, 1);
+}
+
+TEST(FlightSearchServiceReuse, The_reuse_window_is_taken_once_when_the_search_begins)
+{
+    SearchHarness harness{daily_fares_responder()};
+    harness.warm_map();
+    const LegSearchRequest request = budapest_to_london(harness, 30, 2);
+    (void)run_search(*harness.service, request);
+    ASSERT_EQ(harness.timetable_count(), 3u);
+
+    harness.clock->advance(45min);
+    harness.wizz->set_timetable_reuse_window(1h);
+    // Back to 30 minutes while the search runs, after its first request: the search keeps
+    // the hour it began with (a Settings change applies to the next search).
+    const wizz::ProgressSink narrow_midway = [&harness](const SearchProgress& entry) {
+        if (entry.stage == "Fetching fares" && entry.completed == 1) {
+            harness.wizz->set_timetable_reuse_window(30min);
+        }
+    };
+    const LegSearchResultPtr during = harness.service->search_async(request, narrow_midway, {}, {}).get();
+    EXPECT_EQ(harness.wizz->timetable_reuse_window(), Duration{30min});
+    EXPECT_EQ(during->requests_from_cache, 3);
+    EXPECT_EQ(harness.timetable_count(), 3u);
+
+    const LegSearchResultPtr next = run_search(*harness.service, request);
+    EXPECT_EQ(next->requests_from_cache, 0);
+    EXPECT_EQ(harness.timetable_count(), 6u);
+}
+
+TEST(FlightSearchServiceReuse, Fares_json_is_written_when_a_search_ends_also_a_cancelled_one_but_not_after_a_fully_cached_one)
+{
+    const ScratchDirectory directory;
+    SearchHarness harness{daily_fares_responder(),
+                          SearchHarnessOptions{.customize = [&directory](wizz::WizzClientOptions& options) {
+                              options.cache = wizz::FileCache{directory.path()};
+                          }}};
+    harness.warm_map();
+    const std::filesystem::path file = directory.file("fares.json");
+    const LegSearchRequest request = budapest_to_london(harness, 30, 2);
+
+    std::atomic<bool> written_during_the_search{false};
+    const wizz::ProgressSink watch = [&](const SearchProgress& entry) {
+        if (entry.stage == "Fetching fares" && entry.completed == 2) {
+            written_during_the_search = std::filesystem::exists(file);  // two answers recorded by now
+        }
+    };
+    (void)harness.service->search_async(request, watch, {}, {}).get();
+    EXPECT_FALSE(written_during_the_search.load());
+    ASSERT_TRUE(std::filesystem::exists(file));
+    EXPECT_EQ(wizz::fare_days::parse(directory.read("fares.json")).day_count(), 33u);  // 3 routes × 11 days
+
+    // A fully cached search changes nothing and writes nothing.
+    std::filesystem::remove(file);
+    const LegSearchResultPtr cached = run_search(*harness.service, request);
+    EXPECT_EQ(cached->requests_from_cache, 3);
+    EXPECT_FALSE(std::filesystem::exists(file));
+
+    // A search cancelled after its first request still saves what that request brought.
+    LegSearchRequest shifted = request;
+    shifted.from = day(2026, 11, 11);
+    shifted.to = day(2026, 11, 21);
+    std::stop_source cancel;
+    const wizz::ProgressSink cancel_after_one = [&cancel](const SearchProgress& entry) {
+        if (entry.stage == "Fetching fares" && entry.completed == 1) {
+            cancel.request_stop();
+        }
+    };
+    const LegSearchResultPtr cancelled =
+        harness.service->search_async(shifted, cancel_after_one, {}, cancel.get_token()).get();
+    EXPECT_TRUE(cancelled->cancelled);
+    EXPECT_EQ(harness.timetable_count(), 4u);
+    ASSERT_TRUE(std::filesystem::exists(file));
+    EXPECT_EQ(wizz::fare_days::parse(directory.read("fares.json")).day_count(), 34u);
 }
 
 } // namespace

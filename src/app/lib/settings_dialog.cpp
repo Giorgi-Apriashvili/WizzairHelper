@@ -5,6 +5,8 @@
 #include "section_card.hpp"
 #include "ui_style.hpp"
 
+#include "wizz/ui/strings.hpp"
+
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -29,6 +31,7 @@
 namespace wizz::app {
 
 namespace strings = ui::update_strings;
+namespace search_strings = ui::strings;
 
 namespace {
 
@@ -85,7 +88,7 @@ constexpr int kNoteGap = 4;
 } // namespace
 
 SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::UpdateStatusView& status,
-                               QWidget* parent)
+                               fare_days::ReuseWindow fare_reuse, QWidget* parent)
     : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
                           Qt::WindowCloseButtonHint)
 {
@@ -178,6 +181,37 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     body->addWidget(note_row_);
 
     outer->addWidget(card_);
+    outer->addSpacing(kGroupGap);
+
+    // Searches (D-68): how long fetched fares are reused.
+    searches_card_ = new SectionCard(to_qstring(search_strings::kSearchesSection), style::glyph::kHistory, false, this);
+    searches_card_->setObjectName(QStringLiteral("searchesCard"));
+    reuse_label_ = plain_label(searches_card_, false);
+    reuse_label_->setObjectName(QStringLiteral("reuseLabel"));
+    reuse_label_->setText(to_qstring(search_strings::kReuseFaresWithin));
+    reuse_ = new QComboBox(searches_card_);
+    reuse_->setObjectName(QStringLiteral("reuseFaresWithin"));
+    reuse_->setAccessibleName(to_qstring(search_strings::kReuseFaresWithin));
+    ModernStyle::use_styled_popup(*reuse_);
+    for (const fare_days::ReuseWindow window : search_strings::kReuseWindows) {
+        reuse_->addItem(to_qstring(search_strings::reuse_window_label(window)), static_cast<int>(window));
+    }
+    reuse_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    reuse_label_->setBuddy(reuse_);
+    auto* reuse_row = new QHBoxLayout;
+    reuse_row->setContentsMargins(0, 0, 0, 0);
+    reuse_row->setSpacing(kColumnGap);
+    reuse_row->addWidget(reuse_label_, 0, Qt::AlignVCenter);
+    reuse_row->addWidget(reuse_, 0, Qt::AlignVCenter);
+    reuse_row->addStretch(1);
+    searches_card_->body()->addLayout(reuse_row);
+    reuse_hint_ = plain_label(searches_card_, true);
+    reuse_hint_->setObjectName(QStringLiteral("reuseHint"));
+    reuse_hint_->setText(to_qstring(search_strings::kReuseFaresHint));
+    reuse_hint_->setFont(style::hint_font());
+    style::set_text_tone(*reuse_hint_, style::TextTone::muted);
+    searches_card_->body()->addWidget(reuse_hint_);
+    outer->addWidget(searches_card_);
     outer->addSpacing(kButtonsGap);
     auto* buttons = new QHBoxLayout;
     buttons->setContentsMargins(0, 0, 0, 0);
@@ -196,7 +230,8 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
         QWidget::setTabOrder(previous, button);
         previous = button;
     }
-    QWidget::setTabOrder(previous, close_);
+    QWidget::setTabOrder(previous, reuse_);
+    QWidget::setTabOrder(reuse_, close_);
 
     connect(check_now_, &QPushButton::clicked, this, &SettingsDialog::check_now_requested);
     connect(close_, &QPushButton::clicked, this, &QDialog::accept);
@@ -210,16 +245,22 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
             report_options();
         }
     });
+    connect(reuse_, &QComboBox::currentIndexChanged, this, [this] {
+        if (!showing_) {
+            Q_EMIT fare_reuse_changed(this->fare_reuse());
+        }
+    });
     style::on_theme_change(this, [this] {
         apply_status_colour();
         QMetaObject::invokeMethod(this, [this] { fit_size(); }, Qt::QueuedConnection);  // High Contrast's metrics
     });
 
     show_options(options);
+    show_fare_reuse(fare_reuse);
     show_status(status);
 
     // Focus starts on the first control that can take it.
-    for (QWidget* first : std::initializer_list<QWidget*>{check_now_, automatic_}) {
+    for (QWidget* first : std::initializer_list<QWidget*>{check_now_, automatic_, reuse_}) {
         if (first->isEnabled()) {
             first->setFocus(Qt::OtherFocusReason);
             return;
@@ -257,6 +298,20 @@ update::UpdateOptions SettingsDialog::options() const
         options.when_found = static_cast<update::WhenFound>(choice);
     }
     return options;
+}
+
+void SettingsDialog::show_fare_reuse(fare_days::ReuseWindow window)
+{
+    const bool was_showing = std::exchange(showing_, true);  // no fare_reuse_changed for what is shown
+    reuse_->setCurrentIndex(std::max(0, reuse_->findData(static_cast<int>(window))));
+    showing_ = was_showing;
+}
+
+fare_days::ReuseWindow SettingsDialog::fare_reuse() const
+{
+    const QVariant window = reuse_->currentData();
+    return window.isValid() ? static_cast<fare_days::ReuseWindow>(window.toInt())
+                            : fare_days::ReuseWindow::thirty_minutes;
 }
 
 void SettingsDialog::report_options()

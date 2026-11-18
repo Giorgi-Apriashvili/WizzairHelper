@@ -31,12 +31,19 @@
 //   * Updates (D-45): enable_updates() turns the self-updater on in a normal run; it
 //     starts with OnShownAsync, after the start delay (its first evaluation may show the
 //     update bar, which moves the tabs).
+//   * Exchange rates at start (D-69): enable_rate_prefetch() makes a normal run fetch the
+//     rates on a worker when the start-up work begins, right after OnShownAsync started,
+//     silently: no busy panel, no Log line, the map load is not delayed.
 //   * Settings (D-63): the gear "Settings" button at the right end of the tab row (the
 //     tab widget's corner, after the tab bar in the Tab order) opens the window-modal
 //     Settings window (open_settings). A change of its update options applies at once:
 //     settings_.updates, the update controller's options, and settings.json is saved
 //     (never in autotest). Without an update controller (--autotest, --replay) it shows
-//     ui::updates_off_view(). Closing the main window closes it first.
+//     ui::updates_off_view(). Its "Searches" card sets how long searches reuse fetched
+//     fares (D-68): settings_.fare_reuse and the Wizz client's reuse window, applied to
+//     the next search, and settings.json saved like the update options. The window built
+//     from settings.json gives the client that window from the start. Closing the main
+//     window closes the Settings window first.
 
 #include "app_services.hpp"
 #include "task.hpp"
@@ -138,6 +145,13 @@ public:
     /// --autotest, D-30) or when the updater is already on.
     bool enable_updates(UpdateHooks hooks);
 
+    /// Fetch the exchange rates when the start-up work begins (D-69): main calls it in a
+    /// normal run only, like enable_updates. Returns false and does nothing in an
+    /// --autotest run or when it is already on; after the start-up work began it starts
+    /// at once.
+    bool enable_rate_prefetch();
+    [[nodiscard]] bool rate_prefetch_enabled() const noexcept { return rate_prefetch_; }
+
     // --- Parts ----------------------------------------------------------------------------
     [[nodiscard]] InputPanel* input_panel() const noexcept { return input_; }
     [[nodiscard]] BusyPanel* busy_panel() const noexcept { return busy_; }
@@ -208,12 +222,16 @@ private:
     /// The Settings window changed the update options: keep them, apply them to the update
     /// controller and save settings.json (not in autotest).
     void apply_update_options(const update::UpdateOptions& options);
+    /// The Settings window changed the reuse window of fetched fares (D-68): keep it, give it
+    /// to the Wizz client for the next search and save settings.json (not in autotest).
+    void apply_fare_reuse(fare_days::ReuseWindow window);
 
     std::shared_ptr<const AppServices> services_;
     ui::AppSettings settings_;
     std::optional<ui::AutoTestOptions> autotest_;
     bool shown_once_ = false;
     bool closed_ = false;
+    bool rate_prefetch_ = false;
     OpenAnimationProbe open_animation_probe_;
     MonotonicClock clock_;
     std::int64_t shown_ns_ = 0;

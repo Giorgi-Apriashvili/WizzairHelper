@@ -65,6 +65,9 @@ struct DayFare {
     Money price_per_person;                 ///< amount 0 when check_on_site
     FareStatus status = FareStatus::available;
     bool has_mac_flight = false;
+
+    /// Field-wise; the price compares by value (Money ignores the decimal's scale).
+    friend bool operator==(const DayFare&, const DayFare&) = default;
 };
 
 /// A resolved location (02 §2.10).
@@ -168,6 +171,13 @@ struct LegSearchResult {
     bool cancelled = false;
     std::optional<std::string> abort_reason;
     Duration elapsed{};
+    /// Planned requests answered from fares fetched earlier without sending anything, the
+    /// later chunks of a route that a reused not-served mark answered included (D-70).
+    int requests_from_cache = 0;
+    /// Planned requests that asked Wizz Air only for the days not fetched yet (D-70).
+    int requests_partly_cached = 0;
+    /// How old the oldest reused fare was when the search ended; nullopt when nothing was reused.
+    std::optional<Duration> oldest_reused_age;
 };
 using LegSearchResultPtr = std::shared_ptr<const LegSearchResult>;
 

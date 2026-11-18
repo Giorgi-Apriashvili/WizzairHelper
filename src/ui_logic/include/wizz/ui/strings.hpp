@@ -12,6 +12,7 @@
 // (dates, money, labels go through the locale service, 07 §1-§2); counts are
 // plain integers.
 
+#include "wizz/core/fare_days.hpp"
 #include "wizz/core/time.hpp"
 
 #include <array>
@@ -289,6 +290,32 @@ inline constexpr std::string_view kStartedLog =
 /// "screenshot {name} failed: {message}" (autotest).
 [[nodiscard]] std::string screenshot_failed(std::string_view name, std::string_view message);
 inline constexpr std::string_view kSameAreaLogLine = "  not searched: start and destination are the same area";
+/// The age of the oldest reused fare in the Log line (D-70), rounded UP to whole minutes:
+/// "minute" up to one minute (also 0 on a fixed clock), "{m} min", "{h} h", "{h} h {m} min".
+[[nodiscard]] std::string reused_age(Duration age);
+/// "  Reused fares fetched in the last {age}: {full} of {planned} requests answered from them.",
+/// with ", {partly} shortened to the days not fetched yet" before the full stop when partly > 0
+/// (D-70; the second line of LogResult when anything was reused).
+[[nodiscard]] std::string reused_fares_log(std::string_view age_text, std::int64_t full, std::size_t planned,
+                                           std::int64_t partly);
+
+// ---------------------------------------------------------------------------
+// Settings window: searches (DECISIONS D-68)
+// ---------------------------------------------------------------------------
+
+/// The card's title, also its accessible name.
+inline constexpr std::string_view kSearchesSection = "Searches";
+/// The drop-down's label, also its accessible name.
+inline constexpr std::string_view kReuseFaresWithin = "Reuse fares fetched within";
+inline constexpr std::string_view kReuseFaresHint =
+    "Searches ask Wizz Air only for days not fetched within this time. Fares are kept on this computer for up to "
+    "6 hours.";
+/// The drop-down's choices, in this order.
+inline constexpr std::array<fare_days::ReuseWindow, 4> kReuseWindows{
+    fare_days::ReuseWindow::thirty_minutes, fare_days::ReuseWindow::one_hour, fare_days::ReuseWindow::three_hours,
+    fare_days::ReuseWindow::six_hours};
+/// "30 minutes", "1 hour", "3 hours", "6 hours".
+[[nodiscard]] std::string_view reuse_window_label(fare_days::ReuseWindow window) noexcept;
 
 // ---------------------------------------------------------------------------
 // --autotest summary.json (01 §17.3)

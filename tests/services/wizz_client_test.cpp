@@ -1,7 +1,8 @@
 // WizzApiClient (04 §2–§13) against the fake transport: 05 §3.4 CT-API-01..14,
 // 05 §3.11 CT-SRCH-03..05, 05 §7.1 P-01..P-08, P-10..P-12, P-33, P-34, P-32 at the
 // client level, 05 §7.3 R-02, the 04 §11.3 classification table row by row, the
-// 04 §8 route-map fallback rules and the 04 §10 error types. Unless a test says
+// 04 §8 route-map fallback rules, the 04 §10 error types and the per-day reuse of
+// fetched fares with fares.json (DECISIONS D-66, D-67). Unless a test says
 // otherwise: the 05 §1.4 harness (spacing 0, jitter 0, recording delay, FIXED
 // clock 2026-11-02T10:00:00Z with local zone UTC, cache disabled).
 //
@@ -12,11 +13,14 @@
 
 #include "wizz/core/cancellation.hpp"
 #include "wizz/core/clocks.hpp"
+#include "wizz/core/fare_days.hpp"
 #include "wizz/core/http.hpp"
 #include "wizz/core/json.hpp"
 #include "wizz/core/time.hpp"
 #include "wizz/services/file_cache.hpp"
 #include "wizz/services/wizz_errors.hpp"
+
+#include "search_harness.hpp"
 
 #include "support/fake_transport.hpp"
 #include "support/fixtures.hpp"
@@ -41,7 +45,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -87,6 +90,7 @@ using wizz::test::RecordingDelay;
 using wizz::test::Responder;
 using wizz::test::ScriptedResponse;
 using wizz::test::string_content_response;
+using wizz::test::search::ScratchDirectory;
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -329,31 +333,6 @@ template <class E, class F>
         from, to);
 }
 
-/// A fresh directory `%TEMP%\wizzairhelper-test-<random>`, removed afterwards (05 §1.5).
-class TempDirectory {
-public:
-    TempDirectory()
-    {
-        std::random_device entropy;
-        path_ = fs::temp_directory_path() /
-                std::format("wizzairhelper-test-{:08x}{:08x}{:08x}", entropy(), entropy(), entropy());
-        fs::create_directories(path_);
-    }
-    ~TempDirectory()
-    {
-        std::error_code ignored;  // deletion errors are ignored (05 §1.5)
-        fs::remove_all(path_, ignored);
-    }
-    TempDirectory(const TempDirectory&) = delete;
-    TempDirectory& operator=(const TempDirectory&) = delete;
-
-    [[nodiscard]] const fs::path& path() const noexcept { return path_; }
-    [[nodiscard]] fs::path file(std::string_view name) const { return path_ / name; }
-
-private:
-    fs::path path_;
-};
-
 [[nodiscard]] std::optional<std::string> read_file(const fs::path& path)
 {
     std::ifstream file{path, std::ios::binary};
@@ -370,6 +349,9 @@ void write_file(const fs::path& path, std::string_view content)
     ASSERT_TRUE(file.good()) << path;
 }
 
+/// FILETIME counts 100 ns ticks (one wizz::Tick) since 1601-01-01 UTC, as FileCache reads it.
+constexpr std::chrono::sys_days kFileTimeEpoch{std::chrono::year{1601} / std::chrono::January / 1};
+
 /// The UTC instant of a file's last write, converted exactly as FileCache does
 /// (FILETIME ticks since 1601-01-01), for fixed clocks placed relative to it.
 [[nodiscard]] UtcInstant last_write_utc(const fs::path& path)
@@ -380,8 +362,23 @@ void write_file(const fs::path& path, std::string_view content)
     }
     const std::uint64_t ticks =
         (std::uint64_t{data.ftLastWriteTime.dwHighDateTime} << 32) | data.ftLastWriteTime.dwLowDateTime;
-    constexpr std::chrono::sys_days kFileTimeEpoch{std::chrono::year{1601} / std::chrono::January / 1};
     return UtcInstant{kFileTimeEpoch} + wizz::Ticks{static_cast<std::int64_t>(ticks)};
+}
+
+/// Sets a file's last write time to `instant`, the reverse of last_write_utc.
+void set_last_write_utc(const fs::path& path, UtcInstant instant)
+{
+    const auto ticks = static_cast<std::uint64_t>((instant - UtcInstant{kFileTimeEpoch}).count());
+    const FILETIME time{.dwLowDateTime = static_cast<DWORD>(ticks & 0xFFFF'FFFFu),
+                        .dwHighDateTime = static_cast<DWORD>(ticks >> 32)};
+    const HANDLE file = ::CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE) << path;
+    const BOOL set = ::SetFileTime(file, nullptr, nullptr, &time);
+    ::CloseHandle(file);
+    ASSERT_NE(set, FALSE) << path;
+    ASSERT_EQ(last_write_utc(path), instant) << path;
 }
 
 /// Forwards to a FakeTransport and records every request's per-attempt timeout.
@@ -479,6 +476,7 @@ TEST(WizzClient, Options_have_the_04_4_defaults)
     EXPECT_EQ(options.retry_delays, (Delays{5s, 15s, 30s}));
     EXPECT_EQ(options.map_max_age, Duration{24h});
     EXPECT_EQ(options.timetable_cache_age, Duration{30min});
+    EXPECT_TRUE(options.keep_timetables_on_disk);
     EXPECT_TRUE(options.delay);
     ASSERT_NE(options.clock, nullptr);
     EXPECT_NE(dynamic_cast<const wizz::SystemClock*>(options.clock.get()), nullptr);
@@ -489,6 +487,7 @@ TEST(WizzClient, Options_have_the_04_4_defaults)
     EXPECT_EQ(WizzApiClient::kMaxDaysPerRequest, 42);
     EXPECT_EQ(WizzApiClient::kApiUrlCacheFile, "api-url.txt");
     EXPECT_EQ(WizzApiClient::kMapCacheFile, "map.json");
+    EXPECT_EQ(WizzApiClient::kTimetableCacheFile, "fares.json");
     EXPECT_EQ(wizz::kBrowserUserAgent, kUserAgent);
 }
 
@@ -731,10 +730,13 @@ TEST(WizzClient, CT_API_09_InvalidFromDate_shifts_the_window_by_one_day)
     EXPECT_FALSE(result.route_not_served);
     EXPECT_TRUE(h.delays().empty());
 
-    // The memory cache keeps the outer, unshifted key (04 §9.2).
+    // The outer, unshifted window is recorded (04 §9.2), so the repeat sends nothing.
+    // Changed deliberately by the per-day reuse (DECISIONS D-66): a repeat answers the
+    // rows dated inside the window asked for (11-10..11-12), not a verbatim copy of the
+    // first answer (11 rows, 8 of them dated after the window and never stored).
     const TimetableResult again = h.timetable(query);
     EXPECT_TRUE(again.from_cache);
-    EXPECT_EQ(again.fares.size(), 11u);
+    EXPECT_EQ(again.fares.size(), 3u);
     EXPECT_EQ(h.timetable_calls(), 2u);
 }
 
@@ -758,10 +760,12 @@ TEST(WizzClient, CT_API_10_Past_dates_are_clamped_to_today_and_long_ranges_are_c
     EXPECT_FALSE(result.route_not_served);
     EXPECT_FALSE(result.from_cache);
 
-    // Each chunk has its own cache entry; the aggregate is not cached but is all-cached.
+    // Every chunk is reused; the aggregate is all-cached. Changed deliberately by the
+    // per-day reuse (DECISIONS D-66): the repeat answers the rows dated inside each chunk
+    // (the fixture's 11 rows, all in the first), not the first answer three times (33).
     const TimetableResult again = h.timetable(query);
     EXPECT_TRUE(again.from_cache);
-    EXPECT_EQ(again.fares.size(), 33u);
+    EXPECT_EQ(again.fares.size(), 11u);
     EXPECT_EQ(h.timetable_calls(), 3u);
 }
 
@@ -842,7 +846,7 @@ TEST(WizzClient, CT_API_13_Cancellation_propagates)
 
 TEST(WizzClient, CT_API_14_Api_url_and_map_are_cached_on_disk)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const auto transport = std::make_shared<FakeTransport>(default_responder());
     const auto make_options = [&] {
         WizzClientOptions options;  // Clock SYSTEM (the default)
@@ -1277,7 +1281,7 @@ TEST(WizzClient, User_cancel_wins_over_a_timeout_and_cancels_a_stalled_transfer)
 
 TEST(WizzClient, P_11_a_Stale_map_on_disk_is_used_after_the_retries)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const std::string map = read_fixture("map_subset.json");
     write_file(directory.file("map.json"), map);
     const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 25h);
@@ -1338,7 +1342,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
 
     // An unreadable network map falls back to a stale copy and is not written to disk.
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1351,7 +1355,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A blocked map request falls back too (04 §8: Blocked does fall back).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1364,7 +1368,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // Without a usable copy the API error is rethrown unchanged (type, message, status).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), "{corrupt");  // a corrupt copy counts as absent
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
                       return is_map(r) ? std::optional{string_content_response(429).with_header("x-kpsdk-ct", "abc")}
@@ -1378,7 +1382,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A fresh but corrupt map.json is skipped and replaced by the network copy.
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), "{corrupt");
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 1h);
         Harness h(default_responder(), ClientSetup{.clock = clock, .cache_dir = directory.path()});
@@ -1388,7 +1392,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A fresh map.json: no request, no API-URL lookup (warm start, 04 §8).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 24h);  // age = max age: fresh
         Harness h([](const RecordedRequest&) -> ScriptedResponse { throw std::logic_error("must not be called"); },
@@ -1402,7 +1406,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
 
 TEST(WizzClient, Route_map_cancellation_never_falls_back_to_the_stale_copy)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     write_file(directory.file("map.json"), read_fixture("map_subset.json"));
     const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
     std::stop_source cancel;
@@ -1504,6 +1508,329 @@ TEST(WizzClient, A_not_served_chunk_stops_the_remaining_chunks)
     EXPECT_EQ(h.timetable_calls(), 2u);  // the third chunk is skipped
 }
 
+// ---------------------------------------------------------------------------
+// Per-day reuse of fetched fares (DECISIONS D-66) and fares.json (D-67)
+// ---------------------------------------------------------------------------
+
+/// Timetable answers with one row per requested day (departure 06:00), priced "<n>.0"
+/// EUR on the n-th timetable call, so a test sees which answer each row came from.
+/// `special(n)` may answer a call differently (an error, InvalidMarket, a cancel).
+[[nodiscard]] Responder daily_rows(std::function<std::optional<ScriptedResponse>(int call)> special = {})
+{
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    return with_default([calls, special = std::move(special)](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+        if (!is_timetable(r)) {
+            return std::nullopt;
+        }
+        const int call = calls->fetch_add(1) + 1;
+        if (special) {
+            if (std::optional<ScriptedResponse> answer = special(call)) {
+                return answer;
+            }
+        }
+        const wizz::json::Value root = wizz::json::parse(*r.body);
+        const wizz::json::Value& item = root.find("flightList")->at(0);
+        const Date first = *Date::parse_iso(*item.get_string("from"));
+        const Date last = *Date::parse_iso(*item.get_string("to"));
+        std::vector<wizz::test::search::FareRow> rows;
+        for (Date date = first; date <= last; date = date.add_days(1)) {
+            rows.push_back(wizz::test::search::FareRow{.from = std::string{*item.get_string("departureStation")},
+                                                       .to = std::string{*item.get_string("arrivalStation")},
+                                                       .departure = date.iso() + "T06:00:00",
+                                                       .amount = std::format("{}.0", call)});
+        }
+        return json_response(wizz::test::search::timetable_json(rows));
+    });
+}
+
+/// "yyyy-MM-dd <amount>" of every row, in order.
+[[nodiscard]] Strings rows_of(const TimetableResult& result)
+{
+    Strings rows;
+    for (const wizz::DayFare& fare : result.fares) {
+        rows.push_back(fare.date.iso() + " " + fare.price_per_person.amount.to_string());
+    }
+    return rows;
+}
+
+/// `count` rows from `first` on, priced `amount`.
+[[nodiscard]] Strings daily(Date first, int count, std::string_view amount)
+{
+    Strings rows;
+    for (int i = 0; i < count; ++i) {
+        rows.push_back(first.add_days(i).iso() + " " + std::string{amount});
+    }
+    return rows;
+}
+
+[[nodiscard]] Strings concat(Strings a, const Strings& b)
+{
+    a.insert(a.end(), b.begin(), b.end());
+    return a;
+}
+
+TEST(WizzClientReuse, A_shifted_or_wider_chunk_asks_only_for_the_missing_days_and_merges_in_date_order)
+{
+    Harness h{daily_rows()};
+    const TimetableResult first = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    EXPECT_EQ(rows_of(first), daily(day(2026, 11, 10), 11, "1.0"));
+    EXPECT_FALSE(first.from_cache);
+    EXPECT_FALSE(first.partly_cached);
+    EXPECT_EQ(first.oldest_reused, std::nullopt);
+
+    // One day later in time and dates: one request for 11-21 alone.
+    h.clock().advance(5min);
+    const TimetableResult shifted = h.timetable(tq("BUD", "LTN", day(2026, 11, 11), day(2026, 11, 21)));
+    EXPECT_EQ(h.timetable_bodies().back(), bud_ltn_body("2026-11-21", "2026-11-21"));
+    EXPECT_EQ(rows_of(shifted), concat(daily(day(2026, 11, 11), 10, "1.0"), daily(day(2026, 11, 21), 1, "2.0")));
+    EXPECT_FALSE(shifted.from_cache);
+    EXPECT_TRUE(shifted.partly_cached);
+    EXPECT_EQ(shifted.oldest_reused, kNow);
+
+    // Earlier: the fresh rows come first, the reused ones after them.
+    const TimetableResult earlier = h.timetable(tq("BUD", "LTN", day(2026, 11, 9), day(2026, 11, 15)));
+    EXPECT_EQ(h.timetable_bodies().back(), bud_ltn_body("2026-11-09", "2026-11-09"));
+    EXPECT_EQ(rows_of(earlier), concat(daily(day(2026, 11, 9), 1, "3.0"), daily(day(2026, 11, 10), 6, "1.0")));
+    EXPECT_TRUE(earlier.partly_cached);
+
+    // Inside what is known: nothing is sent, the oldest reused fetch is reported.
+    const TimetableResult inside = h.timetable(tq("BUD", "LTN", day(2026, 11, 19), day(2026, 11, 21)));
+    EXPECT_EQ(rows_of(inside), concat(daily(day(2026, 11, 19), 2, "1.0"), daily(day(2026, 11, 21), 1, "2.0")));
+    EXPECT_TRUE(inside.from_cache);
+    EXPECT_FALSE(inside.partly_cached);
+    EXPECT_EQ(inside.oldest_reused, kNow);
+    EXPECT_EQ(h.timetable_calls(), 3u);
+    EXPECT_EQ(h.client().request_count(), 4);  // the homepage and three timetables
+}
+
+TEST(WizzClientReuse, A_shifted_multi_chunk_query_sends_one_request_for_its_one_new_day)
+{
+    Harness h{daily_rows()};
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 2), day(2027, 1, 31)));
+    ASSERT_EQ(h.timetable_calls(), 3u);
+
+    h.clock().advance(10min);
+    const TimetableResult shifted = h.timetable(tq("BUD", "LTN", day(2026, 11, 3), day(2027, 2, 1)));
+    EXPECT_EQ(h.timetable_calls(), 4u);
+    EXPECT_EQ(h.timetable_bodies().back(), bud_ltn_body("2027-02-01", "2027-02-01"));
+    EXPECT_EQ(shifted.fares.size(), 91u);
+    EXPECT_FALSE(shifted.from_cache);
+    EXPECT_TRUE(shifted.partly_cached);
+    EXPECT_EQ(shifted.oldest_reused, kNow);
+}
+
+TEST(WizzClientReuse, A_cancel_or_an_error_during_the_fetch_records_nothing)
+{
+    std::stop_source cancel;
+    Harness h{daily_rows([&cancel](int call) -> std::optional<ScriptedResponse> {
+        if (call == 2) {
+            cancel.request_stop();  // the user cancels while the hull is on its way
+            throw OperationCancelled{};
+        }
+        if (call == 3) {
+            return html_response("<html>Forbidden</html>", 403);
+        }
+        return std::nullopt;
+    })};
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+
+    const TimetableQuery shifted = tq("BUD", "LTN", day(2026, 11, 11), day(2026, 11, 21));
+    EXPECT_THROW((void)h.timetable(shifted, cancel.get_token()), OperationCancelled);
+    EXPECT_TRUE(catch_exactly<WizzBlockedError>([&] { (void)h.timetable(shifted); }));
+    const TimetableResult retried = h.timetable(shifted);
+    EXPECT_EQ(rows_of(retried), concat(daily(day(2026, 11, 11), 10, "1.0"), daily(day(2026, 11, 21), 1, "4.0")));
+    const Strings bodies = h.timetable_bodies();
+    ASSERT_EQ(bodies.size(), 4u);
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        EXPECT_EQ(bodies[i], bud_ltn_body("2026-11-21", "2026-11-21")) << i;
+    }
+}
+
+TEST(WizzClientReuse, InvalidMarket_for_the_missing_days_makes_the_route_not_served_while_the_mark_is_fresh)
+{
+    Harness h{daily_rows([](int call) -> std::optional<ScriptedResponse> {
+        if (call == 2) {
+            return json_response(R"({"validationCodes":["InvalidMarket"]})", 400);
+        }
+        return std::nullopt;
+    })};
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+
+    h.clock().advance(1min);
+    const TimetableResult not_served = h.timetable(tq("BUD", "LTN", day(2026, 11, 11), day(2026, 11, 21)));
+    EXPECT_TRUE(not_served.route_not_served);
+    EXPECT_TRUE(not_served.fares.empty());
+    EXPECT_FALSE(not_served.from_cache);
+
+    // The mark answers every chunk of the route while it is fresh, the old days included.
+    const TimetableResult marked = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    EXPECT_TRUE(marked.route_not_served);
+    EXPECT_TRUE(marked.from_cache);
+    EXPECT_EQ(marked.oldest_reused, kNow + 1min);
+    EXPECT_EQ(h.timetable_calls(), 2u);
+
+    // Once the mark is stale the whole chunk is asked for again.
+    h.clock().advance(30min);
+    const TimetableResult again = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    EXPECT_FALSE(again.route_not_served);
+    EXPECT_EQ(rows_of(again), daily(day(2026, 11, 10), 11, "3.0"));
+    EXPECT_EQ(h.timetable_bodies().back(), bud_ltn_body("2026-11-10", "2026-11-20"));
+}
+
+TEST(WizzClientReuse, The_reuse_window_starts_from_the_options_and_applies_to_later_calls)
+{
+    Harness h{daily_rows()};
+    EXPECT_EQ(h.client().timetable_reuse_window(), Duration{30min});
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+    (void)h.timetable(query);
+
+    h.clock().advance(45min);
+    h.client().set_timetable_reuse_window(1h);
+    EXPECT_EQ(h.client().timetable_reuse_window(), Duration{1h});
+    EXPECT_TRUE(h.timetable(query).from_cache);
+    EXPECT_EQ(h.timetable_calls(), 1u);
+
+    // A window passed with the call wins over the client's.
+    const TimetableResult explicit_window = h.client().get_timetable(query, {}, {}, 30min);
+    EXPECT_FALSE(explicit_window.from_cache);
+    EXPECT_EQ(h.timetable_calls(), 2u);
+
+    // Days dated today are reused for at most 30 minutes whatever the window.
+    h.client().set_timetable_reuse_window(6h);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 2), day(2026, 11, 5)));
+    h.clock().advance(31min);
+    const TimetableResult today = h.timetable(tq("BUD", "LTN", day(2026, 11, 2), day(2026, 11, 5)));
+    EXPECT_EQ(h.timetable_bodies().back(), bud_ltn_body("2026-11-02", "2026-11-02"));
+    EXPECT_TRUE(today.partly_cached);
+}
+
+TEST(WizzClientReuse, Save_writes_fares_json_only_when_something_changed)
+{
+    const ScratchDirectory directory;
+    Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
+    const fs::path file = directory.file("fares.json");
+
+    h.client().save_timetables();  // nothing fetched: nothing written
+    EXPECT_FALSE(fs::exists(file));
+
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    EXPECT_FALSE(fs::exists(file));  // only a save writes
+    h.client().save_timetables();
+    const std::optional<std::string> saved = read_file(file);
+    ASSERT_TRUE(saved.has_value());
+    const wizz::fare_days::Store stored = wizz::fare_days::parse(*saved);
+    EXPECT_EQ(stored.day_count(), 11u);
+    EXPECT_FALSE(fs::exists(directory.file("fares.json.tmp")));
+
+    // Reused only: nothing changed, nothing written.
+    fs::remove(file);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 12), day(2026, 11, 14)));
+    h.client().save_timetables();
+    EXPECT_FALSE(fs::exists(file));
+
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 22)));
+    h.client().save_timetables();
+    ASSERT_TRUE(fs::exists(file));
+    EXPECT_EQ(wizz::fare_days::parse(*read_file(file)).day_count(), 13u);
+
+    // A save prunes: 6 hours on, nothing is kept.
+    (void)h.timetable(tq("BUD", "NAP", day(2026, 11, 21), day(2026, 11, 22)));
+    h.clock().advance(6h);
+    h.client().save_timetables();
+    EXPECT_EQ(wizz::fare_days::parse(*read_file(file)).day_count(), 0u);
+}
+
+TEST(WizzClientReuse, A_restarted_client_reuses_fares_json_within_the_window)
+{
+    const ScratchDirectory directory;
+    const auto clock = std::make_shared<FixedClock>();
+    const auto transport = std::make_shared<FakeTransport>(daily_rows());
+    const RecordingDelay delay;
+    const auto make_client = [&] {
+        WizzClientOptions options = test_options(clock, delay);
+        options.cache = FileCache{directory.path()};
+        return std::make_unique<WizzApiClient>(transport, std::move(options));
+    };
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+
+    auto before = make_client();
+    const TimetableResult first = before->get_timetable(query, {}, {});
+    before->save_timetables();
+    before.reset();
+    const std::size_t sent = transport->request_count();
+
+    clock->advance(10min);
+    auto after = make_client();
+    const TimetableResult restarted = after->get_timetable(query, {}, {});
+    EXPECT_TRUE(restarted.from_cache);
+    EXPECT_EQ(restarted.fares, first.fares);
+    EXPECT_EQ(restarted.oldest_reused, kNow);
+    EXPECT_EQ(transport->request_count(), sent);  // not even the API URL
+    EXPECT_EQ(after->request_count(), 0);
+
+    clock->advance(21min);  // 31 minutes after the fetch
+    EXPECT_FALSE(after->get_timetable(query, {}, {}).from_cache);
+    EXPECT_EQ(transport->count_urls_containing("/search/timetableV2"), 2u);
+}
+
+TEST(WizzClientReuse, A_broken_fares_json_is_a_miss_and_is_overwritten_at_the_next_save)
+{
+    for (const std::string_view broken : {"", "garbage", R"({"version":2,"routes":[]})",
+                                          R"({"version":1,"routes":[{"from":"BUD"}]})"}) {
+        const ScratchDirectory directory;
+        write_file(directory.file("fares.json"), broken);
+        Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
+        const TimetableResult result = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+        EXPECT_FALSE(result.from_cache) << broken;
+        EXPECT_EQ(h.timetable_calls(), 1u) << broken;
+        h.client().save_timetables();
+        EXPECT_EQ(wizz::fare_days::parse(*read_file(directory.file("fares.json"))).day_count(), 11u) << broken;
+    }
+}
+
+TEST(WizzClientReuse, A_fares_json_last_written_more_than_6_hours_ago_is_not_read)
+{
+    // A save writes after every fetch it holds, so such a file holds nothing reusable (D-67).
+    // The file here is reusable on its own terms (fetched a minute ago): only its age decides.
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+    wizz::fare_days::Store store;
+    store.record(wizz::fare_days::RouteKey{.from = "BUD", .to = "LTN", .price_type = PriceType::regular, .adults = 1},
+                 query.start_date, query.end_date, {}, kNow - 1min);
+    const std::string content = wizz::fare_days::serialize(store);
+
+    for (const Duration age : {Duration{6h}, Duration{6h} + wizz::Ticks{1}}) {
+        const bool read = age <= wizz::fare_days::kLongestReuse;
+        const ScratchDirectory directory;
+        write_file(directory.file("fares.json"), content);
+        set_last_write_utc(directory.file("fares.json"), kNow - age);
+        Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
+        EXPECT_EQ(h.timetable(query).from_cache, read) << age.count();
+        EXPECT_EQ(h.timetable_calls(), read ? 0u : 1u) << age.count();
+    }
+}
+
+TEST(WizzClientReuse, Without_keep_on_disk_fares_json_is_neither_read_nor_written)
+{
+    const ScratchDirectory directory;
+    {
+        Harness writer{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
+        (void)writer.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+        writer.client().save_timetables();
+    }
+    const std::optional<std::string> before = read_file(directory.file("fares.json"));
+    ASSERT_TRUE(before.has_value());
+
+    Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path(),
+                                        .customize = [](WizzClientOptions& options) {
+                                            options.keep_timetables_on_disk = false;
+                                        }}};
+    EXPECT_FALSE(h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))).from_cache);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));
+    h.client().save_timetables();
+    EXPECT_EQ(read_file(directory.file("fares.json")), before);
+    EXPECT_EQ(h.timetable_calls(), 2u);
+}
+
 TEST(WizzClient, P_33_Discovery_lock_lets_one_cold_caller_discover)
 {
     std::atomic<const WizzApiClient*> client{nullptr};
@@ -1553,7 +1880,7 @@ TEST(WizzClient, P_33_Discovery_lock_lets_one_cold_caller_discover)
 
 TEST(WizzClient, P_34_Stale_cached_api_url_is_replaced_after_rediscovery)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     write_file(directory.file("api-url.txt"), kStaleApiUrl);
     const std::string stale_page = read_fixture("stale_version_404.html");
     Harness h(with_default([stale_page](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1576,7 +1903,7 @@ TEST(WizzClient, P_34_The_cached_file_is_deleted_only_while_it_holds_the_stale_u
 {
     // Another instance replaced api-url.txt meanwhile: invalidation leaves it alone
     // and the next lookup uses it without discovery.
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const fs::path url_file = directory.file("api-url.txt");
     write_file(url_file, kStaleApiUrl);
     const std::string stale_page = read_fixture("stale_version_404.html");
@@ -1598,7 +1925,7 @@ TEST(WizzClient, P_34_The_cached_file_is_deleted_only_while_it_holds_the_stale_u
     EXPECT_EQ(read_file(url_file), std::string{kApiUrl});
 
     // A padded stale value is compared trimmed, so it is deleted and rediscovered.
-    const TempDirectory padded_directory;
+    const ScratchDirectory padded_directory;
     write_file(padded_directory.file("api-url.txt"), "  "s + std::string{kStaleApiUrl} + "\r\n");
     Harness padded(with_default([stale_page](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
                        return r.url.contains("/29.22.0/") ? std::optional{html_response(stale_page, 404)} : std::nullopt;
@@ -1613,7 +1940,7 @@ TEST(WizzClient, Cached_api_url_must_match_the_strict_pattern_and_is_not_rewritt
 {
     // A valid value with a trailing newline is used as is and never rewritten (04 §7.1).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("api-url.txt"), std::string{kApiUrl} + "\n");
         Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
         EXPECT_EQ(h.client().get_api_url({}, {}), kApiUrl);
@@ -1624,7 +1951,7 @@ TEST(WizzClient, Cached_api_url_must_match_the_strict_pattern_and_is_not_rewritt
     // A value that fails the strict pattern is ignored (not deleted) and overwritten by discovery.
     for (const std::string_view invalid : {"https://be.wizzair.com/29.23.1/api", "https://be.wizzair.com/29/Api",
                                            "http://be.wizzair.com/29.23.1/Api", "garbage"}) {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("api-url.txt"), invalid);
         Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
         EXPECT_EQ(h.client().get_api_url({}, {}), kApiUrl) << invalid;

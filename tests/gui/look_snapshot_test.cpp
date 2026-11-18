@@ -605,7 +605,7 @@ void render_settings(const QString& look)
         if (state == QStringLiteral("available")) {
             options.when_found = wizz::update::WhenFound::notify_only;  // an installed copy offers it then
         }
-        wizz::app::SettingsDialog dialog{options, status, &window};
+        wizz::app::SettingsDialog dialog{options, status, wizz::fare_days::ReuseWindow::thirty_minutes, &window};
         dialog.show();
         dialog.activateWindow();
         pump();
@@ -619,7 +619,8 @@ void render_settings(const QString& look)
         if (state != QStringLiteral("latest")) {
             continue;
         }
-        wizz::app::SettingsDialog dialog{wizz::update::UpdateOptions{}, status, &window};
+        wizz::app::SettingsDialog dialog{wizz::update::UpdateOptions{}, status, wizz::fare_days::ReuseWindow::thirty_minutes,
+                                        &window};
         dialog.show();
         dialog.activateWindow();
         pump();

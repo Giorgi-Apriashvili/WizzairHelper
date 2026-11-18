@@ -31,6 +31,14 @@ replays (heavy_cached, cancel_cached), whose timetables are generated into
 <work>/replay from the frozen live route map: one fare per day on every route
 from Budapest over 105 days (42-day chunks).
 
+restart_shifted runs the exe twice on one --data-root profile (DECISIONS D-66, D-67): run A
+searches every route from Budapest over 3 Nov 2026 - 15 Feb 2027 at 09:40Z and leaves
+fares.json behind; run B, the one checked like any other, searches one day later (4 Nov -
+16 Feb) at 10:00Z and must ask Wizz Air only for 16 Feb of each route, take the route map and
+the API address from the profile's disk cache, say so in the Log and rewrite fares.json. Its
+generated replay answers every window an implementation might ask for, so one that reuses
+nothing still completes - with far more requests.
+
 summary.json carries no booking URLs (01 §17.3, 01-digest C-07); the links the grids
 open are asserted by the in-process GUI tests (ControllerFlows.*).
 
@@ -60,6 +68,7 @@ FIXED_NOW = '2026-11-02T10:00:00Z'
 STARTED = ('[10:00:00] WizzairHelper started. Fares: wizzair.com (unofficial website API). Geocoding: Photon / '
            'Nominatim, data © OpenStreetMap contributors. Exchange rates: Frankfurter / currency-api.')
 ROUTE_MAP_LOG = '[10:00:00] Route map: {} airports, API https://be.wizzair.com/29.23.1/Api.'
+ROUTE_MAP_CACHED_LOG = '[10:00:00] Route map: {} airports (from the local cache).'
 KEY_ORDER = ['startedAt', 'apiUrl', 'airports', 'outbound', 'return', 'roundTrips', 'afterCurrencySwitch',
              'exception', 'progressScreenshots', 'finalStatus', 'requestsToWizz', 'log']
 DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'startup', 'cancel', 'searches', 'grids', 'display', 'layout',
@@ -85,10 +94,13 @@ PRESSES = ['Esc', 'Cancel button', 'Esc', 'Cancel handler']
 
 
 class Checker:
-    def __init__(self, summary, diagnostics, out_dir):
+    def __init__(self, summary, diagnostics, out_dir, data_root=None):
         self.summary = summary
         self.diagnostics = diagnostics
         self.out_dir = out_dir
+        self.data_root = data_root
+        self.first_summary = None       # an earlier run on the same profile (FIRST_RUNS)
+        self.fares_after_first = None   # fares.json as that run left it
         self.failures = []
 
     def expect(self, condition, message):
@@ -176,14 +188,14 @@ class Checker:
         extra = os.path.join(self.out_dir, 'progress-%d.png' % (len(shots) + 1))
         self.expect(not os.path.exists(extra), 'more progress screenshots than progressScreenshots entries')
 
-    def common(self, airports):
+    def common(self, airports, route_map_log=ROUTE_MAP_LOG, api_url='https://be.wizzair.com/29.23.1/Api'):
         self.equal('startedAt', '2026-11-02T10:00:00')
-        self.equal('apiUrl', 'https://be.wizzair.com/29.23.1/Api')
+        self.equal('apiUrl', api_url)
         self.equal('airports', airports)
         self.expect('exception' not in self.summary, 'exception: %r' % self.summary.get('exception'))
         log = self.summary.get('log', [])
         self.expect(len(log) >= 2 and log[0] == STARTED, 'log[0] is not the start-up line: %r' % (log[:1],))
-        self.expect(len(log) >= 2 and log[1] == ROUTE_MAP_LOG.format(airports), 'log[1]: %r' % (log[1:2],))
+        self.expect(len(log) >= 2 and log[1] == route_map_log.format(airports), 'log[1]: %r' % (log[1:2],))
         self.expect(all(line.startswith('[10:00:00] ') for line in log), 'log lines need the fixed-clock prefix')
 
     # --- diagnostics.json (D-30 --diagnostics) ----------------------------------------------
@@ -583,6 +595,8 @@ def check_heavy_cached(c):
     c.diag_equal('cancel', None)
     c.diag_equal('grids.outbound.rows', flights)
     c.diag_equal('grids.outbound.resultFlights', flights)
+    # Every fare of the replay came from the warm-up's, fetched on the same fixed clock (D-70).
+    c.log_has('  Reused fares fetched in the last minute: %d of %d requests answered from them.' % (planned, planned))
 
 
 def check_cancel_cached(c):
@@ -609,6 +623,74 @@ def check_cancel_cached(c):
                 (flights, planned, planned, notes_suffix(c, 'outbound')))
         c.diag_equal('grids.outbound.rows', flights)
     print('cancel during the cached replay ended with: %s' % status)
+
+
+def fares_runs(text):
+    """fares.json's covered runs per route (D-67): {"FROM-TO": [(first, last, fetchedAt), ...]}."""
+    document = json.loads(text)
+    return {'%s-%s' % (route['from'], route['to']): [(run['first'], run['last'], run['fetchedAt'])
+                                                    for run in route['covered']]
+            for route in document['routes']}
+
+
+def check_restart_shifted(c):
+    """Run B, one day later than run A on the same profile (D-66, D-67): only 16 Feb of each route
+    is asked for, everything else comes from fares.json, and the route map and API address from
+    the profile's disk cache."""
+    first = c.first_summary or {}
+    first_planned = c.get('outbound.requestsPlanned', first) or 0
+    c.expect(first_planned >= 100, 'run A: planned %r requests' % first_planned)
+    c.expect(c.get('outbound.requestsCompleted', first) == first_planned and
+             c.get('requestsToWizz', first) == 2 + first_planned,
+             'run A: %r of %r requests completed, %r sent to Wizz Air (expected homepage, map and every request)' %
+             (c.get('outbound.requestsCompleted', first), first_planned, c.get('requestsToWizz', first)))
+    c.expect(c.fares_after_first is not None, 'run A left no fares.json in the profile')
+    # The routes run A fetched: each has its last chunk end on 16 Feb in run B.
+    routes = len([name for name, covered in fares_runs(c.fares_after_first or b'{"routes":[]}').items() if covered])
+
+    c.keys(['startedAt', 'apiUrl', 'airports', 'outbound', 'progressScreenshots', 'finalStatus', 'requestsToWizz',
+            'log'])
+    # The route map from the profile's disk cache: the API address is not needed until the
+    # first timetable request, after summary.json takes it (a warm start, CT-API-14).
+    c.common(189, ROUTE_MAP_CACHED_LOG, api_url=None)
+    planned = c.get('outbound.requestsPlanned') or 0
+    c.expect(routes >= 30 and 2 * routes < planned, 'plan: %r routes, %r requests' % (routes, planned))
+    # One request per route, for its new last day; the map and the API address from disk.
+    c.search(0, 'outbound', routes)
+    c.equal('requestsToWizz', routes)
+    flights = c.get('outbound.flights') or 0
+    c.expect(flights >= 4000, 'outbound.flights: only %r fares' % flights)
+    c.equal('outbound.requestsCompleted', planned)
+    c.equal('outbound.cancelled', False)
+    c.equal('outbound.originAirports', ['BUD 0km'])
+    c.equal('finalStatus', 'Outbound Done: %d fares from %d of %d requests in 1 s.%s' %
+            (flights, planned, planned, notes_suffix(c, 'outbound')))
+    c.log_has('  Reused fares fetched in the last 20 min: %d of %d requests answered from them, %d shortened to the '
+              'days not fetched yet.' % (planned - routes, planned, routes))
+    c.diag_equal('grids.outbound.rows', flights)
+    c.diag_equal('grids.outbound.resultFlights', flights)
+    c.screenshots(['1-outbound.png', '4-log.png'])
+
+    # fares.json was rewritten at the end of the search: run A's days with its time, 16 Feb with B's.
+    path = os.path.join(c.data_root, 'cache', 'fares.json')
+    if not os.path.isfile(path):
+        c.expect(False, 'run B left no fares.json')
+        return
+    with open(path, 'rb') as f:
+        after = f.read()
+    c.expect(after != c.fares_after_first, 'fares.json was not rewritten by run B')
+    runs = fares_runs(after)
+    new_day = [name for name, covered in runs.items()
+               if any(last == RESTART_OUT[1] and fetched == FIXED_NOW for _, last, fetched in covered)]
+    c.expect(len(new_day) == routes, 'fares.json: %d routes hold %s fetched at %s, expected %d' %
+             (len(new_day), RESTART_OUT[1], FIXED_NOW, routes))
+    kept = [name for name, covered in runs.items()
+            if any(first_day == RESTART_FIRST_OUT[0] and fetched == RESTART_FIRST_NOW
+                   for first_day, _, fetched in covered)]
+    c.expect(len(kept) >= routes, 'fares.json: only %d routes keep run A\'s days fetched at %s' %
+             (len(kept), RESTART_FIRST_NOW))
+    print('restart_shifted: run A %d requests, run B %d of %d planned requests (%d routes)' %
+          (c.get('requestsToWizz', first) or 0, c.get('requestsToWizz') or 0, planned, routes))
 
 
 # --- Generated heavy replay ------------------------------------------------------------------
@@ -686,6 +768,81 @@ def prepare_heavy(replay_root, work_dir):
 HEAVY_FLAGS = ['--from', 'Budapest', '--from-radius', '0', '--to', '', '--out', '2026-11-03:2027-02-15',
                '--warm-cache', '--no-pacing']
 
+# restart_shifted (D-66, D-67): run A's and run B's windows and run A's fixed clock, 20 minutes
+# before run B's (FIXED_NOW), so B reuses A's fares within the default 30-minute window.
+RESTART_FIRST_OUT = ('2026-11-03', '2027-02-15')
+RESTART_OUT = ('2026-11-04', '2027-02-16')
+RESTART_FIRST_NOW = '2026-11-02T09:40:00Z'
+RESTART_SEARCH = ['--from', 'Budapest', '--from-radius', '0', '--to', '', '--no-pacing']
+
+
+def daily_timetable(origin, destination, start, end, seed):
+    """One fare a day on a route, the same for a day whatever window asks for it."""
+    rows = []
+    day = start
+    while day <= end:
+        index = (day - HEAVY_START).days
+        minutes = 6 * 60 + ((seed * 37 + index * 53) % (16 * 12)) * 5
+        when = '%sT%02d:%02d:00' % (day.isoformat(), minutes // 60, minutes % 60)
+        amount = 9.99 + ((seed * 7919 + index * 104729) % 23000) / 100.0
+        rows.append({
+            'departureStation': origin,
+            'arrivalStation': destination,
+            'departureDate': when,
+            'price': {'amount': round(amount, 2), 'currencyCode': 'EUR'},
+            'priceType': 'price',
+            'departureDates': [{'date': when, 'isCheapestOfTheDay': True}],
+            'hasMacFlight': False,
+        })
+        day += datetime.timedelta(days=1)
+    return {'outboundFlights': rows, 'returnFlights': None}
+
+
+def prepare_restart_shifted(replay_root, work_dir):
+    """Writes <work>/replay for both runs: every route from Budapest answers run A's chunks, run B's
+    own chunks (what B would ask for without reusing anything) and 16 Feb alone (what B asks for
+    when it reuses A's days), each window exactly."""
+    live_map = os.path.normpath(os.path.join(replay_root, '..', '..', 'history', 'live-cache-2026-11-02', 'map.json'))
+    shared = os.path.join(replay_root, 'named_destination')
+    target = os.path.join(work_dir, 'replay')
+    os.makedirs(target)
+    with open(live_map, encoding='utf-8') as f:
+        cities = json.load(f)['cities']
+    origin = next(city for city in cities if city['iata'] == HEAVY_ORIGIN)
+    rules = [
+        {'comment': 'homepage advertising API 29.23.1', 'urlPrefix': 'https://www.wizzair.com',
+         'file': os.path.join(shared, 'home.html')},
+        {'comment': 'the frozen live route map (189 airports)', 'urlContains': '/asset/map', 'file': live_map},
+        {'comment': 'exchange rates', 'urlContains': 'frankfurter',
+         'file': os.path.join(shared, 'fx_frankfurter_v2.json')},
+    ]
+    dates = [datetime.date.fromisoformat(day) for day in RESTART_FIRST_OUT + RESTART_OUT]
+    windows = set(chunks(dates[0], dates[1])) | set(chunks(dates[2], dates[3])) | {(dates[3], dates[3])}
+    for seed, connection in enumerate(sorted(origin['connections'], key=lambda c: c['iata'])):
+        destination = connection['iata']
+        for start, end in sorted(windows):
+            name = 'tt_%s_%s_%s_%s.json' % (HEAVY_ORIGIN, destination, start.isoformat(), end.isoformat())
+            with open(os.path.join(target, name), 'w', encoding='utf-8', newline='\n') as f:
+                json.dump(daily_timetable(HEAVY_ORIGIN, destination, start, end, seed), f, separators=(',', ':'))
+            rules.append({
+                'method': 'POST', 'urlContains': '/search/timetableV2',
+                'bodyContains': '"departureStation":"%s","arrivalStation":"%s","from":"%s","to":"%s"' %
+                                (HEAVY_ORIGIN, destination, start.isoformat(), end.isoformat()),
+                'file': name,
+            })
+    rules.append({'comment': 'anything else: not served', 'method': 'POST', 'urlContains': '/search/timetableV2',
+                  'status': 400, 'body': '{"validationCodes":["InvalidMarket"]}'})
+    with open(os.path.join(target, 'replay.json'), 'w', encoding='utf-8', newline='\n') as f:
+        json.dump({'rules': rules}, f, indent=1)
+    return target
+
+
+# Scenarios that need an earlier run on the same --data-root: its flags and fixed clock. The
+# checked run follows with the scenario's own flags at FIXED_NOW.
+FIRST_RUNS = {
+    'restart_shifted': (RESTART_SEARCH + ['--out', '%s:%s' % RESTART_FIRST_OUT], RESTART_FIRST_NOW),
+}
+
 SCENARIOS = {
     'named_destination': (['--from', 'Budapest', '--from-radius', '200', '--to', 'London', '--to-radius', '30',
                            '--out', '2026-11-10:2026-11-20', '--ret', '2026-11-12:2026-11-20',
@@ -704,6 +861,8 @@ SCENARIOS = {
                          '--out', '2026-11-10:2026-11-20', '--cancel-after-ms', '2500'], check_cancel_retrying, None),
     'heavy_cached': (HEAVY_FLAGS, check_heavy_cached, prepare_heavy),
     'cancel_cached': (HEAVY_FLAGS + ['--cancel-after-ms', '0'], check_cancel_cached, prepare_heavy),
+    'restart_shifted': (RESTART_SEARCH + ['--out', '%s:%s' % RESTART_OUT], check_restart_shifted,
+                        prepare_restart_shifted),
 }
 
 
@@ -1074,6 +1233,33 @@ def main():
         settings_text = json.dumps({'WindowWidth': round(window[0] * ratio), 'WindowHeight': round(window[1] * ratio)})
         with open(settings_path, 'w', encoding='utf-8') as f:
             f.write(settings_text)
+    first_summary = None
+    fares_after_first = None
+    if args.scenario in FIRST_RUNS:
+        # An earlier run on the same profile, checked by the scenario through its summary.
+        first_flags, first_now = FIRST_RUNS[args.scenario]
+        first_out = os.path.join(work_dir, 'out-first')
+        command = [os.path.abspath(args.exe), '--autotest', first_out, '--data-root', data_root, '--replay', replay,
+                   '--fixed-now', first_now] + first_flags
+        print('running first:', subprocess.list2cmdline(command))
+        try:
+            completed = subprocess.run(command, timeout=args.timeout, env=env)
+        except subprocess.TimeoutExpired:
+            print('FAILED: the first WizzairHelper.exe run did not finish within %.0f s' % args.timeout)
+            return 1
+        if completed.returncode != 0:
+            print('FAILED: the first run ended with exit code %d' % completed.returncode)
+            return 1
+        try:
+            with open(os.path.join(first_out, 'summary.json'), encoding='utf-8') as f:
+                first_summary = json.load(f)
+        except (OSError, ValueError) as error:
+            print('FAILED: no summary.json of the first run: %s' % error)
+            return 1
+        fares_path = os.path.join(data_root, 'cache', 'fares.json')
+        if os.path.isfile(fares_path):
+            with open(fares_path, 'rb') as f:
+                fares_after_first = f.read()
     command = [os.path.abspath(args.exe), '--autotest', out_dir, '--data-root', data_root, '--replay', replay,
                '--fixed-now', FIXED_NOW, '--diagnostics'] + flags
     print('running:', subprocess.list2cmdline(command), '(QT_SCALE_FACTOR=%s)' % (args.scale or 'unset'))
@@ -1096,7 +1282,9 @@ def main():
         summary = json.load(f)
     with open(diagnostics_path, encoding='utf-8') as f:
         diagnostics = json.load(f)
-    checker = Checker(summary, diagnostics, out_dir)
+    checker = Checker(summary, diagnostics, out_dir, data_root)
+    checker.first_summary = first_summary
+    checker.fares_after_first = fares_after_first
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
     checker.look(expected_look(env))

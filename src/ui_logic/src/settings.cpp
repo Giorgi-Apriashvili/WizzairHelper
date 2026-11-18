@@ -53,7 +53,7 @@ struct WrongType {};
     return value.as_bool();
 }
 
-/// An update option's enumeration (D-60): a non-string (null included) is a wrong type
+/// An enumeration (D-60, D-68): a non-string (null included) is a wrong type
 /// like anywhere else; a string naming no value gives that property's default only.
 template <class Enum>
 [[nodiscard]] Enum read_enum(const json::Value& value, std::optional<Enum> (*parse)(std::string_view) noexcept,
@@ -75,6 +75,10 @@ constexpr update::CheckFrequency kFrequencies[] = {update::CheckFrequency::daily
                                                    update::CheckFrequency::monthly};
 constexpr update::WhenFound kWhenFound[] = {update::WhenFound::install_on_close, update::WhenFound::download_then_ask,
                                             update::WhenFound::notify_only};
+constexpr fare_days::ReuseWindow kReuseWindows[] = {fare_days::ReuseWindow::thirty_minutes,
+                                                    fare_days::ReuseWindow::one_hour,
+                                                    fare_days::ReuseWindow::three_hours,
+                                                    fare_days::ReuseWindow::six_hours};
 
 void apply_member(AppSettings& settings, const json::Member& member)
 {
@@ -111,6 +115,8 @@ void apply_member(AppSettings& settings, const json::Member& member)
             read_enum(value, &parse_check_frequency, update::UpdateOptions{}.check_frequency);
     } else if (name == "WhenUpdateFound") {
         settings.updates.when_found = read_enum(value, &parse_when_found, update::UpdateOptions{}.when_found);
+    } else if (name == "ReuseFaresWithin") {
+        settings.fare_reuse = read_enum(value, &parse_reuse_window, AppSettings{}.fare_reuse);
     }
     // unknown properties are ignored
 }
@@ -156,6 +162,21 @@ std::string_view json_name(update::WhenFound when_found) noexcept
     return "InstallOnClose";
 }
 
+std::string_view json_name(fare_days::ReuseWindow window) noexcept
+{
+    switch (window) {
+    case fare_days::ReuseWindow::thirty_minutes:
+        return "ThirtyMinutes";
+    case fare_days::ReuseWindow::one_hour:
+        return "OneHour";
+    case fare_days::ReuseWindow::three_hours:
+        return "ThreeHours";
+    case fare_days::ReuseWindow::six_hours:
+        return "SixHours";
+    }
+    return "ThirtyMinutes";
+}
+
 std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept
 {
     for (const update::CheckFrequency frequency : kFrequencies) {
@@ -171,6 +192,16 @@ std::optional<update::WhenFound> parse_when_found(std::string_view text) noexcep
     for (const update::WhenFound when_found : kWhenFound) {
         if (equals_ascii_ignoring_case(text, json_name(when_found))) {
             return when_found;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<fare_days::ReuseWindow> parse_reuse_window(std::string_view text) noexcept
+{
+    for (const fare_days::ReuseWindow window : kReuseWindows) {
+        if (equals_ascii_ignoring_case(text, json_name(window))) {
+            return window;
         }
     }
     return std::nullopt;
@@ -232,6 +263,7 @@ std::string AppSettings::to_json() const
         .key("CheckForUpdates").boolean(updates.check_automatically)
         .key("UpdateCheckFrequency").string(json_name(updates.check_frequency))
         .key("WhenUpdateFound").string(json_name(updates.when_found))
+        .key("ReuseFaresWithin").string(json_name(fare_reuse))
         .end_object();
     return writer.take();
 }

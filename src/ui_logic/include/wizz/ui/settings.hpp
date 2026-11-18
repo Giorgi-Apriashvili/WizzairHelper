@@ -24,10 +24,16 @@
 // version never resets a user's searches. Older versions ignore the three
 // (unknown properties).
 //
-// Save writes the fifteen properties in table order, indented by two spaces,
+// The sixteenth property, `ReuseFaresWithin` ("ThirtyMinutes", "OneHour",
+// "ThreeHours", "SixHours"; DECISIONS D-68), follows the same rules as the two
+// enumerations: missing gives the default (30 minutes, the behaviour before 2.3),
+// a wrong JSON type all defaults, an unknown string this property's default only.
+//
+// Save writes the sixteen properties in table order, indented by two spaces,
 // into a complete temporary file in the target directory and then replaces the
 // target (last complete write wins); I/O errors are swallowed.
 
+#include "wizz/core/fare_days.hpp"
 #include "wizz/services/update_options.hpp"
 
 #include <filesystem>
@@ -40,9 +46,11 @@ namespace wizz::ui {
 /// settings.json's names of the update options' values ("Daily", "InstallOnClose", …).
 [[nodiscard]] std::string_view json_name(update::CheckFrequency frequency) noexcept;
 [[nodiscard]] std::string_view json_name(update::WhenFound when_found) noexcept;
+[[nodiscard]] std::string_view json_name(fare_days::ReuseWindow window) noexcept;
 /// The value a settings.json string names, ASCII case ignored; nullopt for any other text.
 [[nodiscard]] std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept;
 [[nodiscard]] std::optional<update::WhenFound> parse_when_found(std::string_view text) noexcept;
+[[nodiscard]] std::optional<fare_days::ReuseWindow> parse_reuse_window(std::string_view text) noexcept;
 
 struct AppSettings {
     std::string from{"Budapest"};
@@ -60,6 +68,8 @@ struct AppSettings {
     /// CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound (D-60); the defaults are the
     /// behaviour of 2.0 / 2.1.
     update::UpdateOptions updates{};
+    /// ReuseFaresWithin (D-68): how long searches reuse fetched fares; 30 minutes as before.
+    fare_days::ReuseWindow fare_reuse = fare_days::ReuseWindow::thirty_minutes;
 
     friend bool operator==(const AppSettings&, const AppSettings&) = default;
 
@@ -71,7 +81,7 @@ struct AppSettings {
 
     /// The settings.json text: an object with From, To, FromRadiusKm, ToRadiusKm, Adults,
     /// DiscountClub, Currency, MinNights, MaxNights, WindowWidth, WindowHeight, Maximized,
-    /// then CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound, in that order, indented
+    /// then CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound, ReuseFaresWithin, in that order, indented
     /// two spaces (CRLF line breaks, JsonSerializer escaping).
     [[nodiscard]] std::string to_json() const;
     /// Writes `to_json()` to `path`: creates the directory, writes `<name>.tmp` next to

@@ -72,6 +72,7 @@ Controller::~Controller()
     if (stop_source_) {
         stop_source_->request_stop();
     }
+    background_stop_.request_stop();
     flows_.reset();  // suspended flows are destroyed; their guards see shutting_down_
     jobs_.reset();   // stops and joins the workers
 }
@@ -108,6 +109,11 @@ void Controller::cancel_work()
     if (stop_source_) {
         stop_source_->request_stop();
     }
+}
+
+void Controller::stop_background_work()
+{
+    background_stop_.request_stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +162,22 @@ Task<AirportCatalogPtr> Controller::load_catalog()
         log(strings::map_error_log(error.what()));
     }
     co_return nullptr;
+}
+
+Task<> Controller::prefetch_rates()
+{
+    // No busy phase: the user may search at once, and that search's rate stage waits for
+    // this one on the service's lock, then finds the rates in memory (D-69).
+    try {
+        const bool loaded = co_await jobs_->run(jobs_->new_job_id(), background_stop_.get_token(),
+                                                [fx = services_->fx](const JobChannel& channel) {
+                                                    return fx->prefetch(channel.stop_token());
+                                                });
+        static_cast<void>(loaded);  // false: every source failed; a search falls back with notices
+    } catch (...) {
+        // Cancelled when the window closes, or anything unexpected: the prefetch is only a
+        // head start, so it stays silent. No exception is bound here (D-64).
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@
 #include "support/recording_delay.hpp"
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -72,6 +73,29 @@ struct FareRow {
 };
 /// A timetableV2 response body holding `rows` in order.
 [[nodiscard]] std::string timetable_json(std::span<const FareRow> rows);
+
+/// Every timetable call → one row per requested day (departure 06:00) from the requested
+/// departure station to the requested arrival station, priced "<n>.0" EUR on the n-th
+/// timetable call (so a test sees which answer a row came from); anything else → the
+/// default responder. A generated stand-in for a busy network: every route is served.
+[[nodiscard]] Responder daily_fares_responder();
+
+/// A fresh directory `%TEMP%\wizzairhelper-test-<random>`, removed afterwards (05 §1.5).
+class ScratchDirectory {
+public:
+    ScratchDirectory();
+    ~ScratchDirectory();
+    ScratchDirectory(const ScratchDirectory&) = delete;
+    ScratchDirectory& operator=(const ScratchDirectory&) = delete;
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+    [[nodiscard]] std::filesystem::path file(std::string_view name) const { return path_ / name; }
+    /// The whole file `<directory>/<name>`, byte-exact; std::runtime_error when it cannot be read.
+    [[nodiscard]] std::string read(std::string_view name) const;
+
+private:
+    std::filesystem::path path_;
+};
 
 struct SearchHarnessOptions {
     /// The FIXED clock shared by the client, the service and (by default) the FX

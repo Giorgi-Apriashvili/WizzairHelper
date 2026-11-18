@@ -282,6 +282,8 @@ inline constexpr char16_t kInfo = 0xE946;
 inline constexpr char16_t kSettings = 0xE713;
 /// The Settings window's "Updates" card ("Sync").
 inline constexpr char16_t kSync = 0xE895;
+/// The Settings window's "Searches" card ("History", D-68).
+inline constexpr char16_t kHistory = 0xE81C;
 } // namespace glyph
 
 /// Wizz magenta RGB(197, 0, 110) = #C5006E: the accent of the light and dark looks.

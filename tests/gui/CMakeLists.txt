@@ -76,8 +76,9 @@ endforeach()
 set_tests_properties(app.version app.version.powershell app.version.resource PROPERTIES TIMEOUT 60)
 
 # --autotest end to end (01 §17, 05 §5, D-30): the real WizzairHelper.exe on the
-# replay scenarios of tests/replay (heavy_cached / cancel_cached generate theirs) with
-# an isolated data root, the fixed clock and --diagnostics; check_autotest.py validates
+# replay scenarios of tests/replay (heavy_cached / cancel_cached / restart_shifted generate
+# theirs; restart_shifted runs the exe twice on one profile, the second run one day later,
+# D-66, D-67) with an isolated data root, the fixed clock and --diagnostics; check_autotest.py validates
 # summary.json, diagnostics.json (40 ms timer gap below 100 ms — 250 ms in Debug —,
 # UI-loop watchdog, both by the UI thread's CPU time and by wall-clock time unless other
 # processes held the CPUs (D-50); one cancel transition, final grids, layout; the look the
@@ -95,7 +96,7 @@ find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     set(_wizz_autotest_runs
         named_destination anywhere_return_from_top not_served same_area over_500
-        cancel_waiting cancel_retrying heavy_cached cancel_cached
+        cancel_waiting cancel_retrying heavy_cached cancel_cached restart_shifted
         crash_bad_fixed_now crash_bad_replay
         named_destination:scale150 named_destination:scale200
         cancel_retrying:scale150 cancel_retrying:scale200

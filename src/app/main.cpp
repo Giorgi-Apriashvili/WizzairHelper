@@ -7,7 +7,7 @@
 // D-30) before the QApplication — a bad --out / --ret / --fixed-now value crashes
 // before the window opens, logged in the --data-root profile — then the event loop,
 // the font warm-up (font_warmup.hpp), the services, settings.json, the main window
-// and, in a normal run, the self-updater (D-45).
+// and, in a normal run, the exchange rates at start (D-69) and the self-updater (D-45).
 #include "app_mutex.hpp"
 #include "app_services.hpp"
 #include "application.hpp"
@@ -119,6 +119,7 @@ int main(int argc, char* argv[])
         ui::AppSettings settings = ui::AppSettings::load(services->settings_path());  // before the window (01 §3)
         app::MainWindow window(services, std::move(settings), autotest);
         if (ui::updates_allowed(arguments)) {  // never with --autotest or --replay (D-45)
+            window.enable_rate_prefetch();     // the rates load beside the map (D-69)
             try {
                 window.enable_updates(app::UpdateHooks::system(*services, [&app_mutex] { app_mutex.release(); }));
             } catch (const std::exception& error) {

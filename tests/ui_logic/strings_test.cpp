@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 
 namespace {
@@ -186,6 +187,25 @@ TEST(Strings, Log_texts)
     EXPECT_EQ(screenshot_failed("1-outbound.png", "Access is denied."), "screenshot 1-outbound.png failed: Access is denied.");
     EXPECT_EQ(kSameAreaLogLine, "  not searched: start and destination are the same area");
     EXPECT_EQ(kNoResult, "no result");
+    EXPECT_EQ(reused_fares_log("minute", 9, 9, 0), "  Reused fares fetched in the last minute: 9 of 9 requests answered from them.");
+    EXPECT_EQ(reused_fares_log("20 min", 124, 186, 62),
+              "  Reused fares fetched in the last 20 min: 124 of 186 requests answered from them, 62 shortened to the days "
+              "not fetched yet.");
+}
+
+TEST(Strings, Settings_window_searches_texts)
+{
+    EXPECT_EQ(kSearchesSection, "Searches");
+    EXPECT_EQ(kReuseFaresWithin, "Reuse fares fetched within");
+    EXPECT_EQ(kReuseFaresHint, "Searches ask Wizz Air only for days not fetched within this time. Fares are kept on this "
+                               "computer for up to 6 hours.");
+    using wizz::fare_days::ReuseWindow;
+    EXPECT_EQ(kReuseWindows, (std::array<ReuseWindow, 4>{ReuseWindow::thirty_minutes, ReuseWindow::one_hour,
+                                                         ReuseWindow::three_hours, ReuseWindow::six_hours}));
+    EXPECT_EQ(reuse_window_label(ReuseWindow::thirty_minutes), "30 minutes");
+    EXPECT_EQ(reuse_window_label(ReuseWindow::one_hour), "1 hour");
+    EXPECT_EQ(reuse_window_label(ReuseWindow::three_hours), "3 hours");
+    EXPECT_EQ(reuse_window_label(ReuseWindow::six_hours), "6 hours");
 }
 
 } // namespace

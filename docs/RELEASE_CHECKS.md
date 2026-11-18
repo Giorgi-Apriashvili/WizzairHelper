@@ -182,5 +182,12 @@ same 34 files.
   redistributable in System32 (the app-local copies were the ones loaded).
 - Taskbar progress at 150 % / 200 % (01 §15) was not captured: `PrintWindow` shows the window only.
 - Live Wizz Air traffic: CI uses fixtures only (06 §5); no live check was run.
+- Reused fares (2.3.0, DECISIONS D-66..D-70) against the real site, by hand and only with the
+  owner's consent for live traffic: a search, the same search again (no timetable request), the
+  search moved by one day (one request per route, for the new last day), the app restarted within
+  the reuse window (no timetable request, the Log line with the fares' age) and after it, and the
+  exchange rates fetched at start (the first search shows no rate download). The offline
+  equivalents are `SearchCache.Request_counts_for_repeated_shifted_and_restarted_searches` and the
+  end-to-end `restart_shifted` run.
 - Under `--fixed-now` the elapsed time stays `0:00` and summary `elapsedSeconds` is 0 (D-30 fixed
   clock), so the screenshots show no running time.

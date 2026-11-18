@@ -43,7 +43,8 @@ constexpr std::string_view kMapPath = "asset/map?languageCode=en-gb";
 WizzApiClient::WizzApiClient(std::shared_ptr<http::Transport> transport, WizzClientOptions options)
     : transport_(std::move(transport)),
       options_(std::move(options)),
-      gate_(options_.request_spacing, options_.request_jitter, options_.clock, options_.delay)
+      gate_(options_.request_spacing, options_.request_jitter, options_.clock, options_.delay),
+      reuse_window_ticks_(options_.timetable_cache_age.count())
 {
     if (!transport_) {
         throw std::invalid_argument("WizzApiClient needs an HTTP transport.");

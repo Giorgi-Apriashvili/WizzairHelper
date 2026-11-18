@@ -207,14 +207,55 @@ std::string format_iso_seconds(LocalDateTime time)
 
 std::string format_iso_utc(UtcInstant instant)
 {
-    const LocalDateTime wall{instant.time_since_epoch()};
-    std::string text = format_iso_seconds(wall);
-    const Ticks sub_second = wall - std::chrono::floor<std::chrono::seconds>(wall);
+    std::string text = format_iso_local(LocalDateTime{instant.time_since_epoch()});
+    text += 'Z';
+    return text;
+}
+
+std::string format_iso_local(LocalDateTime time)
+{
+    std::string text = format_iso_seconds(time);
+    const Ticks sub_second = time - std::chrono::floor<std::chrono::seconds>(time);
     if (sub_second != Ticks::zero()) {
         text += std::format(".{:07}", sub_second.count());
     }
-    text += 'Z';
     return text;
+}
+
+std::optional<UtcInstant> parse_iso_utc(std::string_view text)
+{
+    Cursor cursor{text};
+    const auto year = cursor.digits(4);
+    if (!cursor.accept('-')) {
+        return std::nullopt;
+    }
+    const auto month = cursor.digits(2);
+    if (!cursor.accept('-')) {
+        return std::nullopt;
+    }
+    const auto day = cursor.digits(2);
+    const auto date = make_date(year, month, day);
+    if (!date || !cursor.accept('T')) {
+        return std::nullopt;
+    }
+    const auto hour = cursor.digits(2);
+    if (!cursor.accept(':')) {
+        return std::nullopt;
+    }
+    const auto minute = cursor.digits(2);
+    if (!cursor.accept(':')) {
+        return std::nullopt;
+    }
+    const auto second = cursor.digits(2);
+    std::optional<std::int64_t> fraction = 0;
+    if (cursor.accept('.')) {
+        fraction = cursor.fraction_ticks();
+    }
+    if (!hour || !minute || !second || !fraction || *hour > 23 || *minute > 59 || *second > 59 ||
+        !cursor.accept('Z') || !cursor.at_end()) {
+        return std::nullopt;
+    }
+    return make_utc(*date, *hour, *minute, *second) + Ticks{*fraction};
 }
 
 } // namespace wizz

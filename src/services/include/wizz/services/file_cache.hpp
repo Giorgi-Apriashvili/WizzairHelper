@@ -1,6 +1,6 @@
 #pragma once
 // Small text files in the cache directory (04 §6, 02 §7, 06 §3): api-url.txt,
-// map.json, fx.json and geocode.json. Freshness follows each file's last-write time
+// map.json, fx.json, geocode.json and fares.json (the reused fares, DECISIONS D-67). Freshness follows each file's last-write time
 // against the injected clock; there is no background cleanup. Failures never escape:
 // an unreadable or unwritable cache must not prevent an online search.
 

@@ -427,7 +427,7 @@ void check_everything(Collector& check)
         wizz::ui::UpdateStatusView status =
             wizz::ui::updates_off_view(wizz::update::Version{2, 1, 0});
         status.when_found_note = std::string{wizz::ui::update_strings::kPortableNote};
-        wizz::app::SettingsDialog settings({}, status, &window);
+        wizz::app::SettingsDialog settings({}, status, wizz::fare_days::ReuseWindow::thirty_minutes, &window);
         settings.show();
         pump();
         check.widgets(settings, "settings window");

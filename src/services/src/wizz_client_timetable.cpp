@@ -1,4 +1,5 @@
-// WizzApiClient timetables: GetTimetable (04 §9.1) and FetchTimetable (04 §9.2).
+// WizzApiClient timetables: GetTimetable (04 §9.1) with the per-day reuse of fetched fares
+// (DECISIONS D-66) and fares.json (D-67), and FetchTimetable (04 §9.2).
 
 #include "wizz/services/wizz_client.hpp"
 
@@ -7,8 +8,13 @@
 #include "wizz/core/json.hpp"
 #include "wizz/services/wizz_protocol.hpp"
 
+#include <cstdint>
+#include <exception>
 #include <iterator>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace wizz {
 
@@ -33,17 +39,90 @@ void append(std::vector<DayFare>& target, std::vector<DayFare>&& source)
 } // namespace
 
 // ---------------------------------------------------------------------------
-// 04 §9.1 GetTimetable
+// 04 §9.1 GetTimetable with per-day reuse (D-66) and fares.json (D-67)
 // ---------------------------------------------------------------------------
+
+void WizzApiClient::set_timetable_reuse_window(Duration window) noexcept
+{
+    reuse_window_ticks_.store(window.count());
+}
+
+Duration WizzApiClient::timetable_reuse_window() const noexcept
+{
+    return Duration{reuse_window_ticks_.load()};
+}
+
+bool WizzApiClient::keeps_timetables_on_disk() const noexcept
+{
+    return options_.keep_timetables_on_disk && options_.cache.directory().has_value();
+}
+
+void WizzApiClient::load_timetables_once()
+{
+    if (timetables_loaded_) {
+        return;
+    }
+    timetables_loaded_ = true;
+    if (!keeps_timetables_on_disk()) {
+        return;
+    }
+    try {
+        // A save writes after every fetch the file holds, so a file last written longer ago
+        // than the longest window holds nothing reusable and is not even read (D-67).
+        const std::optional<std::string> text =
+            options_.cache.try_read(kTimetableCacheFile, fare_days::kLongestReuse, *options_.clock);
+        if (!text) {
+            return;
+        }
+        fare_days::Store loaded = fare_days::parse(*text);
+        loaded.prune(options_.clock->utc_now(), options_.clock->local_today());
+        timetables_ = std::move(loaded);
+    } catch (const std::exception&) {
+        // Too large to read (std::bad_alloc) or malformed in any way: the whole file is a
+        // miss, overwritten at the next save (D-67).
+    }
+}
+
+void WizzApiClient::save_timetables() noexcept
+{
+    if (!keeps_timetables_on_disk()) {
+        return;
+    }
+    try {
+        const std::scoped_lock saving{save_mutex_};
+        fare_days::Store snapshot;
+        std::uint64_t generation = 0;
+        {
+            const std::scoped_lock guard{timetable_mutex_};
+            if (timetables_generation_ == saved_generation_) {
+                return;  // nothing changed since the last save (or since the start)
+            }
+            timetables_.prune(options_.clock->utc_now(), options_.clock->local_today());
+            snapshot = timetables_;
+            generation = timetables_generation_;
+        }
+        options_.cache.try_write(kTimetableCacheFile, fare_days::serialize(snapshot));  // temp file, then a move
+        saved_generation_ = generation;
+    } catch (...) {
+        // Out of memory while copying or writing: the fares stay in memory, the file as it was.
+    }
+}
 
 TimetableResult WizzApiClient::get_timetable(const TimetableQuery& query, const NoticeSink& notices,
                                              std::stop_token stop)
+{
+    return get_timetable(query, notices, std::move(stop), timetable_reuse_window());
+}
+
+TimetableResult WizzApiClient::get_timetable(const TimetableQuery& query, const NoticeSink& notices,
+                                             std::stop_token stop, Duration reuse_window)
 {
     if (query.end_date < query.start_date) {
         return {};  // no request
     }
     TimetableQuery clamped = query;
-    if (const Date today = options_.clock->local_today(); clamped.start_date < today) {
+    const Date today = options_.clock->local_today();
+    if (clamped.start_date < today) {
         clamped.start_date = today;
     }
     if (clamped.end_date < clamped.start_date) {
@@ -57,40 +136,72 @@ TimetableResult WizzApiClient::get_timetable(const TimetableQuery& query, const 
             TimetableQuery part_query = clamped;
             part_query.start_date = from;
             part_query.end_date = to;
-            TimetableResult part = get_timetable(part_query, notices, stop);  // own cache key
+            TimetableResult part = get_timetable(part_query, notices, stop, reuse_window);
             if (part.route_not_served) {
                 all.route_not_served = true;  // the remaining chunks are skipped; fares so far are kept
                 break;
             }
             append(all.fares, std::move(part.fares));
             all.from_cache = all.from_cache && part.from_cache;
+            all.partly_cached = all.partly_cached || part.partly_cached;
+            if (part.oldest_reused && (!all.oldest_reused || *part.oldest_reused < *all.oldest_reused)) {
+                all.oldest_reused = part.oldest_reused;
+            }
         }
-        return all;  // the aggregate itself is not cached
+        return all;
     }
 
-    // Single chunk. No cancellation check on a hit: it is at the top of SendApi.
+    // Single chunk. No cancellation check when nothing is fetched: it is at the top of SendApi.
+    const fare_days::RouteKey key{
+        .from = clamped.from, .to = clamped.to, .price_type = clamped.price_type, .adults = clamped.adults};
+    fare_days::Lookup look;
     {
         const std::scoped_lock guard{timetable_mutex_};
-        if (const auto hit = timetable_cache_.find(clamped);
-            hit != timetable_cache_.end() && options_.clock->utc_now() - hit->second.at < options_.timetable_cache_age) {
-            TimetableResult cached = hit->second.result;
-            cached.from_cache = true;
-            return cached;
-        }
+        load_timetables_once();
+        look = timetables_.lookup(key, clamped.start_date, clamped.end_date, options_.clock->utc_now(), reuse_window,
+                                  today);
+    }
+    if (look.not_served) {
+        return TimetableResult{.fares = {}, .route_not_served = true, .from_cache = true, .oldest_reused = look.oldest};
+    }
+    if (!look.fetch) {
+        return TimetableResult{
+            .fares = std::move(look.before), .route_not_served = false, .from_cache = true, .oldest_reused = look.oldest};
     }
 
-    TimetableResult result = fetch_timetable(clamped, notices, stop);  // errors are not cached
+    TimetableQuery part = clamped;  // the hull: the days not fetched within the window
+    part.start_date = look.fetch->first;
+    part.end_date = look.fetch->second;
+    TimetableResult fresh = fetch_timetable(part, notices, stop);  // errors and cancellations record nothing
     {
+        // Stamped after the fetch. No single-flight: two concurrent misses both fetch and
+        // the later record wins per day.
         const std::scoped_lock guard{timetable_mutex_};
-        // Stamped after the fetch; stored with from_cache = false. No single-flight:
-        // two concurrent identical misses both fetch and the later one wins.
-        timetable_cache_.insert_or_assign(clamped, CachedTimetable{.at = options_.clock->utc_now(), .result = result});
+        const UtcInstant at = options_.clock->utc_now();
+        if (fresh.route_not_served) {
+            timetables_.record_not_served(key, at);
+        } else {
+            timetables_.record(key, part.start_date, part.end_date, fresh.fares, at);
+        }
+        ++timetables_generation_;
     }
-    return result;
+    if (fresh.route_not_served) {
+        return TimetableResult{.fares = {}, .route_not_served = true, .from_cache = false};
+    }
+
+    const bool reused = look.reused_days > 0;
+    std::vector<DayFare> fares = std::move(look.before);
+    append(fares, std::move(fresh.fares));
+    append(fares, std::move(look.after));
+    return TimetableResult{.fares = std::move(fares),
+                           .route_not_served = false,
+                           .from_cache = false,
+                           .partly_cached = reused,
+                           .oldest_reused = reused ? look.oldest : std::nullopt};
 }
 
 // ---------------------------------------------------------------------------
-// 04 §9.2 FetchTimetable (no clamp, no cache; the memory cache keeps the outer key)
+// 04 §9.2 FetchTimetable (no clamp, no reuse; the outer window is recorded)
 // ---------------------------------------------------------------------------
 
 TimetableResult WizzApiClient::fetch_timetable(const TimetableQuery& query, const NoticeSink& notices,
