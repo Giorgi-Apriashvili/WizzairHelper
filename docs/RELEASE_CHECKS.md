@@ -14,6 +14,17 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 | [1.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v1.0.0) | 2026-11-16 | `8dbb08d` | The first release: the app, the per-user installer and portable ZIP, the daily update check and the application icon. |
 | [2.0.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.0.0) | 2026-11-16 | `3c399d2` | The grouped-cards look: inputs in four titled sections, a modern theme in light and dark that follows Windows, High Contrast respected, a new Tab order (DECISIONS D-53 to D-57). |
 | [2.1.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.1.0) | 2026-11-17 | `935cf43` | Smooth text: natural ClearType rendering, Segoe UI Variable a touch heavier on Windows 11 (DECISIONS D-58). |
+| [2.2.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.2.0) | 2026-11-18 | `be62626` | The Settings window: manual update check, automatic checks once a day / week / month, three choices for what happens with an update, reminders for a put-off update (DECISIONS D-59..D-63); the first work starts after Windows' open animation (D-65). |
+
+v2.2.0 verification: the tag's CI run 44314475295 on `be62626` passed on all three legs (msvc-release with the 23
+end-to-end runs, msvc-debug, clang-cl-release now with LLVM 22.1.8 like local work) and published the release; on the
+runner `startup.windowAnimates` was false, so no start delay there. Before it, CI run 44183181258 on the merge `a531466`
+failed in clang-cl only: an LLVM 20 coroutine miscompile, worked around in `b567a4f` (D-64). Locally the merged code
+passed 1638 / 1638 tests in Release (one stray click on a test window reran clean 8 of 8), 1615 / 1615 in Debug and
+with clang-cl. `tools/release_check.ps1 -Tag v2.2.0`: three assets (installer 10,174,261 bytes, ZIP 11,733,717
+bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
+`WizzairHelper 2.2.0`, and `releases/latest` is v2.2.0. Not verified: a real update run by the installed app, a real
+High Contrast theme, a real Windows 10 and physical 150 % / 200 % monitors.
 
 v2.1.0 verification: CI run 44076402542 on the merge `e65dcf4` and the tag's run 44080055528 on `935cf43` passed on
 all three legs (msvc-release with the 23 end-to-end runs, msvc-debug, clang-cl-release); the tag's run published the
