@@ -1460,6 +1460,28 @@ TEST(FlightSearchServiceReuse, A_not_served_route_answered_from_its_mark_counts_
     EXPECT_EQ(harness.timetable_count(), 3u);
 }
 
+TEST(FlightSearchServiceReuse, Skipped_chunks_of_a_route_a_reused_mark_says_is_not_served_count_as_reused)
+{
+    SearchHarness harness{route_responder()};  // DEB is not served
+    harness.warm_map();
+    // Three routes over two chunks each (42 + 41 days); DEB→LTN's second chunk is skipped.
+    LegSearchRequest request = budapest_to_london(harness, 30, 2);
+    request.to = day(2027, 1, 31);
+    const LegSearchResultPtr first = run_search(*harness.service, request);
+    ASSERT_EQ(first->plan.requests.size(), 6u);
+    EXPECT_EQ(harness.timetable_count(), 5u);
+    EXPECT_EQ(first->requests_from_cache, 0);  // a mark fetched by this search is no reuse
+    EXPECT_EQ(first->routes_not_served, 1);
+
+    // The repeat sends nothing: the Log says "6 of 6 requests answered from them", not 5 of 6.
+    const LegSearchResultPtr repeat = run_search(*harness.service, request);
+    EXPECT_EQ(harness.timetable_count(), 5u);
+    EXPECT_EQ(repeat->requests_from_cache, 6);
+    EXPECT_EQ(repeat->requests_partly_cached, 0);
+    EXPECT_EQ(repeat->requests_completed, 6);
+    EXPECT_EQ(repeat->routes_not_served, 1);
+}
+
 TEST(FlightSearchServiceReuse, The_reuse_window_is_taken_once_when_the_search_begins)
 {
     SearchHarness harness{daily_fares_responder()};

@@ -17,7 +17,6 @@
 #include <format>
 #include <map>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -167,8 +166,13 @@ private:
     [[nodiscard]] bool fetch(const PlannedRequest& planned, const NoticeSink& notices)
     {
         const std::string& from = planned.from->iata;
-        if (not_served_.contains(std::pair{from, planned.group_key})) {
-            return true;  // a later chunk of an unserved route: skipped without a report (CORE-4)
+        if (const auto mark = not_served_.find(std::pair{from, planned.group_key}); mark != not_served_.end()) {
+            // A later chunk of an unserved route: skipped without a report (CORE-4). When a
+            // reused not-served mark said so, that mark answers this chunk too (D-70).
+            if (mark->second) {
+                ++requests_from_cache_;
+            }
+            return true;
         }
 
         const std::string group = planner::group_label(*catalog_, planned.group_key);
@@ -191,7 +195,8 @@ private:
             count_reuse(timetable);
             consecutive_failures_ = 0;
             if (timetable.route_not_served) {
-                not_served_.emplace(from, planned.group_key);  // success-like: no warning
+                // Success-like: no warning. Remembers whether a reused mark answered it (D-70).
+                not_served_.emplace(std::pair{from, planned.group_key}, timetable.from_cache);
                 return true;
             }
             process(planned, group, timetable.fares);
@@ -322,7 +327,8 @@ private:
     pricing::CodeSet destination_iatas_;
     BestFares best_;
     pricing::OrderedCodeSet missing_currencies_;
-    std::set<std::pair<std::string, std::string>> not_served_;  ///< (from IATA, group key), ordinal
+    /// (from IATA, group key), ordinal → whether a reused not-served mark said so (D-70).
+    std::map<std::pair<std::string, std::string>, bool> not_served_;
     pricing::OrderedCodeSet foreign_origins_;                     ///< "{queried}→{answering}", ci
     int consecutive_failures_ = 0;
     bool cancelled_ = false;
