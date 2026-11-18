@@ -6,12 +6,14 @@
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/format.hpp"
 #include "wizz/core/round_trips.hpp"
+#include "wizz/ui/strings.hpp"
 
 #include "ui_logic/ui_samples.hpp"
 
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -363,6 +365,58 @@ TEST(LegText, CT_FSS_01_LogResult_lines)
                   "few percent.",
                   "    Thu 12 Nov 07:15  BTS\u2192LTN  14.99 EUR  = 29.98 EUR",
               }));
+}
+
+TEST(LegText, Reused_fares_add_one_line_after_the_first_only_when_something_was_reused)
+{
+    LegSearchResult result = section11_outbound(2s);
+    const std::vector<std::string> plain = log_result_lines(result, en());
+    ASSERT_EQ(plain.size(), 6u);
+    EXPECT_EQ(reused_fares_line(result), std::nullopt);
+    result.oldest_reused_age = Duration{10min};  // an age alone is not a reuse
+    EXPECT_EQ(log_result_lines(result, en()), plain);
+
+    // Every planned request answered from reused fares.
+    result.requests_from_cache = 3;
+    result.oldest_reused_age = Duration{0s};
+    std::vector<std::string> expected = plain;
+    expected.insert(expected.begin() + 1,
+                    "  Reused fares fetched in the last minute: 3 of 3 requests answered from them.");
+    EXPECT_EQ(log_result_lines(result, en()), expected);
+
+    // Partly: the requests that asked only for the missing days.
+    result.requests_from_cache = 0;
+    result.requests_partly_cached = 3;
+    result.oldest_reused_age = Duration{20min};
+    EXPECT_EQ(reused_fares_line(result),
+              "  Reused fares fetched in the last 20 min: 0 of 3 requests answered from them, 3 shortened to the days "
+              "not fetched yet.");
+
+    // Mixed, before the warnings.
+    result.requests_from_cache = 2;
+    result.requests_partly_cached = 1;
+    result.oldest_reused_age = Duration{61min};
+    result.warnings = {"a warning"};
+    const std::vector<std::string> mixed = log_result_lines(result, en());
+    ASSERT_GE(mixed.size(), 3u);
+    EXPECT_EQ(mixed[1], "  Reused fares fetched in the last 1 h 1 min: 2 of 3 requests answered from them, 1 shortened "
+                        "to the days not fetched yet.");
+    EXPECT_EQ(mixed[2], "  ! a warning");
+}
+
+TEST(LegText, Reused_fare_ages_round_up_to_whole_minutes)
+{
+    EXPECT_EQ(strings::reused_age(Duration{0s}), "minute");
+    EXPECT_EQ(strings::reused_age(Duration{59s}), "minute");
+    EXPECT_EQ(strings::reused_age(Duration{60s}), "minute");
+    EXPECT_EQ(strings::reused_age(Duration{61s}), "2 min");
+    EXPECT_EQ(strings::reused_age(Duration{25min}), "25 min");
+    EXPECT_EQ(strings::reused_age(Duration{25min} + Ticks{1}), "26 min");
+    EXPECT_EQ(strings::reused_age(Duration{59min}), "59 min");
+    EXPECT_EQ(strings::reused_age(Duration{60min}), "1 h");
+    EXPECT_EQ(strings::reused_age(Duration{61min}), "1 h 1 min");
+    EXPECT_EQ(strings::reused_age(Duration{6h}), "6 h");
+    EXPECT_EQ(strings::reused_age(Duration{-5s}), "minute");  // a clock moved back
 }
 
 TEST(LegText, UX_18_Notices_are_logged_once_when_they_matter)

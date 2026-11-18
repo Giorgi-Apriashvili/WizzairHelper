@@ -3,6 +3,7 @@
 #include "wizz/core/datetime_parse.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 
 namespace wizz::ui::strings {
@@ -200,6 +201,47 @@ std::string return_from_pick_log(std::string_view airport_display, std::string_v
 std::string screenshot_failed(std::string_view name, std::string_view message)
 {
     return std::format("screenshot {} failed: {}", name, message);
+}
+
+std::string reused_age(Duration age)
+{
+    const auto minutes = std::chrono::ceil<std::chrono::minutes>(std::max(age, Duration::zero())).count();
+    if (minutes <= 1) {
+        return "minute";
+    }
+    if (minutes < 60) {
+        return std::format("{} min", minutes);
+    }
+    if (minutes % 60 == 0) {
+        return std::format("{} h", minutes / 60);
+    }
+    return std::format("{} h {} min", minutes / 60, minutes % 60);
+}
+
+std::string reused_fares_log(std::string_view age_text, std::int64_t full, std::size_t planned, std::int64_t partly)
+{
+    std::string line = std::format("  Reused fares fetched in the last {}: {} of {} requests answered from them", age_text,
+                                   full, planned);
+    if (partly > 0) {
+        line += std::format(", {} shortened to the days not fetched yet", partly);
+    }
+    line += '.';
+    return line;
+}
+
+std::string_view reuse_window_label(fare_days::ReuseWindow window) noexcept
+{
+    switch (window) {
+    case fare_days::ReuseWindow::thirty_minutes:
+        return "30 minutes";
+    case fare_days::ReuseWindow::one_hour:
+        return "1 hour";
+    case fare_days::ReuseWindow::three_hours:
+        return "3 hours";
+    case fare_days::ReuseWindow::six_hours:
+        return "6 hours";
+    }
+    return "30 minutes";
 }
 
 } // namespace wizz::ui::strings

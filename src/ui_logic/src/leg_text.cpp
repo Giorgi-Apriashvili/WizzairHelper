@@ -231,6 +231,16 @@ std::vector<std::string> log_plan_lines(const LegSearchRequest& request, const S
     return lines;
 }
 
+std::optional<std::string> reused_fares_line(const LegSearchResult& result)
+{
+    if (result.requests_from_cache + result.requests_partly_cached <= 0) {
+        return std::nullopt;
+    }
+    return strings::reused_fares_log(strings::reused_age(result.oldest_reused_age.value_or(Duration::zero())),
+                                     result.requests_from_cache, result.plan.requests.size(),
+                                     result.requests_partly_cached);
+}
+
 std::vector<std::string> log_result_lines(const LegSearchResult& result, const Locale& locale)
 {
     std::vector<std::string> lines;
@@ -244,6 +254,9 @@ std::vector<std::string> log_result_lines(const LegSearchResult& result, const L
         }
     }
     lines.push_back(std::move(first));
+    if (std::optional<std::string> reused = reused_fares_line(result)) {
+        lines.push_back(*std::move(reused));
+    }
     for (const std::string& warning : extra_warnings(result)) {
         lines.push_back("  ! " + warning);
     }

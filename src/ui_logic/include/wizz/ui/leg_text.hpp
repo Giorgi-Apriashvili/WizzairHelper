@@ -108,8 +108,13 @@ enum class RequestBudget {
 
 /// Maximum fare lines `LogResult` writes.
 inline constexpr std::size_t kLoggedFares = 5;
+/// The Log line about reused fares (D-70), or nullopt when the search reused nothing:
+/// "  Reused fares fetched in the last {age}: {full} of {planned} requests answered from
+/// them[, {partly} shortened to the days not fetched yet]." ({age}: strings::reused_age).
+[[nodiscard]] std::optional<std::string> reused_fares_line(const LegSearchResult& result);
 /// `LogResult(r)` lines: "{Label}: {N} fares, {completed}/{planned} requests, {n} route(s) not served,
-/// {FormatDuration}, FX {Source} {yyyy-MM-dd}[ (approximate)]", then "  ! {w}" per extra
+/// {FormatDuration}, FX {Source} {yyyy-MM-dd}[ (approximate)]", then `reused_fares_line` when the
+/// search reused fares (D-70; otherwise the lines are those of 01 §12), then "  ! {w}" per extra
 /// warning, then up to 5 fare lines "    {ddd dd MMM} {HH:mm}  {FROM}→{TO}  {PricePerPerson}  = {Price(f)}".
 /// Choice (01 open question 11): `{From}→{To}` are the IATA codes; `HH:mm` uses the
 /// culture time separator like the C# interpolation ("current culture", C-17).
