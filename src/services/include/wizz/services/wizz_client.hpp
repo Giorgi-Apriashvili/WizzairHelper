@@ -1,8 +1,9 @@
 #pragma once
 // The Wizz Air client (04 §1–§13, protocol-reference §2–§7): API base URL
 // discovery and invalidation, the route map with its disk cache and stale
-// fallback, timetable windows with the 30-minute memory cache and the
-// validation-code handling, and the SendApi state machine that classifies
+// fallback, timetable windows with the per-day fare reuse (DECISIONS D-66) kept
+// in `cache\fares.json` (D-67) and the validation-code handling, and the SendApi
+// state machine that classifies
 // every response, retries transient failures with countdown notices and paces
 // all traffic through one RequestGate.
 //
@@ -18,6 +19,7 @@
 #include "wizz/core/catalog.hpp"
 #include "wizz/core/clocks.hpp"
 #include "wizz/core/domain.hpp"
+#include "wizz/core/fare_days.hpp"
 #include "wizz/core/http.hpp"
 #include "wizz/core/locale.hpp"
 #include "wizz/core/progress.hpp"
@@ -32,7 +34,6 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -69,13 +70,17 @@ struct WizzClientOptions {
     std::vector<Duration> retry_delays{std::chrono::seconds{5}, std::chrono::seconds{15}, std::chrono::seconds{30}};
     /// `map.json` freshness (fresh while age ≤ max age; 04 §8).
     Duration map_max_age = std::chrono::hours{24};
-    /// Memory timetable cache lifetime (hit while `now − at < age`; 04 §9.1).
+    /// The initial reuse window of fetched fares (a day is reused while `now − fetched <
+    /// window`; 04 §9.1, D-66); `set_timetable_reuse_window` changes it later.
     Duration timetable_cache_age = std::chrono::minutes{30};
+    /// Keep the reused fares in `cache` as fares.json across restarts (D-67). A disabled
+    /// `cache` keeps nothing either way.
+    bool keep_timetables_on_disk = true;
     /// Gate waits and back-off delays; must throw OperationCancelled when the token fires.
     DelayFunc delay = &cancellable_sleep;
     /// All clocks: gate, cache ages, WaitUntilUtc, file ages, and "today" (local).
     std::shared_ptr<const Clock> clock = std::make_shared<SystemClock>();
-    /// `api-url.txt` and `map.json`; default `%LOCALAPPDATA%\WizzairHelper\cache`.
+    /// `api-url.txt`, `map.json` and `fares.json`; default `%LOCALAPPDATA%\WizzairHelper\cache`.
     FileCache cache{app_paths::default_cache_dir()};
     /// Collation and title case of the AirportCatalog built from the route map
     /// (02 §5). The app passes Locale::user_default(); tests keep en-US.
@@ -83,9 +88,10 @@ struct WizzClientOptions {
 };
 
 /// `TimetableQuery` record (04 §1, §9.1): one route and inclusive date window.
-/// It is also the memory-cache key, compared field by field: codes ordinally and
-/// case-sensitively ("bud" ≠ "BUD"), `adults` raw (0 ≠ 1) although both send
-/// `adultCount` 1. The display currency is deliberately not part of it.
+/// Without its dates it is the key of the reused fares (fare_days::RouteKey, D-66),
+/// compared field by field: codes ordinally and case-sensitively ("bud" ≠ "BUD"),
+/// `adults` raw (0 ≠ 1) although both send `adultCount` 1. The display currency is
+/// deliberately not part of it.
 struct TimetableQuery {
     std::string from;
     std::string to;
@@ -98,11 +104,16 @@ struct TimetableQuery {
     friend std::strong_ordering operator<=>(const TimetableQuery&, const TimetableQuery&) = default;
 };
 
-/// `TimetableResult(Fares, RouteNotServed, FromCache)` (04 §1, §9.1).
+/// `TimetableResult(Fares, RouteNotServed, FromCache)` (04 §1, §9.1) and what was reused (D-66).
 struct TimetableResult {
-    std::vector<DayFare> fares;     ///< response order, chunks concatenated, never de-duplicated
-    bool route_not_served = false;  ///< Wizz answered InvalidMarket
-    bool from_cache = false;        ///< served from the memory cache (all chunks, for a multi-chunk query)
+    /// Reused days before the fetched ones, the response, then reused days after it
+    /// (chunks concatenated, never de-duplicated). Rows of a response dated outside the
+    /// window asked for are passed on; reused rows are only those inside it.
+    std::vector<DayFare> fares;
+    bool route_not_served = false;  ///< Wizz answered InvalidMarket (now or within the reuse window)
+    bool from_cache = false;        ///< no request was sent (for every chunk of a multi-chunk query)
+    bool partly_cached = false;     ///< a request asked only for the days not fetched yet (any chunk)
+    std::optional<UtcInstant> oldest_reused;  ///< the oldest fetch time among the reused days or mark
 };
 
 /// `WizzApiClient` (04 §1). One instance per process in the app; its memory
@@ -114,6 +125,8 @@ public:
     /// Cache file names (04 §1, §6).
     static constexpr std::string_view kApiUrlCacheFile = "api-url.txt";
     static constexpr std::string_view kMapCacheFile = "map.json";
+    /// The reused fares on disk (D-67).
+    static constexpr std::string_view kTimetableCacheFile = "fares.json";
 
     /// The client shares `transport` (05 §1.4: tests give one fake to two clients)
     /// and builds its RequestGate from `options`. Throws std::invalid_argument for
@@ -143,15 +156,32 @@ public:
     [[nodiscard]] AirportCatalogPtr get_airports(const NoticeSink& notices, std::stop_token stop,
                                                  bool force_refresh = false);
 
-    /// `GetTimetableAsync` (04 §9.1): clamps the start to the clock's local today
-    /// (an empty or entirely past window sends nothing), splits it into ≤ 42-day
-    /// chunks (each with its own cache entry; a not-served chunk stops the loop),
-    /// and answers a single chunk from the memory cache while `now − at <
-    /// timetable_cache_age`, else fetches it (04 §9.2: InvalidMarket → not served;
+    /// `GetTimetableAsync` (04 §9.1) with per-day reuse (D-66): clamps the start to the
+    /// clock's local today (an empty or entirely past window sends nothing) and splits
+    /// it into ≤ 42-day chunks (a not-served chunk stops the loop). For each chunk, the
+    /// days fetched less than `reuse_window` ago (days dated today: at most 30 minutes)
+    /// are reused and at most ONE request asks for the rest — the hull from the first
+    /// to the last day not fetched yet — (04 §9.2: InvalidMarket → not served;
     /// InvalidFromDate → start + 1 day, at most twice; InvalidTimeDateRange → halves).
-    /// Errors are not cached. Throws WizzApiError (and subclasses) or OperationCancelled.
+    /// A successful answer is remembered per day after it parsed; errors and
+    /// cancellations remember nothing. The first call reads fares.json (D-67) on the
+    /// calling thread. Throws WizzApiError (and subclasses) or OperationCancelled.
+    [[nodiscard]] TimetableResult get_timetable(const TimetableQuery& query, const NoticeSink& notices,
+                                                std::stop_token stop, Duration reuse_window);
+    /// The same with the current `timetable_reuse_window()`.
     [[nodiscard]] TimetableResult get_timetable(const TimetableQuery& query, const NoticeSink& notices,
                                                 std::stop_token stop);
+
+    /// The reuse window of later `get_timetable` calls without one (the Settings window's
+    /// "Reuse fares fetched within", D-68). Thread-safe.
+    void set_timetable_reuse_window(Duration window) noexcept;
+    [[nodiscard]] Duration timetable_reuse_window() const noexcept;
+
+    /// Writes the reused fares to fares.json when they changed since the last save
+    /// (pruned first: D-67), on the calling thread; a worker calls it at the end of each
+    /// search. Does nothing without `keep_timetables_on_disk` or a cache directory.
+    /// Never throws: a failed write keeps the old file.
+    void save_timetables() noexcept;
 
     /// `RequestCount` (04 §13): sends to wizzair.com so far (discovery pages and API
     /// attempts, counted just before each send, failed ones included).
@@ -175,10 +205,6 @@ private:
         std::string text;        ///< the body (Outcome::body) or the transient reason
         bool slow_down = false;  ///< transient 503 / plain 429: cool the gate down
     };
-    struct CachedTimetable {
-        UtcInstant at;
-        TimetableResult result;
-    };
 
     /// Reports a notice synchronously; an empty sink means "no notices" (04 §3.1).
     static void notify(const NoticeSink& notices, std::string message,
@@ -195,6 +221,10 @@ private:
     [[nodiscard]] AirportCatalogPtr stale_map(const NoticeSink& notices);
 
     // 04 §9
+    /// fares.json is used: kept on disk and a cache directory exists.
+    [[nodiscard]] bool keeps_timetables_on_disk() const noexcept;
+    /// Reads fares.json once, at the first lookup. Requires timetable_mutex_.
+    void load_timetables_once();
     [[nodiscard]] TimetableResult fetch_timetable(const TimetableQuery& query, const NoticeSink& notices,
                                                   std::stop_token stop);
 
@@ -219,8 +249,15 @@ private:
     CancellableMutex map_lock_;                            ///< 04 §8 mapLock (taken before discovery_lock_)
     std::atomic<AirportCatalogPtr> catalog_;               ///< 04 §8 memCatalog
 
-    std::mutex timetable_mutex_;                           ///< guards timetable_cache_ (no single-flight, 04 §9.1)
-    std::map<TimetableQuery, CachedTimetable> timetable_cache_;
+    std::atomic<Ticks::rep> reuse_window_ticks_;           ///< timetable_reuse_window()
+
+    std::mutex timetable_mutex_;                           ///< guards the three below (no single-flight, 04 §9.1)
+    fare_days::Store timetables_;                          ///< the reused fares (D-66)
+    bool timetables_loaded_ = false;                       ///< fares.json was read (or is not used)
+    std::uint64_t timetables_generation_ = 0;              ///< counts the changes of timetables_
+
+    std::mutex save_mutex_;                                ///< one save_timetables at a time
+    std::uint64_t saved_generation_ = 0;                   ///< timetables_generation_ last written; save_mutex_
 };
 
 } // namespace wizz
