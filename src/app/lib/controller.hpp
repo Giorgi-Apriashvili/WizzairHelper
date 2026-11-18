@@ -97,6 +97,10 @@ public:
     /// PlanReturnFromAsync (§11.6): return window = outbound date + nights, then the return
     /// search from the fare's arrival airport.
     [[nodiscard]] Task<> plan_return_from(FlightResultPtr outbound);
+    /// Fetches the exchange rates ahead of the first search (D-69): CurrencyService::prefetch
+    /// on a JobRunner worker. Silent: no busy phase, no Log line, every failure swallowed
+    /// (a search then decides with its own notices); stopped when the controller goes.
+    [[nodiscard]] Task<> prefetch_rates();
     /// OnCurrencyChanged (§11.7): re-prices the stored legs without requests.
     void on_currency_changed();
     /// RecomputeTrips (§11.8).
@@ -117,6 +121,9 @@ public:
     [[nodiscard]] bool has_active_phase() const noexcept { return stop_source_.has_value(); }
     /// `_cts?.Cancel()` (Cancel button, Esc, closing the window).
     void cancel_work();
+    /// Stops the work that runs beside the busy phases, the rate prefetch (D-69): closing
+    /// the window. Esc and Cancel leave it running.
+    void stop_background_work();
     [[nodiscard]] const AirportCatalogPtr& catalog() const noexcept { return catalog_; }
     [[nodiscard]] const LegSearchResultPtr& outbound_result() const noexcept { return outbound_result_; }
     [[nodiscard]] const LegSearchResultPtr& return_result() const noexcept { return return_result_; }
@@ -189,6 +196,7 @@ private:
     bool working_ = false;
     bool shutting_down_ = false;
     std::optional<std::stop_source> stop_source_;
+    std::stop_source background_stop_;  ///< the rate prefetch (D-69)
     AirportCatalogPtr catalog_;
     LegSearchResultPtr outbound_result_;
     LegSearchResultPtr return_result_;

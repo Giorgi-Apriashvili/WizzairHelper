@@ -19,6 +19,7 @@
 #include "window_animation.hpp"
 #include "window_placement.hpp"
 
+#include "wizz/core/fare_days.hpp"
 #include "wizz/services/updater.hpp"
 #include "wizz/ui/strings.hpp"
 #include "wizz/ui/update_model.hpp"
@@ -119,6 +120,8 @@ MainWindow::MainWindow(std::shared_ptr<const AppServices> services, ui::AppSetti
       clock_(elapsed_timer_clock())
 {
     setWindowTitle(main_window_title());
+    // settings.json's reuse window of fetched fares, from the first search on (D-68).
+    services_->wizz->set_timetable_reuse_window(fare_days::duration_of(settings_.fare_reuse));
     build();
     start_timer_ = new QTimer(this);
     start_timer_->setObjectName(QStringLiteral("startTimer"));
@@ -233,6 +236,18 @@ bool MainWindow::enable_updates(UpdateHooks hooks)
     connect(updates_, &UpdateController::restart_requested, this, &QWidget::close);
     if (startup_begun()) {
         updates_->start();  // enabled after the start-up work began: start at once
+    }
+    return true;
+}
+
+bool MainWindow::enable_rate_prefetch()
+{
+    if (is_autotest() || rate_prefetch_) {
+        return false;  // a self-test run keeps its requests and notices as scripted (D-30, D-69)
+    }
+    rate_prefetch_ = true;
+    if (startup_begun()) {
+        controller_->spawn(controller_->prefetch_rates());
     }
     return true;
 }
@@ -382,10 +397,11 @@ SettingsDialog* MainWindow::open_settings()
     const ui::UpdateStatusView status =
         updates_ != nullptr ? updates_->status_view()
                             : ui::updates_off_view(update::parse_version(WIZZ_VERSION_STRING).value_or(update::Version{}));
-    auto* dialog = new SettingsDialog(settings_.updates, status, this);
+    auto* dialog = new SettingsDialog(settings_.updates, status, settings_.fare_reuse, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     settings_dialog_ = dialog;
     connect(dialog, &SettingsDialog::options_changed, this, &MainWindow::apply_update_options);
+    connect(dialog, &SettingsDialog::fare_reuse_changed, this, &MainWindow::apply_fare_reuse);
     if (updates_ != nullptr) {
         UpdateController* const updates = updates_;
         connect(dialog, &SettingsDialog::check_now_requested, updates, &UpdateController::check_now);
@@ -403,6 +419,15 @@ void MainWindow::apply_update_options(const update::UpdateOptions& options)
     if (updates_ != nullptr) {
         updates_->set_options(options);  // applies at once (D-61)
     }
+    if (!is_autotest()) {
+        (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
+    }
+}
+
+void MainWindow::apply_fare_reuse(fare_days::ReuseWindow window)
+{
+    settings_.fare_reuse = window;
+    services_->wizz->set_timetable_reuse_window(fare_days::duration_of(window));  // the next search takes it
     if (!is_autotest()) {
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
     }
@@ -472,6 +497,9 @@ void MainWindow::begin_startup()
     }
     startup_.work_started_ms = since_shown_ms();
     controller_->spawn(on_shown());
+    if (rate_prefetch_) {
+        controller_->spawn(controller_->prefetch_rates());  // beside the map load, on its own worker (D-69)
+    }
     if (updates_ != nullptr) {
         updates_->start();
     }
@@ -503,6 +531,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     closed_ = true;
     start_timer_->stop();        // closed during the start delay: no work starts (D-65)
     controller_->cancel_work();  // stop any running work first
+    controller_->stop_background_work();  // and the rates fetched at start (D-69)
     if (!is_autotest()) {
         input_->commit_numeric_edits();  // the X / Alt+F4 move no focus: read the typed number too
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored

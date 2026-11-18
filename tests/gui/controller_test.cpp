@@ -146,6 +146,41 @@ TEST(ControllerFlows, Named_destination_outbound_streams_into_the_grid_and_ends_
     EXPECT_EQ(rig.actions.opened[0], "https://www.wizzair.com/en-gb/booking/select-flight/BTS/LTN/2026-11-12/null/1/0/0/null");
 }
 
+TEST(ControllerFlows, A_repeated_search_reuses_its_fares_and_says_so_once_in_the_Log)
+{
+    WindowRig rig;
+    rig.start();
+    section11_inputs(rig);
+    const auto reused_lines = [&rig] {
+        std::vector<std::string> lines;
+        for (const std::string& line : rig.log_lines()) {
+            if (line.starts_with("  Reused fares")) {
+                lines.push_back(line);
+            }
+        }
+        return lines;
+    };
+    rig.run(rig.controller().search_outbound());
+    EXPECT_TRUE(reused_lines().empty()) << "the first search fetched every fare";
+    const std::int64_t requests = rig.wizz_requests();
+
+    rig.run(rig.controller().search_outbound());
+    EXPECT_EQ(rig.wizz_requests(), requests) << "the repeat asks Wizz Air nothing";
+    EXPECT_EQ(reused_lines(), std::vector<std::string>{
+                                  "  Reused fares fetched in the last minute: 3 of 3 requests answered from them."});
+    // Right after the result line; the status line and the counts stay those of the plan.
+    const std::vector<std::string> lines = rig.log_lines();
+    const auto result = std::ranges::find(lines.rbegin(), lines.rend(),
+                                          std::string{"Outbound: 12 fares, 3/3 requests, 1 route(s) not served, 1 s, "
+                                                      "FX Frankfurter 2026-11-02"});
+    ASSERT_NE(result, lines.rend());
+    ASSERT_NE(result, lines.rbegin());
+    EXPECT_EQ(*std::prev(result), reused_lines().front());
+    EXPECT_EQ(rig.busy().status_text(), "Outbound Done: 12 fares from 3 of 3 requests in 1 s.");
+    ASSERT_NE(rig.controller().outbound_result(), nullptr);
+    EXPECT_EQ(rig.controller().outbound_result()->requests_from_cache, 3);
+}
+
 TEST(ControllerFlows, Return_round_trips_and_a_currency_switch_without_requests)
 {
     WindowRig rig;

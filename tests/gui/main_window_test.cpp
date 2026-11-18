@@ -1,6 +1,7 @@
 // MainWindow (01 §3.3, §4.1, §4.2, §5, §6.3, §6.4, §12.2, §13): title, docked
 // layout, tabs, geometry and its persistence, start-up and its delay while Windows
-// animates the window in (D-65), settings on close, and the window-level keyboard
+// animates the window in (D-65), the exchange rates fetched at start (D-69), settings
+// on close, and the window-level keyboard
 // (AcceptButton that follows focus, Esc = Cancel).
 
 #include "app_test_support.hpp"
@@ -36,6 +37,7 @@
 #include <QScreen>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QWindow>
 
@@ -46,6 +48,8 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -481,6 +485,160 @@ TEST(MainWindowStart, A_search_started_during_the_start_delay_loads_the_map_once
               1);
     EXPECT_EQ(rig.outbound().all_results().size(), 12u) << "the search ran to its end";
     EXPECT_TRUE(rig.flow_errors.empty());
+}
+
+/// Holds every exchange-rate request until the test opens it; records a request given up
+/// because its stop token fired.
+class RatesGate final : public wizz::http::Transport {
+public:
+    explicit RatesGate(std::shared_ptr<wizz::http::Transport> inner) : inner_(std::move(inner)) {}
+
+    wizz::http::Response send(const wizz::http::Request& request, std::stop_token stop) override
+    {
+        if (request.url.contains("frankfurter")) {
+            std::unique_lock lock{mutex_};
+            ++requests_;
+            if (!changed_.wait(lock, stop, [this] { return open_; })) {
+                cancelled_ = true;
+                wizz::throw_if_cancelled(stop);
+            }
+            ++answered_;
+        }
+        return inner_->send(request, stop);
+    }
+
+    void open()
+    {
+        {
+            const std::lock_guard lock{mutex_};
+            open_ = true;
+        }
+        changed_.notify_all();
+    }
+
+    [[nodiscard]] int requests() const
+    {
+        const std::lock_guard lock{mutex_};
+        return requests_;
+    }
+    [[nodiscard]] int answered() const
+    {
+        const std::lock_guard lock{mutex_};
+        return answered_;
+    }
+    [[nodiscard]] bool cancelled() const
+    {
+        const std::lock_guard lock{mutex_};
+        return cancelled_;
+    }
+
+private:
+    std::shared_ptr<wizz::http::Transport> inner_;
+    mutable std::mutex mutex_;
+    std::condition_variable_any changed_;
+    bool open_ = false;
+    int requests_ = 0;
+    int answered_ = 0;
+    bool cancelled_ = false;
+};
+
+/// The rig's transport wrapped in a RatesGate, kept in `gate`.
+void gate_rates(WindowRigOptions& options, std::shared_ptr<RatesGate>& gate)
+{
+    options.wrap_transport = [&gate](std::shared_ptr<wizz::http::Transport> inner) {
+        gate = std::make_shared<RatesGate>(std::move(inner));
+        return gate;
+    };
+}
+
+TEST(MainWindowStart, The_exchange_rates_are_fetched_at_the_start_delay_not_before_and_silently)
+{
+    StartClock clock;
+    WindowRigOptions options = start_options(true, clock);
+    std::shared_ptr<RatesGate> gate;
+    gate_rates(options, gate);
+    WindowRig rig{std::move(options)};
+    ASSERT_TRUE(rig.window().enable_rate_prefetch());
+    EXPECT_TRUE(rig.window().rate_prefetch_enabled());
+    EXPECT_FALSE(rig.window().enable_rate_prefetch()) << "once";
+    const std::shared_ptr<int> fired = count_timeouts(rig.window().start_timer());
+    rig.window().show_main_window();
+    ASSERT_TRUE(gui::wait_until([&] { return *fired >= 1; }));
+    gui::settle();
+    EXPECT_EQ(gate->requests(), 0) << "nothing during the open animation";
+
+    clock.advance(MainWindow::kStartDelay - 1ms);
+    const int fired_before = *fired;
+    ASSERT_TRUE(gui::wait_until([&] { return *fired >= fired_before + 2; }));
+    EXPECT_EQ(gate->requests(), 0) << "1 ms before the delay is over";
+
+    clock.advance(1ms);
+    ASSERT_TRUE(gui::wait_until([&] { return gate->requests() == 1; }));
+    // The rates are held: the map load goes on beside them, and the busy panel, the working
+    // state and the Log know nothing of the rates.
+    ASSERT_TRUE(gui::wait_until([&] { return rig.controller().catalog() != nullptr && !rig.busy().is_busy(); }));
+    EXPECT_FALSE(rig.controller().is_working());
+    EXPECT_EQ(rig.busy().status_text(), strings::map_ready(11));
+    for (const std::string& line : rig.log_lines()) {
+        if (line != strings::kStartedLog) {  // it names the rate sources
+            EXPECT_FALSE(line.contains("xchange")) << line;
+        }
+    }
+
+    gate->open();
+    ASSERT_TRUE(gui::wait_until([&] { return gate->answered() == 1; }));
+    // The rates are in memory now: the first search asks no source and says nothing.
+    ASSERT_TRUE(gui::wait_until([&] {
+        std::vector<std::string> notices;
+        (void)rig.services().fx->get_rates([&notices](const wizz::ClientNotice& n) { notices.push_back(n.message); }, {});
+        return notices.empty();
+    }));
+    EXPECT_EQ(gate->requests(), 1);
+    EXPECT_TRUE(rig.flow_errors.empty());
+}
+
+TEST(MainWindowStart, The_exchange_rates_are_not_fetched_without_the_opt_in_or_in_autotest)
+{
+    WindowRigOptions options;
+    std::shared_ptr<RatesGate> gate;
+    gate_rates(options, gate);
+    WindowRig rig{std::move(options)};
+    rig.start();
+    gui::settle();
+    EXPECT_EQ(gate->requests(), 0) << "main opts in for a normal run only";
+
+    // Opted in after the start-up work began: it starts at once.
+    ASSERT_TRUE(rig.window().enable_rate_prefetch());
+    ASSERT_TRUE(gui::wait_until([&] { return gate->requests() == 1; }));
+    gate->open();
+
+    QTemporaryDir out;
+    WindowRigOptions autotest;
+    autotest.autotest = wizz::ui::AutoTestOptions{};
+    autotest.autotest->output_dir = std::filesystem::path{out.path().toStdWString()};
+    WindowRig self_test{std::move(autotest)};
+    EXPECT_FALSE(self_test.window().enable_rate_prefetch()) << "a self-test run keeps its requests as scripted";
+    EXPECT_FALSE(self_test.window().rate_prefetch_enabled());
+}
+
+TEST(MainWindowStart, Slow_exchange_rates_never_delay_the_map_load_and_closing_the_window_stops_them)
+{
+    WindowRigOptions options;
+    std::shared_ptr<RatesGate> gate;
+    gate_rates(options, gate);
+    WindowRig rig{std::move(options)};
+    ASSERT_TRUE(rig.window().enable_rate_prefetch());
+    rig.start();  // the map load and OnShownAsync end while the rates are still held
+    ASSERT_TRUE(gui::wait_until([&] { return gate->requests() == 1; }));
+    EXPECT_NE(rig.controller().catalog(), nullptr);
+    EXPECT_EQ(gate->answered(), 0);
+    EXPECT_FALSE(gate->cancelled());
+
+    rig.window().close();
+    ASSERT_TRUE(gui::wait_until([&] { return gate->cancelled(); })) << "the held request gives up when the window closes";
+    gui::settle();
+    EXPECT_EQ(gate->answered(), 0);
+    EXPECT_TRUE(rig.flow_errors.empty()) << "a cancelled prefetch stays silent";
 }
 
 TEST(MainWindow, Default_size_minimum_size_and_centring)

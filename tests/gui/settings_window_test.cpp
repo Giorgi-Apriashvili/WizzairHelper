@@ -5,8 +5,9 @@
 // applied at once and saved to settings.json (never in autotest), each install choice end
 // to end from the window to the update bar and closing or restarting the app, a portable
 // copy, a run without updates, and its layout and colours in light, dark and High
-// Contrast. The updater is the scripted FakeUpdateBackend on a fixed clock; downloads are
-// held and released by a gate, never by timing.
+// Contrast, and the "Searches" card: the reuse window of fetched fares, applied to the Wizz
+// client and saved at once (D-68). The updater is the scripted FakeUpdateBackend on a fixed
+// clock; downloads are held and released by a gate, never by timing.
 
 #include "update_test_support.hpp"
 
@@ -73,6 +74,7 @@ using update::InstallKind;
 using update::UpdateErrorKind;
 using update::Version;
 using update::WhenFound;
+using wizz::fare_days::ReuseWindow;
 using wizz::ui::UpdateStatusKind;
 using wizz::ui::UpdateStatusView;
 
@@ -700,12 +702,18 @@ TEST(SettingsWindow, Never_writes_settings_json_in_autotest_and_says_updates_are
     }
     EXPECT_FALSE(dialog.note_label()->isVisible());
     EXPECT_TRUE(dialog.close_button()->isEnabled());
-    EXPECT_EQ(dialog.focusWidget(), dialog.close_button()) << "the one control that works";
+    // Changed deliberately with the "Searches" card (D-68): searches reuse fares in every
+    // run, so its drop-down stays enabled and the focus starts there, not on Close.
+    EXPECT_TRUE(dialog.reuse_box()->isEnabled());
+    EXPECT_EQ(dialog.focusWidget(), dialog.reuse_box()) << "the first control that works";
     EXPECT_EQ(dialog.options(), wizz::update::UpdateOptions{}) << "the settings' options, shown";
 
     // Even a change reported by the window writes nothing in a self-test run.
     Q_EMIT dialog.options_changed(options(WhenFound::notify_only, false));
     EXPECT_FALSE(std::filesystem::exists(settings_path(rig)));
+    dialog.reuse_box()->setCurrentIndex(3);
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig)));
+    EXPECT_EQ(rig.services().wizz->timetable_reuse_window(), wizz::Duration{6h}) << "the next search takes it all the same";
     dialog.close_button()->click();
     rig.window().close();
     EXPECT_FALSE(std::filesystem::exists(settings_path(rig)));
@@ -722,6 +730,57 @@ TEST(SettingsWindow, Without_an_updater_it_says_updates_are_off_in_a_normal_run_
     EXPECT_FALSE(dialog.check_now_button()->isEnabled());
 }
 
+TEST(SettingsWindow, Searches_shows_the_saved_reuse_window_and_applies_and_saves_a_change_at_once)
+{
+    WindowRigOptions setup;
+    setup.settings.fare_reuse = ReuseWindow::three_hours;
+    setup.settings.from = "Wien";
+    WindowRig rig{std::move(setup)};
+    EXPECT_EQ(rig.services().wizz->timetable_reuse_window(), wizz::Duration{3h}) << "settings.json's window from the start";
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+
+    EXPECT_EQ(dialog.searches_card()->title_label()->text(), "Searches");
+    EXPECT_EQ(dialog.reuse_box()->currentText(), "3 hours");
+    EXPECT_EQ(dialog.fare_reuse(), ReuseWindow::three_hours);
+    std::vector<QString> items;
+    for (int i = 0; i < dialog.reuse_box()->count(); ++i) {
+        items.push_back(dialog.reuse_box()->itemText(i));
+    }
+    EXPECT_EQ(items, (std::vector<QString>{"30 minutes", "1 hour", "3 hours", "6 hours"}));
+    EXPECT_EQ(dialog.reuse_hint()->text(), "Searches ask Wizz Air only for days not fetched within this time. Fares are "
+                                           "kept on this computer for up to 6 hours.");
+    EXPECT_EQ(dialog.reuse_hint()->font(), style::hint_font()) << "the muted 9 pt hint";
+    EXPECT_EQ(text_colour(dialog.reuse_hint()), style::theme().text_muted);
+    EXPECT_TRUE(dialog.reuse_hint()->wordWrap());
+    EXPECT_GT(dialog.searches_card()->y(), dialog.updates_card()->y()) << "under Updates";
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig))) << "opening saves nothing";
+
+    // A change reaches the client for the next search and is in settings.json at once.
+    std::vector<ReuseWindow> reported;
+    QObject::connect(&dialog, &SettingsDialog::fare_reuse_changed, [&reported](ReuseWindow window) {
+        reported.push_back(window);
+    });
+    dialog.reuse_box()->setCurrentIndex(1);
+    EXPECT_EQ(reported, std::vector<ReuseWindow>{ReuseWindow::one_hour});
+    EXPECT_EQ(rig.services().wizz->timetable_reuse_window(), wizz::Duration{1h});
+    EXPECT_EQ(saved(rig).fare_reuse, ReuseWindow::one_hour);
+    EXPECT_EQ(saved(rig).from, "Wien") << "the other settings are saved as they are";
+    EXPECT_EQ(rig.window().current_settings().fare_reuse, ReuseWindow::one_hour);
+
+    // Showing a value reports nothing.
+    dialog.show_fare_reuse(ReuseWindow::six_hours);
+    EXPECT_EQ(reported.size(), 1u);
+    EXPECT_EQ(rig.services().wizz->timetable_reuse_window(), wizz::Duration{1h});
+
+    // Opened again, the window shows what was kept; closing the app saves it too.
+    dialog.close();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    EXPECT_EQ(open_settings(rig.window()).fare_reuse(), ReuseWindow::one_hour);
+    rig.window().close();
+    EXPECT_EQ(saved(rig).fare_reuse, ReuseWindow::one_hour);
+}
+
 TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
 {
     UpdateRig rig;
@@ -731,10 +790,12 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     QRadioButton* ask = dialog.when_found_button(WhenFound::download_then_ask);
     QRadioButton* notify = dialog.when_found_button(WhenFound::notify_only);
     EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "focus starts on the first control";
-    // Real Tab presses: an exclusive radio group is one stop, its selected choice (D-63).
-    EXPECT_EQ(press_tab(dialog, 5), (std::vector<QWidget*>{dialog.check_automatically_box(), dialog.frequency_box(),
-                                                            install, dialog.close_button(), dialog.check_now_button()}));
-    EXPECT_EQ(press_tab(dialog, 2, true), (std::vector<QWidget*>{dialog.close_button(), install}));
+    // Real Tab presses: an exclusive radio group is one stop, its selected choice (D-63); the
+    // reuse window of the "Searches" card comes before Close (D-68: changed deliberately).
+    EXPECT_EQ(press_tab(dialog, 6),
+              (std::vector<QWidget*>{dialog.check_automatically_box(), dialog.frequency_box(), install, dialog.reuse_box(),
+                                     dialog.close_button(), dialog.check_now_button()}));
+    EXPECT_EQ(press_tab(dialog, 3, true), (std::vector<QWidget*>{dialog.close_button(), dialog.reuse_box(), install}));
     // The arrow keys move among the choices and select each one, which applies it at once.
     gui::send_key(install, QEvent::KeyPress, Qt::Key_Down);
     EXPECT_EQ(dialog.focusWidget(), ask);
@@ -744,7 +805,7 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     gui::send_key(ask, QEvent::KeyPress, Qt::Key_Down);
     EXPECT_EQ(dialog.focusWidget(), notify);
     EXPECT_EQ(rig.controller()->options().when_found, WhenFound::notify_only);
-    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.close_button()})) << "then on to Close";
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.reuse_box()})) << "then on to the reuse window";
     EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{notify})) << "back to the selected choice";
 
     EXPECT_EQ(dialog.updates_card()->accessibleName(), "Updates");
@@ -756,15 +817,19 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     EXPECT_EQ(install->text(), "Download it and install when I close the app");
     EXPECT_EQ(ask->text(), "Download it, then ask me before installing");
     EXPECT_EQ(notify->text(), "Only tell me that an update is available");
+    EXPECT_EQ(dialog.searches_card()->accessibleName(), "Searches");
+    EXPECT_EQ(dialog.searches_card()->title_label()->text(), "Searches");
+    EXPECT_EQ(dialog.reuse_box()->accessibleName(), "Reuse fares fetched within");
+    EXPECT_EQ(dialog.reuse_label()->text(), "Reuse fares fetched within");
     for (QWidget* control : std::initializer_list<QWidget*>{dialog.check_now_button(), dialog.check_automatically_box(),
                                                              dialog.frequency_box(), install, ask, notify,
-                                                             dialog.close_button()}) {
+                                                             dialog.reuse_box(), dialog.close_button()}) {
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(control);
         ASSERT_NE(accessible, nullptr);
         EXPECT_FALSE(accessible->text(QAccessible::Name).isEmpty()) << control->metaObject()->className();
     }
     for (const QLabel* label : {dialog.version_label(), dialog.status_label(), dialog.when_found_caption(),
-                                dialog.note_label()}) {
+                                dialog.note_label(), dialog.reuse_label(), dialog.reuse_hint()}) {
         EXPECT_EQ(label->textFormat(), Qt::PlainText) << "plain text (D-58)";
     }
 
@@ -829,7 +894,7 @@ TEST(SettingsWindow, Lays_out_cleanly_in_every_state_and_fits_the_minimum_window
     const QSize minimum = gui::minimum_client_size();
     std::optional<int> usual_height;
     for (const auto& [name, status] : every_status()) {
-        SettingsDialog dialog{update::UpdateOptions{}, status, &owner};
+        SettingsDialog dialog{update::UpdateOptions{}, status, wizz::fare_days::ReuseWindow::six_hours, &owner};
         dialog.show();
         gui::settle();
         EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{}) << name;

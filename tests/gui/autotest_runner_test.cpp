@@ -273,6 +273,12 @@ TEST(AutoTestRunner, D_30_Warm_cache_makes_the_scripts_search_a_cached_replay)
     EXPECT_EQ(std::ranges::count(summary->log, std::string{"[10:00:00] Outbound: 12 fares, 3/3 requests, 1 route(s) "
                                                            "not served, 1 s, FX Frankfurter 2026-11-02"}),
               2);
+    // The replay reused every fare of the warm-up and says so once, in its own result (D-70).
+    EXPECT_EQ(std::ranges::count_if(summary->log, [](const std::string& line) { return line.contains("Reused fares"); }),
+              1);
+    EXPECT_EQ(std::ranges::count(summary->log, std::string{"[10:00:00]   Reused fares fetched in the last minute: 3 of 3 "
+                                                           "requests answered from them."}),
+              1);
 
     const auto& diagnostics = rig.window().autotest_runner()->diagnostics();
     ASSERT_TRUE(diagnostics.has_value());

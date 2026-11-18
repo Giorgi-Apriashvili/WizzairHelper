@@ -17,6 +17,7 @@ ServiceConfig ServiceConfig::for_run(const std::optional<ui::AutoTestOptions>& a
         return config;
     }
     config.data_root = autotest->data_root;
+    config.fare_cache_on_disk = autotest->data_root.has_value();  // an isolated profile only (D-67)
     if (autotest->replay_dir) {
         config.transport = std::make_shared<ui::ReplayTransport>(*autotest->replay_dir);
     }
@@ -53,6 +54,7 @@ std::shared_ptr<const AppServices> AppServices::create(ServiceConfig config)
     client.clock = services->clock;
     client.locale = services->locale;
     client.cache = cache();
+    client.keep_timetables_on_disk = config.fare_cache_on_disk;
     if (config.customize_client) {
         config.customize_client(client);
     }
