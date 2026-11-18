@@ -98,7 +98,6 @@ struct DisplayDiagnostics {
     QSize minimum_window;                     ///< logical, whole window (MainWindow::kMinimumSize, 01 §4.1)
     QSize default_window;                     ///< logical, whole window (MainWindow::kDefaultSize, 01 §4.1)
     bool window_on_screen = false;            ///< the frame lies inside the work area
-    bool opened_without_transition = false;   ///< MainWindow::opened_without_transition() (D-65)
 };
 
 struct LayoutDiagnostics {

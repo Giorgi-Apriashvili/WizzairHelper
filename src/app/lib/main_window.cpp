@@ -288,19 +288,7 @@ void MainWindow::apply_start_geometry()
 void MainWindow::show_main_window()
 {
     apply_start_geometry();
-    // No open transition (D-65): while Windows animates the window in, every flush of it
-    // blocks the UI thread (up to 120 ms measured), and the first Shown starts the map load,
-    // which repaints most of the window at once. Back on after the load (on_shown).
-    opened_without_transition_ = set_window_transitions(*this, false);
-    transitions_off_ = opened_without_transition_;
     show();
-}
-
-void MainWindow::restore_window_transitions()
-{
-    if (std::exchange(transitions_off_, false)) {
-        (void)set_window_transitions(*this, true);
-    }
 }
 
 QSize MainWindow::normal_outer_device_size() const
@@ -435,9 +423,6 @@ void MainWindow::showEvent(QShowEvent* event)
 Task<> MainWindow::on_shown()
 {
     co_await controller_->load_catalog();
-    // The window opened without its transition (show_main_window, D-65); closing,
-    // minimising and restoring animate as before.
-    restore_window_transitions();
     if (autotest_runner_ != nullptr) {
         co_await autotest_runner_->run();
     }
