@@ -20,7 +20,7 @@ if(WIZZ_BUILD_TESTS)
 endif()
 
 project(WizzairHelper
-    VERSION 2.1.0
+    VERSION 2.2.0
     DESCRIPTION "Finds the cheapest Wizz Air trips from airports near a chosen starting place"
     LANGUAGES CXX)
 
