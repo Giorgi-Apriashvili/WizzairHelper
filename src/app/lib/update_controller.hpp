@@ -2,9 +2,9 @@
 // The self-updater's lifecycle in the app (D-45..D-49, D-59..D-62), on top of the core
 // (wizz/services/updater.hpp) and its rules (wizz/ui/update_model.hpp):
 //
-//   * start() — after the main window is shown — re-evaluates at once and then every
-//     hour, so a window left open across a day, week or month boundary checks at the next
-//     tick. Each evaluation runs on a JobRunner worker: the core's check_if_due with the
+//   * start() — when the main window starts its first work, after the start delay while
+//     Windows animates it in (D-65) — re-evaluates at once and then every hour, so a
+//     window left open across a day, week or month boundary checks at the next tick. Each evaluation runs on a JobRunner worker: the core's check_if_due with the
 //     model's policy (no request when no check is due or automatic checks are off; the
 //     calendar periods and the 1 h failure floor are the core's), or, after a download
 //     failure that may heal, the download again. The first one first deletes downloads
@@ -112,7 +112,7 @@ public:
     UpdateController(const UpdateController&) = delete;
     UpdateController& operator=(const UpdateController&) = delete;
 
-    /// After the window is shown: evaluates now and starts the hourly timer. Once only.
+    /// With the window's first work (D-65): evaluates now and starts the hourly timer. Once only.
     void start();
     /// The window is closing (settings already saved): stops the timer and any running
     /// work, then starts the installer when the model's exit_command() says so. Once only.

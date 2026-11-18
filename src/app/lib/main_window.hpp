@@ -87,9 +87,9 @@ public:
     /// Around the results card: the input cards' side margins (D-53).
     static constexpr QMargins kResultsMargins{16, 4, 16, 8};
     /// From the first Shown to the first work while Windows animates the window in (D-65):
-    /// its open animation lasts about 300 ms, and a flush of the window during it blocked
-    /// the UI thread for up to 134 ms on the owner's PC; none 350 ms or more after show()
-    /// took longer than 7 ms.
+    /// a flush of the window during that animation blocked the UI thread for up to 138 ms
+    /// on the owner's PC, every one of 20 ms or more within 240 ms of show(); later ones
+    /// took 11 ms at most.
     static constexpr std::chrono::milliseconds kStartDelay{300};
 
     /// Whether Windows animates `window` in when it is first shown (opens_with_animation).
@@ -132,9 +132,8 @@ public:
     /// Turns the self-updater on (D-45): an UpdateController over `hooks` drives the
     /// update bar and the Log, follows the controller's working state, starts with
     /// OnShownAsync (after the start delay, D-65) and may start the installer when the
-    /// window closes. Returns false and
-    /// does nothing in an --autotest run (never with --autotest, D-30) or when the
-    /// updater is already on.
+    /// window closes. Returns false and does nothing in an --autotest run (never with
+    /// --autotest, D-30) or when the updater is already on.
     bool enable_updates(UpdateHooks hooks);
 
     // --- Parts ----------------------------------------------------------------------------

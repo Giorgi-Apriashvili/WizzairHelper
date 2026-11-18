@@ -135,4 +135,7 @@ of the minimum and default windows).
   `kWaitCap`; a cap costs nothing when the condition holds), never a fixed sleep as a
   precondition; measure what the code controls (counts, the time the test measured around the
   code) or bound by the code's or the scenario's own constants; never depend on desktop settings
-  such as client-area animations, which Windows Server turns off.
+  such as client-area animations, which Windows Server turns off. The main window's start delay
+  follows Windows' animation settings (DECISIONS D-65): on the minimal platform there is no native
+  window to animate, so the work starts at once; a test of the delay sets the probe and moves the
+  start clock by hand (`WindowRigOptions::open_animation`, `StartClock`).
