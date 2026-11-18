@@ -161,6 +161,11 @@ private:
     /// Runs `work` now, or after the running work.
     void start_work(Work work);
     [[nodiscard]] Task<> run(Work first);
+    /// run's loop caught `failure`: a cancellation (the window closes) ends the work quietly;
+    /// any other std::exception is one Log line and the model's on_unexpected_error, never a
+    /// crash box (D-45); anything else is rethrown with its throw site and escapes run. A
+    /// plain function, so that no catch parameter lives in run's coroutine frame (D-64).
+    void on_work_failed(const TracedException& failure);
     /// The first evaluation: old downloads go, an earlier session's update is offered again.
     [[nodiscard]] Task<> remind();
     [[nodiscard]] Task<> automatic_check();

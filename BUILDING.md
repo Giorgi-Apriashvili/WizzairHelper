@@ -39,6 +39,22 @@ ctest --preset debug               # or: --preset release
 | `msvc-x64-release` | App only, no tests; build preset `package` = the `dist` target in this tree |
 | workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full`; `release-package` = configure `msvc-x64` + build `dist` |
 
+clang-cl is the second compiler only (the shipped program is built with MSVC); CI's
+`clang-cl-release` leg uses the runner image's LLVM, 20.1.8 at the time of writing, with the MSVC
+STL. Known gaps:
+
+- `std::throw_with_nested` captures no inner exception (`std::current_exception()` is empty in the
+  `nested_exception` constructor), so `ExceptionDescription.Nested_exceptions_are_inner_exceptions`
+  is skipped under clang.
+- Before LLVM 22.1.7, a coroutine's catch parameter used in a loop that also suspends may be moved
+  into the coroutine frame, where the C++ runtime never stores the exception: the handler reads
+  garbage and crashes (LLVM issue 153949, fixed by pull request 186728). Coroutine flows therefore
+  bind no exception in such a handler (`catch (...)` and a plain function, `src/app/lib/task.hpp`,
+  [DECISIONS D-64](docs/DECISIONS.md)). A local clang-cl 22.1.7 or later does not show this. To see
+  what CI sees, extract the release archive `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` anywhere
+  and configure a separate build directory like `clang-cl-x64`, with `CMAKE_C_COMPILER` and
+  `CMAKE_CXX_COMPILER` set to its `bin\clang-cl.exe` (inside a developer prompt, with Ninja).
+
 CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs the same presets: `release`
 and `debug` with `ctest -LE autotest` (one test per CPU of the runner instead of the preset's 8),
 the `autotest` label and `dist` in the Release leg
