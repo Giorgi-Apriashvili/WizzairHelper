@@ -45,7 +45,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -91,6 +90,7 @@ using wizz::test::RecordingDelay;
 using wizz::test::Responder;
 using wizz::test::ScriptedResponse;
 using wizz::test::string_content_response;
+using wizz::test::search::ScratchDirectory;
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -333,31 +333,6 @@ template <class E, class F>
         from, to);
 }
 
-/// A fresh directory `%TEMP%\wizzairhelper-test-<random>`, removed afterwards (05 §1.5).
-class TempDirectory {
-public:
-    TempDirectory()
-    {
-        std::random_device entropy;
-        path_ = fs::temp_directory_path() /
-                std::format("wizzairhelper-test-{:08x}{:08x}{:08x}", entropy(), entropy(), entropy());
-        fs::create_directories(path_);
-    }
-    ~TempDirectory()
-    {
-        std::error_code ignored;  // deletion errors are ignored (05 §1.5)
-        fs::remove_all(path_, ignored);
-    }
-    TempDirectory(const TempDirectory&) = delete;
-    TempDirectory& operator=(const TempDirectory&) = delete;
-
-    [[nodiscard]] const fs::path& path() const noexcept { return path_; }
-    [[nodiscard]] fs::path file(std::string_view name) const { return path_ / name; }
-
-private:
-    fs::path path_;
-};
-
 [[nodiscard]] std::optional<std::string> read_file(const fs::path& path)
 {
     std::ifstream file{path, std::ios::binary};
@@ -374,6 +349,9 @@ void write_file(const fs::path& path, std::string_view content)
     ASSERT_TRUE(file.good()) << path;
 }
 
+/// FILETIME counts 100 ns ticks (one wizz::Tick) since 1601-01-01 UTC, as FileCache reads it.
+constexpr std::chrono::sys_days kFileTimeEpoch{std::chrono::year{1601} / std::chrono::January / 1};
+
 /// The UTC instant of a file's last write, converted exactly as FileCache does
 /// (FILETIME ticks since 1601-01-01), for fixed clocks placed relative to it.
 [[nodiscard]] UtcInstant last_write_utc(const fs::path& path)
@@ -384,8 +362,23 @@ void write_file(const fs::path& path, std::string_view content)
     }
     const std::uint64_t ticks =
         (std::uint64_t{data.ftLastWriteTime.dwHighDateTime} << 32) | data.ftLastWriteTime.dwLowDateTime;
-    constexpr std::chrono::sys_days kFileTimeEpoch{std::chrono::year{1601} / std::chrono::January / 1};
     return UtcInstant{kFileTimeEpoch} + wizz::Ticks{static_cast<std::int64_t>(ticks)};
+}
+
+/// Sets a file's last write time to `instant`, the reverse of last_write_utc.
+void set_last_write_utc(const fs::path& path, UtcInstant instant)
+{
+    const auto ticks = static_cast<std::uint64_t>((instant - UtcInstant{kFileTimeEpoch}).count());
+    const FILETIME time{.dwLowDateTime = static_cast<DWORD>(ticks & 0xFFFF'FFFFu),
+                        .dwHighDateTime = static_cast<DWORD>(ticks >> 32)};
+    const HANDLE file = ::CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE) << path;
+    const BOOL set = ::SetFileTime(file, nullptr, nullptr, &time);
+    ::CloseHandle(file);
+    ASSERT_NE(set, FALSE) << path;
+    ASSERT_EQ(last_write_utc(path), instant) << path;
 }
 
 /// Forwards to a FakeTransport and records every request's per-attempt timeout.
@@ -853,7 +846,7 @@ TEST(WizzClient, CT_API_13_Cancellation_propagates)
 
 TEST(WizzClient, CT_API_14_Api_url_and_map_are_cached_on_disk)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const auto transport = std::make_shared<FakeTransport>(default_responder());
     const auto make_options = [&] {
         WizzClientOptions options;  // Clock SYSTEM (the default)
@@ -1288,7 +1281,7 @@ TEST(WizzClient, User_cancel_wins_over_a_timeout_and_cancels_a_stalled_transfer)
 
 TEST(WizzClient, P_11_a_Stale_map_on_disk_is_used_after_the_retries)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const std::string map = read_fixture("map_subset.json");
     write_file(directory.file("map.json"), map);
     const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 25h);
@@ -1349,7 +1342,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
 
     // An unreadable network map falls back to a stale copy and is not written to disk.
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1362,7 +1355,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A blocked map request falls back too (04 §8: Blocked does fall back).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1375,7 +1368,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // Without a usable copy the API error is rethrown unchanged (type, message, status).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), "{corrupt");  // a corrupt copy counts as absent
         Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
                       return is_map(r) ? std::optional{string_content_response(429).with_header("x-kpsdk-ct", "abc")}
@@ -1389,7 +1382,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A fresh but corrupt map.json is skipped and replaced by the network copy.
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), "{corrupt");
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 1h);
         Harness h(default_responder(), ClientSetup{.clock = clock, .cache_dir = directory.path()});
@@ -1399,7 +1392,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
     }
     // A fresh map.json: no request, no API-URL lookup (warm start, 04 §8).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("map.json"), map);
         const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 24h);  // age = max age: fresh
         Harness h([](const RecordedRequest&) -> ScriptedResponse { throw std::logic_error("must not be called"); },
@@ -1413,7 +1406,7 @@ TEST(WizzClient, Route_map_fallback_rules_of_04_8)
 
 TEST(WizzClient, Route_map_cancellation_never_falls_back_to_the_stale_copy)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     write_file(directory.file("map.json"), read_fixture("map_subset.json"));
     const auto clock = std::make_shared<FixedClock>(last_write_utc(directory.file("map.json")) + 48h);
     std::stop_source cancel;
@@ -1713,7 +1706,7 @@ TEST(WizzClientReuse, The_reuse_window_starts_from_the_options_and_applies_to_la
 
 TEST(WizzClientReuse, Save_writes_fares_json_only_when_something_changed)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
     const fs::path file = directory.file("fares.json");
 
@@ -1749,7 +1742,7 @@ TEST(WizzClientReuse, Save_writes_fares_json_only_when_something_changed)
 
 TEST(WizzClientReuse, A_restarted_client_reuses_fares_json_within_the_window)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const auto clock = std::make_shared<FixedClock>();
     const auto transport = std::make_shared<FakeTransport>(daily_rows());
     const RecordingDelay delay;
@@ -1784,7 +1777,7 @@ TEST(WizzClientReuse, A_broken_fares_json_is_a_miss_and_is_overwritten_at_the_ne
 {
     for (const std::string_view broken : {"", "garbage", R"({"version":2,"routes":[]})",
                                           R"({"version":1,"routes":[{"from":"BUD"}]})"}) {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("fares.json"), broken);
         Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
         const TimetableResult result = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
@@ -1795,9 +1788,30 @@ TEST(WizzClientReuse, A_broken_fares_json_is_a_miss_and_is_overwritten_at_the_ne
     }
 }
 
+TEST(WizzClientReuse, A_fares_json_last_written_more_than_6_hours_ago_is_not_read)
+{
+    // A save writes after every fetch it holds, so such a file holds nothing reusable (D-67).
+    // The file here is reusable on its own terms (fetched a minute ago): only its age decides.
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+    wizz::fare_days::Store store;
+    store.record(wizz::fare_days::RouteKey{.from = "BUD", .to = "LTN", .price_type = PriceType::regular, .adults = 1},
+                 query.start_date, query.end_date, {}, kNow - 1min);
+    const std::string content = wizz::fare_days::serialize(store);
+
+    for (const Duration age : {Duration{6h}, Duration{6h} + wizz::Ticks{1}}) {
+        const bool read = age <= wizz::fare_days::kLongestReuse;
+        const ScratchDirectory directory;
+        write_file(directory.file("fares.json"), content);
+        set_last_write_utc(directory.file("fares.json"), kNow - age);
+        Harness h{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
+        EXPECT_EQ(h.timetable(query).from_cache, read) << age.count();
+        EXPECT_EQ(h.timetable_calls(), read ? 0u : 1u) << age.count();
+    }
+}
+
 TEST(WizzClientReuse, Without_keep_on_disk_fares_json_is_neither_read_nor_written)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     {
         Harness writer{daily_rows(), ClientSetup{.cache_dir = directory.path()}};
         (void)writer.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
@@ -1866,7 +1880,7 @@ TEST(WizzClient, P_33_Discovery_lock_lets_one_cold_caller_discover)
 
 TEST(WizzClient, P_34_Stale_cached_api_url_is_replaced_after_rediscovery)
 {
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     write_file(directory.file("api-url.txt"), kStaleApiUrl);
     const std::string stale_page = read_fixture("stale_version_404.html");
     Harness h(with_default([stale_page](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
@@ -1889,7 +1903,7 @@ TEST(WizzClient, P_34_The_cached_file_is_deleted_only_while_it_holds_the_stale_u
 {
     // Another instance replaced api-url.txt meanwhile: invalidation leaves it alone
     // and the next lookup uses it without discovery.
-    const TempDirectory directory;
+    const ScratchDirectory directory;
     const fs::path url_file = directory.file("api-url.txt");
     write_file(url_file, kStaleApiUrl);
     const std::string stale_page = read_fixture("stale_version_404.html");
@@ -1911,7 +1925,7 @@ TEST(WizzClient, P_34_The_cached_file_is_deleted_only_while_it_holds_the_stale_u
     EXPECT_EQ(read_file(url_file), std::string{kApiUrl});
 
     // A padded stale value is compared trimmed, so it is deleted and rediscovered.
-    const TempDirectory padded_directory;
+    const ScratchDirectory padded_directory;
     write_file(padded_directory.file("api-url.txt"), "  "s + std::string{kStaleApiUrl} + "\r\n");
     Harness padded(with_default([stale_page](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
                        return r.url.contains("/29.22.0/") ? std::optional{html_response(stale_page, 404)} : std::nullopt;
@@ -1926,7 +1940,7 @@ TEST(WizzClient, Cached_api_url_must_match_the_strict_pattern_and_is_not_rewritt
 {
     // A valid value with a trailing newline is used as is and never rewritten (04 §7.1).
     {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("api-url.txt"), std::string{kApiUrl} + "\n");
         Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
         EXPECT_EQ(h.client().get_api_url({}, {}), kApiUrl);
@@ -1937,7 +1951,7 @@ TEST(WizzClient, Cached_api_url_must_match_the_strict_pattern_and_is_not_rewritt
     // A value that fails the strict pattern is ignored (not deleted) and overwritten by discovery.
     for (const std::string_view invalid : {"https://be.wizzair.com/29.23.1/api", "https://be.wizzair.com/29/Api",
                                            "http://be.wizzair.com/29.23.1/Api", "garbage"}) {
-        const TempDirectory directory;
+        const ScratchDirectory directory;
         write_file(directory.file("api-url.txt"), invalid);
         Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
         EXPECT_EQ(h.client().get_api_url({}, {}), kApiUrl) << invalid;

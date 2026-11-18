@@ -223,7 +223,8 @@ private:
     // 04 §9
     /// fares.json is used: kept on disk and a cache directory exists.
     [[nodiscard]] bool keeps_timetables_on_disk() const noexcept;
-    /// Reads fares.json once, at the first lookup. Requires timetable_mutex_.
+    /// Reads fares.json once, at the first lookup, unless it was last written more than
+    /// fare_days::kLongestReuse ago; any failure leaves the store empty. Requires timetable_mutex_.
     void load_timetables_once();
     [[nodiscard]] TimetableResult fetch_timetable(const TimetableQuery& query, const NoticeSink& notices,
                                                   std::stop_token stop);

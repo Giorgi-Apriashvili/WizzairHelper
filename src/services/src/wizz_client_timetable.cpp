@@ -66,16 +66,20 @@ void WizzApiClient::load_timetables_once()
     if (!keeps_timetables_on_disk()) {
         return;
     }
-    const std::optional<std::string> text = options_.cache.try_read(kTimetableCacheFile, std::nullopt, *options_.clock);
-    if (!text) {
-        return;
-    }
     try {
+        // A save writes after every fetch the file holds, so a file last written longer ago
+        // than the longest window holds nothing reusable and is not even read (D-67).
+        const std::optional<std::string> text =
+            options_.cache.try_read(kTimetableCacheFile, fare_days::kLongestReuse, *options_.clock);
+        if (!text) {
+            return;
+        }
         fare_days::Store loaded = fare_days::parse(*text);
         loaded.prune(options_.clock->utc_now(), options_.clock->local_today());
         timetables_ = std::move(loaded);
     } catch (const std::exception&) {
-        // Malformed in any way: the whole file is a miss, overwritten at the next save (D-67).
+        // Too large to read (std::bad_alloc) or malformed in any way: the whole file is a
+        // miss, overwritten at the next save (D-67).
     }
 }
 
