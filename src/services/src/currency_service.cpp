@@ -100,11 +100,16 @@ FxRatesPtr CurrencyService::get_rates(const NoticeSink& notices, std::stop_token
         return remember(std::move(fresh));
     }
 
-    for (const FxSource& source : kSources) {
-        report(notices, downloading_notice(source.name));
-        if (FxRatesPtr rates = try_source(source, stop)) {
-            cache_.try_write(kCacheFileName, fx_rates::serialize_rates_cache(*rates));
-            return remember(std::move(rates));
+    const UtcInstant now = clock_->utc_now();
+    const bool sources_just_failed = prefetch_failed_at_ && *prefetch_failed_at_ <= now &&
+                                     now - *prefetch_failed_at_ < kRetryAfterFailedPrefetch;
+    if (!sources_just_failed) {
+        for (const FxSource& source : kSources) {
+            report(notices, downloading_notice(source.name));
+            if (FxRatesPtr rates = try_source(source, stop)) {
+                cache_.try_write(kCacheFileName, fx_rates::serialize_rates_cache(*rates));
+                return remember(std::move(rates));
+            }
         }
     }
 
@@ -117,6 +122,31 @@ FxRatesPtr CurrencyService::get_rates(const NoticeSink& notices, std::stop_token
 
     report(notices, std::string{kBuiltInRatesNotice});
     return remember(fx_rates::built_in_rates());
+}
+
+bool CurrencyService::prefetch(std::stop_token stop)
+{
+    if (fresh_memory()) {
+        return true;
+    }
+    const FlightGuard flight{*this, stop};
+    if (fresh_memory()) {
+        return true;  // a search loaded them while this one waited
+    }
+    if (FxRatesPtr fresh = try_load_cache(kMaxAge)) {
+        remember(std::move(fresh));
+        return true;
+    }
+    for (const FxSource& source : kSources) {
+        if (FxRatesPtr rates = try_source(source, stop)) {
+            cache_.try_write(kCacheFileName, fx_rates::serialize_rates_cache(*rates));
+            remember(std::move(rates));
+            prefetch_failed_at_.reset();
+            return true;
+        }
+    }
+    prefetch_failed_at_ = clock_->utc_now();  // no stale copy, no built-in table: a search decides
+    return false;
 }
 
 FxRatesPtr CurrencyService::fresh_memory() const

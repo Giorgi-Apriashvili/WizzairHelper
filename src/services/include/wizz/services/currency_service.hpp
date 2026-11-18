@@ -2,6 +2,7 @@
 // CurrencyService (03 §7.2, protocol-reference §10): where the exchange rates of a
 // search come from. Memory first, then a fresh `fx.json`, then the three network
 // sources in order, then a stale `fx.json` of any age, then the built-in table.
+// `prefetch` fetches them silently when the app starts (DECISIONS D-69).
 // The pure parts — the provider parsers, the disk-cache format and the built-in
 // table — live in wizz/core/fx_rates.hpp; this class adds the I/O, the caching and
 // the notices.
@@ -65,6 +66,8 @@ public:
     static constexpr std::chrono::milliseconds kSourceTimeout{15'000};
     /// A table with fewer rates (the `EUR` entry counts) is not usable.
     static constexpr std::size_t kMinimumRates = 10;
+    /// After a failed `prefetch`, `get_rates` skips the network sources this long (D-69).
+    static constexpr Duration kRetryAfterFailedPrefetch = std::chrono::minutes{1};
 
     /// Request headers of every source call, in this order.
     static constexpr std::string_view kUserAgent = "WizzairHelper/1.0 (desktop app)";
@@ -116,7 +119,19 @@ public:
     /// `stop` is set is reported as the cancellation. `notices` (may be empty) runs
     /// synchronously on the calling thread. Other exceptions (e.g. from `notices`)
     /// propagate unchanged.
+    /// Within kRetryAfterFailedPrefetch after a failed `prefetch`, step 4 is skipped: the
+    /// sources were just tried, so an offline start does not wait for them twice (D-69).
     [[nodiscard]] FxRatesPtr get_rates(const NoticeSink& notices, std::stop_token stop);
+
+    /// Fetches the rates ahead of the first search, silently (D-69): steps 1–4 of
+    /// `get_rates` without any notice — fresh memory, the single-flight lock (a search
+    /// that asks meanwhile waits for it and then finds the rates in memory), memory
+    /// again, a fresh `fx.json`, then the sources; the first usable table is written to
+    /// `fx.json` and remembered. Returns true when rates are in memory. When every source
+    /// fails it keeps nothing — no stale copy, no built-in table: a search then decides
+    /// with its own notices — and returns false; `get_rates` then skips the sources for
+    /// kRetryAfterFailedPrefetch. OperationCancelled propagates like in `get_rates`.
+    [[nodiscard]] bool prefetch(std::stop_token stop);
 
     /// Callers blocked on the single-flight lock right now (tests wait for a caller to
     /// queue instead of sleeping).
@@ -152,6 +167,10 @@ private:
     std::condition_variable_any flight_released_;
     bool flight_busy_ = false;
     int flight_waiters_ = 0;  ///< guarded by flight_mutex_
+
+    /// When the last `prefetch` found no usable source; read and written only by the
+    /// holder of the single-flight lock.
+    std::optional<UtcInstant> prefetch_failed_at_;
 };
 
 } // namespace wizz
