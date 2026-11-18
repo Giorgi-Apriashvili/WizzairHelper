@@ -11,6 +11,11 @@
 // (TracedException, crash_reporter.hpp: a crash record starts where the
 // exception was thrown, not at the last co_await that rethrew it).
 //
+// A handler inside a loop that also suspends binds no exception (`catch (...)`,
+// then TracedException::current() handed to a plain function that rethrows and
+// sorts it): clang-cl before 22.1.7 may move a catch parameter used there into
+// the coroutine frame, where the C++ runtime never stores the exception (D-64).
+//
 // Everything runs on the thread that resumes the coroutines, which is the UI
 // thread: worker jobs post their completion back to it (job_runner.hpp). A
 // root flow that nobody awaits (a button click) is started by

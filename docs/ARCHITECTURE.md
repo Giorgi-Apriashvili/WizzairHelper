@@ -99,6 +99,9 @@ of the minimum and default windows).
 - Errors that the spec models as exception types are C++ exceptions with the same hierarchy and catch
   order (04 §10). `OperationCancelled` never derives from an API error. Use `std::optional` /
   `std::expected` for local, expected parse failures.
+- In a coroutine flow (`task.hpp`), a handler inside a loop that also suspends binds no exception:
+  `catch (...)`, then `TracedException::current()` to a plain function that rethrows and sorts it
+  (clang-cl before 22.1.7 can lose a catch parameter there, DECISIONS D-64).
 - RAII for every handle (curl, files, COM, threads). No naked `new`/`delete`.
 - No global mutable state except the documented caches inside services.
 - `const` and `[[nodiscard]]` by default; `noexcept` where it is true; `std::span`/`std::string_view`

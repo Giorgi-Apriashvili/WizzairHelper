@@ -179,14 +179,10 @@ Task<> UpdateController::run(Work first)
                     }
                     break;
                 }
-            } catch (const OperationCancelled&) {
-                // The window is closing.
-                automatic_checking_ = false;
-            } catch (const std::exception& error) {
-                // The updater never shows a crash box: one Log line, and nothing stays busy.
-                log_(ui::update_strings::check_failed_log(error.what()));
-                model_.on_unexpected_error(error.what(), std::exchange(automatic_checking_, false));
-                refresh();
+            } catch (...) {
+                // No catch parameter in this loop: clang-cl before 22.1.7 may keep one in the
+                // coroutine frame, where the C++ runtime never stores the exception (D-64).
+                on_work_failed(TracedException::current());
             }
             work.reset();
             if (std::exchange(manual_queued_, false)) {
@@ -202,6 +198,21 @@ Task<> UpdateController::run(Work first)
     }
     if (!closing_) {
         Q_EMIT evaluated();
+    }
+}
+
+void UpdateController::on_work_failed(const TracedException& failure)
+{
+    try {
+        failure.rethrow();
+    } catch (const OperationCancelled&) {
+        // The window is closing.
+        automatic_checking_ = false;
+    } catch (const std::exception& error) {
+        // The updater never shows a crash box: one Log line, and nothing stays busy.
+        log_(ui::update_strings::check_failed_log(error.what()));
+        model_.on_unexpected_error(error.what(), std::exchange(automatic_checking_, false));
+        refresh();
     }
 }
 
