@@ -35,13 +35,17 @@ ctest --preset debug               # or: --preset release
 |---|---|
 | `msvc-x64` | App, core/services/ui_logic libraries, conformance tests and GUI tests; build presets `debug`, `release` and `dist` (the release artefacts) |
 | `msvc-x64-core` | Core, services, ui_logic and their tests, no Qt (`core-debug` / `core-release`) |
-| `clang-cl-x64` | Same targets built with clang-cl 20+ and Ninja Multi-Config (build/test preset `clang-cl-release`); CI's second compiler. Needs `clang-cl` and `ninja` on `PATH` |
+| `clang-cl-x64` | Same targets built with clang-cl (LLVM 22.1.8, the version CI pins) and Ninja Multi-Config (build/test preset `clang-cl-release`); CI's second compiler. Needs `clang-cl` and `ninja` on `PATH` |
 | `msvc-x64-release` | App only, no tests; build preset `package` = the `dist` target in this tree |
 | workflow `full` / `core` / `release-package` | Configure + build (+ test) in one command: `cmake --workflow --preset full`; `release-package` = configure `msvc-x64` + build `dist` |
 
-clang-cl is the second compiler only (the shipped program is built with MSVC); CI's
-`clang-cl-release` leg uses the runner image's LLVM, 20.1.8 at the time of writing, with the MSVC
-STL. Known gaps:
+clang-cl is the second compiler only (the shipped program is built with MSVC). CI's
+`clang-cl-release` leg installs the same LLVM as local work, **22.1.8** (`LLVM_VERSION` and
+`LLVM_SHA256` at the top of `.github/workflows/build.yml`; the official `LLVM-22.1.8-win64.exe`,
+cached and checked against its published SHA-256), not the runner image's own LLVM, so that a
+compiler difference can't make CI and a local build disagree. Install that LLVM locally
+(`LLVM-22.1.8-win64.exe` from https://github.com/llvm/llvm-project/releases/tag/llvmorg-22.1.8); to move
+both, upgrade locally first, then change the two lines in `build.yml`. Known gaps:
 
 - `std::throw_with_nested` captures no inner exception (`std::current_exception()` is empty in the
   `nested_exception` constructor), so `ExceptionDescription.Nested_exceptions_are_inner_exceptions`
@@ -50,9 +54,10 @@ STL. Known gaps:
   into the coroutine frame, where the C++ runtime never stores the exception: the handler reads
   garbage and crashes (LLVM issue 153949, fixed by pull request 186728). Coroutine flows therefore
   bind no exception in such a handler (`catch (...)` and a plain function, `src/app/lib/task.hpp`,
-  [DECISIONS D-64](docs/DECISIONS.md)). A local clang-cl 22.1.7 or later does not show this. To see
-  what CI sees, extract the release archive `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` anywhere
-  and configure a separate build directory like `clang-cl-x64`, with `CMAKE_C_COMPILER` and
+  [DECISIONS D-64](docs/DECISIONS.md)). 22.1.7 and later do not show this, and CI now uses 22.1.8;
+  the rule stays, for any older clang-cl. To try another LLVM version without installing it,
+  extract its release archive (`clang+llvm-<version>-x86_64-pc-windows-msvc.tar.xz`) anywhere and
+  configure a separate build directory like `clang-cl-x64`, with `CMAKE_C_COMPILER` and
   `CMAKE_CXX_COMPILER` set to its `bin\clang-cl.exe` (inside a developer prompt, with Ninja).
 
 CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs the same presets: `release`

@@ -9,6 +9,13 @@ on:
     tags: ['v*']
   pull_request:
 
+env:
+  # The clang-cl leg's LLVM: the version local work uses (BUILDING.md). To move both, install the new
+  # LLVM locally, then change these two lines; the SHA-256 is the "digest" GitHub shows for
+  # LLVM-<version>-win64.exe on https://github.com/llvm/llvm-project/releases.
+  LLVM_VERSION: 22.1.8
+  LLVM_SHA256: 16e5709785fef73c854646241c4a92c5cd574318d1b33c63330dd7721903e55c
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -87,23 +94,54 @@ jobs:
             vcpkg-${{ runner.os }}-
 
       # clang-cl builds with Ninja: the developer environment provides the Windows SDK and MSVC
-      # library paths, and the image's LLVM goes first on PATH (the MSVC STL needs clang 20+).
+      # library paths.
       - name: MSVC developer environment
         if: matrix.name == 'clang-cl-release'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Put LLVM on PATH
+      # The clang-cl leg uses the same LLVM as local work (BUILDING.md), not the image's: a compiler
+      # that differs from the developers' lets CI fail on what passes locally, or pass what fails
+      # there. The image's LLVM 20.1.8 miscompiled a catch in a coroutine loop that 22.1.7+ compiles
+      # right (DECISIONS D-64). The official installer is cached, checked against the SHA-256 that
+      # the LLVM release publishes, and installed into its own folder, ahead of the image's on PATH.
+      - name: LLVM installer (cache)
+        if: matrix.name == 'clang-cl-release'
+        uses: actions/cache@v4
+        with:
+          path: llvm-installer
+          key: llvm-${{ env.LLVM_VERSION }}-${{ env.LLVM_SHA256 }}
+
+      - name: Install LLVM ${{ env.LLVM_VERSION }}
         if: matrix.name == 'clang-cl-release'
         shell: pwsh
         run: |
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
+          $exe = "llvm-installer\LLVM-$env:LLVM_VERSION-win64.exe"
+          if (-not (Test-Path $exe)) {
+            New-Item -ItemType Directory -Force llvm-installer | Out-Null
+            Invoke-WebRequest -OutFile $exe `
+              "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe"
+          }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:LLVM_SHA256) {
+            Remove-Item $exe
+            throw "LLVM installer SHA-256 $hash does not match the pinned $env:LLVM_SHA256"
+          }
+          $dir = Join-Path $env:RUNNER_TEMP "llvm-$env:LLVM_VERSION"
+          # NSIS: /S is silent, /D= must come last and takes the path unquoted.
+          $setup = Start-Process -FilePath $exe -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "the LLVM installer exited with $($setup.ExitCode)" }
+          Add-Content -Path $env:GITHUB_PATH -Value "$dir\bin"
 
       - name: Show the clang-cl in use
         if: matrix.name == 'clang-cl-release'
         shell: pwsh
         run: |
           (Get-Command clang-cl).Source
-          clang-cl --version
+          $version = clang-cl --version | Select-Object -First 1
+          $version
+          if ($version -notmatch "clang version $([regex]::Escape($env:LLVM_VERSION))\b") {
+            throw "clang-cl is not LLVM $env:LLVM_VERSION"
+          }
           (Get-Command ninja).Source
 
       - name: Configure
