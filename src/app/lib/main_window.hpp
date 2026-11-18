@@ -17,7 +17,10 @@
 //     chooser and drop-downs are separate windows; a focused push button is clicked.
 //     Esc anywhere in the window, while working and with no drop-down open, is the
 //     Cancel button (BusyPanel::request_cancel, D-11). Focus starts in From.
-//   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest.
+//   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest. The
+//     window opens without DWM's open transition, which comes back on once the map load
+//     ended (D-65): while Windows animates a window in, every flush of it blocks the UI
+//     thread, up to 120 ms, and the map load repaints most of the window at once.
 //   * Closing (§13): stop running work first, then commit a number typed but not yet
 //     entered and save settings.json (not in autotest), then let the updater start a
 //     verified installer (D-47).
@@ -87,8 +90,11 @@ public:
 
     /// 01 §4.1 size, position and maximised state; call before the first show().
     void apply_start_geometry();
-    /// apply_start_geometry() + show().
+    /// apply_start_geometry() + show(), without DWM's open transition (D-65).
     void show_main_window();
+    /// Whether the window opened without DWM's open transition (D-65): false without a
+    /// native Win32 window (the tests' "minimal" platform) or when DWM refused.
+    [[nodiscard]] bool opened_without_transition() const noexcept { return opened_without_transition_; }
 
     /// Turns the self-updater on (D-45): an UpdateController over `hooks` drives the
     /// update bar and the Log, follows the controller's working state, starts with the
@@ -157,6 +163,8 @@ private:
     /// Esc pressed in `watched`: Cancel when it belongs to this window, work is running and
     /// no drop-down is open. Returns whether it was handled.
     bool handle_escape(QObject* watched);
+    /// Turns DWM's window transitions back on after the window opened without them.
+    void restore_window_transitions();
     /// The Settings window changed the update options: keep them, apply them to the update
     /// controller and save settings.json (not in autotest).
     void apply_update_options(const update::UpdateOptions& options);
@@ -165,6 +173,8 @@ private:
     ui::AppSettings settings_;
     std::optional<ui::AutoTestOptions> autotest_;
     bool shown_once_ = false;
+    bool opened_without_transition_ = false;
+    bool transitions_off_ = false;
 
     InputPanel* input_ = nullptr;
     QTabWidget* tabs_ = nullptr;

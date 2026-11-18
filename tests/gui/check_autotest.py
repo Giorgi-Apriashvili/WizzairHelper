@@ -8,7 +8,8 @@ Runs the real WizzairHelper.exe as
 
 on an isolated profile and a replayed network, then checks summary.json, the
 test-only diagnostics.json (40 ms timer gaps, cancel transitions, final grids,
-layout and display) and the screenshots. The timer gaps and UI dispatches are
+layout and display, the window opened without DWM's open transition - D-65) and the
+screenshots. The timer gaps and UI dispatches are
 checked by the UI thread's own CPU time always and by their wall-clock length
 unless other processes held the CPUs during them (DECISIONS D-50), so a busy
 machine does not fail a run. Run with `python -I` (no site or user
@@ -315,6 +316,9 @@ class Checker:
         self.diag_equal('layout.cancelVisible', True)
         self.expect((self.diag('layout.statesChecked') or 0) >= 2, 'layout: fewer than 2 states checked')
         self.window_placement()
+        # DECISIONS D-65: the window opens without DWM's open transition, during which every
+        # flush of the window blocks the UI thread (up to 120 ms) while the start-up work begins.
+        self.diag_equal('display.openedWithoutTransition', self.diag('display.platform') == 'windows')
         self.diag_equal('display.qtScaleFactor', scale)
         if scale is not None:
             self.expect(abs((self.diag('display.devicePixelRatio') or 0) - float(scale)) < 1e-9,

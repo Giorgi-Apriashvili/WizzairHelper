@@ -11,6 +11,8 @@
 #endif
 #include <windows.h>
 
+#include <dwmapi.h>
+
 namespace wizz::app {
 
 namespace {
@@ -77,6 +79,16 @@ std::optional<NativeBounds> native_bounds(const QWidget& window)
     return NativeBounds{.state = window_show_state(placement.showCmd),
                         .bounds = QSize{rect.right - rect.left, rect.bottom - rect.top},
                         .restore_bounds = QSize{normal.right - normal.left, normal.bottom - normal.top}};
+}
+
+bool set_window_transitions(const QWidget& window, bool enabled)
+{
+    const HWND hwnd = native_window(window);
+    if (hwnd == nullptr) {
+        return false;
+    }
+    const BOOL disabled = enabled ? FALSE : TRUE;
+    return SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &disabled, sizeof(disabled)));
 }
 
 } // namespace wizz::app

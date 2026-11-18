@@ -129,6 +129,9 @@ TEST(AutoTestDiagnostics, Display_layout_and_environment_of_the_main_window)
     EXPECT_GT(display.outer_device_size.width(), 0);
     EXPECT_EQ(display.minimum_window, wizz::app::MainWindow::kMinimumSize);
     EXPECT_EQ(display.default_window, wizz::app::MainWindow::kDefaultSize);
+    // D-65: only a native Win32 window has DWM transitions to turn off; check_autotest.py
+    // checks the real "windows" platform, where it must be true.
+    EXPECT_EQ(display.opened_without_transition, display.platform == "windows");
     const LayoutDiagnostics layout = wizz::app::describe_layout(rig.window());
     EXPECT_EQ(layout.checks, 1);
     EXPECT_TRUE(layout.cancel_visible);

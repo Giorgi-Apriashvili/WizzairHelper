@@ -224,6 +224,7 @@ DisplayDiagnostics describe_display(const MainWindow& window)
     display.minimum_window = MainWindow::kMinimumSize;
     display.default_window = MainWindow::kDefaultSize;
     display.window_on_screen = screen != nullptr && display.screen_available.contains(display.window_frame);
+    display.opened_without_transition = window.opened_without_transition();
     return display;
 }
 
@@ -353,6 +354,7 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("defaultWindow");
     write_size(writer, display.default_window);
     writer.key("windowOnScreen").boolean(display.window_on_screen);
+    writer.key("openedWithoutTransition").boolean(display.opened_without_transition);
     writer.end_object();
 
     writer.key("layout").begin_object();

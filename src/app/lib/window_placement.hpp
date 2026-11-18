@@ -41,4 +41,10 @@ struct NativeBounds {
 /// The state and sizes of `window`'s native window; nullopt without a native Win32 window.
 [[nodiscard]] std::optional<NativeBounds> native_bounds(const QWidget& window);
 
+/// Turns the desktop window manager's transitions of `window`'s native window (the
+/// animations Windows plays when it opens, closes, minimises or restores) off or back on
+/// (DWMWA_TRANSITIONS_FORCEDISABLED). Returns whether DWM took the setting: false
+/// without a native Win32 window.
+bool set_window_transitions(const QWidget& window, bool enabled);
+
 } // namespace wizz::app
