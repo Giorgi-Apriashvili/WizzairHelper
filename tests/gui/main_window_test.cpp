@@ -1,6 +1,7 @@
 // MainWindow (01 §3.3, §4.1, §4.2, §5, §6.3, §6.4, §12.2, §13): title, docked
-// layout, tabs, geometry and its persistence, start-up, settings on close, and
-// the window-level keyboard (AcceptButton that follows focus, Esc = Cancel).
+// layout, tabs, geometry and its persistence, start-up and its delay while Windows
+// animates the window in (D-65), settings on close, and the window-level keyboard
+// (AcceptButton that follows focus, Esc = Cancel).
 
 #include "app_test_support.hpp"
 
@@ -16,8 +17,10 @@
 #include "qt_strings.hpp"
 #include "search_button.hpp"
 #include "ui_style.hpp"
+#include "window_animation.hpp"
 #include "window_placement.hpp"
 
+#include "wizz/core/cancellation.hpp"
 #include "wizz/services/app_paths.hpp"
 #include "wizz/ui/strings.hpp"
 
@@ -33,12 +36,16 @@
 #include <QScreen>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QWindow>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <condition_variable>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -49,6 +56,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using wizz::app::MainWindow;
+using wizz::test::app::StartClock;
 using wizz::test::app::WindowRig;
 using wizz::test::app::WindowRigOptions;
 namespace strings = wizz::ui::strings;
@@ -284,6 +292,195 @@ TEST(MainWindow, Start_up_logs_its_line_loads_the_map_and_focuses_From)
     EXPECT_GT(rig.input().from_box()->count(), 0) << "suggestions after the map loaded";
     EXPECT_EQ(rig.input().from_box()->text(), "Budapest") << "the typed text is kept";
     EXPECT_EQ(rig.trips().summary_text(), strings::kTripsPlaceholder);
+}
+
+// ---------------------------------------------------------------------------
+// The start delay while Windows animates the window in (D-65)
+// ---------------------------------------------------------------------------
+
+/// A rig whose window "animates" (or not) on a start clock the test moves by hand.
+[[nodiscard]] WindowRigOptions start_options(bool animates, const StartClock& clock)
+{
+    WindowRigOptions options;
+    options.open_animation = [animates](const QWidget&) { return animates; };
+    options.start_clock = clock.reader();
+    return options;
+}
+
+/// Counts the start timer's timeouts.
+[[nodiscard]] std::shared_ptr<int> count_timeouts(QTimer* timer)
+{
+    auto fired = std::make_shared<int>(0);
+    QObject::connect(timer, &QTimer::timeout, [fired] { ++*fired; });
+    return fired;
+}
+
+TEST(WindowAnimation, Windows_animates_a_window_only_while_every_setting_allows_it)
+{
+    using wizz::app::WindowAnimationSettings;
+    EXPECT_TRUE((WindowAnimationSettings{.client_area_animation = true, .minimize_animation = true}).animate());
+    EXPECT_FALSE((WindowAnimationSettings{.client_area_animation = false, .minimize_animation = true}).animate())
+        << "Animation effects off (GitHub's Windows Server images)";
+    EXPECT_FALSE((WindowAnimationSettings{.client_area_animation = true, .minimize_animation = false}).animate())
+        << "Animate windows when minimizing and maximizing off";
+    EXPECT_FALSE(
+        (WindowAnimationSettings{.client_area_animation = true, .minimize_animation = true, .policy_disallows = true})
+            .animate())
+        << "the policy Do not allow window animations";
+    WindowRig rig;
+    rig.window().show_main_window();
+    if (QGuiApplication::platformName() != QStringLiteral("windows")) {
+        EXPECT_FALSE(wizz::app::opens_with_animation(rig.window())) << "no native window, nothing to animate";
+        EXPECT_FALSE(rig.window().startup_record().window_animates);
+    }
+}
+
+TEST(MainWindowStart, The_first_work_waits_the_start_delay_while_Windows_animates_the_window_in)
+{
+    StartClock clock;
+    WindowRig rig{start_options(true, clock)};
+    const std::shared_ptr<int> fired = count_timeouts(rig.window().start_timer());
+    rig.window().show_main_window();
+    gui::settle();
+    const MainWindow::StartupRecord& record = rig.window().startup_record();
+    EXPECT_TRUE(record.window_animates);
+    EXPECT_EQ(record.start_delay, MainWindow::kStartDelay);
+    EXPECT_EQ(rig.window().focusWidget(), rig.input().from_box()) << "the focus is set at once";
+
+    // The window's clock has not moved: however often the timer fires, nothing starts, and
+    // nothing that repaints the window happens meanwhile.
+    ASSERT_TRUE(gui::wait_until([&] { return *fired >= 1; }));
+    gui::settle();
+    EXPECT_FALSE(rig.window().startup_begun());
+    EXPECT_FALSE(rig.controller().is_working());
+    EXPECT_FALSE(rig.busy().is_busy());
+    EXPECT_EQ(rig.busy().status_text(), strings::kReady) << "the status line stays as the window was built";
+    for (QWidget* control : rig.input().working_controls()) {
+        EXPECT_TRUE(control->isEnabled());
+    }
+    EXPECT_EQ(rig.wizz_requests(), 0) << "no route-map request during the open animation";
+    EXPECT_FALSE(record.first_busy_ms.has_value());
+
+    clock.advance(MainWindow::kStartDelay - 1ms);
+    const int fired_before = *fired;
+    ASSERT_TRUE(gui::wait_until([&] { return *fired >= fired_before + 2; }));
+    EXPECT_FALSE(rig.window().startup_begun()) << "1 ms before the delay is over";
+
+    clock.advance(1ms);
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().startup_begun(); }));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.controller().catalog() != nullptr; }));
+    EXPECT_EQ(record.work_started_ms, 300.0);
+    EXPECT_EQ(record.first_busy_ms, 300.0) << "the map load began the first busy period";
+    EXPECT_EQ(rig.wizz_requests(), 2) << "homepage + route map";
+    EXPECT_FALSE(rig.window().start_timer()->isActive());
+}
+
+TEST(MainWindowStart, The_first_work_starts_at_once_when_Windows_does_not_animate_windows)
+{
+    StartClock clock;  // never moves: a delay would never end
+    WindowRig rig{start_options(false, clock)};
+    rig.window().show_main_window();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().startup_begun(); }, 5s));
+    const MainWindow::StartupRecord& record = rig.window().startup_record();
+    EXPECT_FALSE(record.window_animates);
+    EXPECT_EQ(record.start_delay, 0ms);
+    EXPECT_EQ(record.work_started_ms, 0.0);
+    EXPECT_EQ(record.first_busy_ms, 0.0);
+    ASSERT_TRUE(gui::wait_until([&] { return rig.controller().catalog() != nullptr; }));
+    EXPECT_EQ(rig.wizz_requests(), 2);
+}
+
+TEST(MainWindowStart, Closing_the_window_during_the_start_delay_starts_nothing)
+{
+    StartClock clock;
+    WindowRig rig{start_options(true, clock)};
+    rig.window().show_main_window();
+    gui::settle();
+    ASSERT_TRUE(rig.window().start_timer()->isActive());
+    rig.window().close();
+    EXPECT_FALSE(rig.window().start_timer()->isActive());
+    clock.advance(10 * MainWindow::kStartDelay);  // long due, had the timer been left running
+    // Nothing can be awaited here: give a forgotten timer three delays to fire.
+    EXPECT_FALSE(gui::wait_until([&] { return rig.window().startup_begun() || rig.wizz_requests() > 0; },
+                                 3 * MainWindow::kStartDelay));
+    EXPECT_FALSE(rig.controller().is_working());
+    EXPECT_FALSE(rig.busy().is_busy());
+    EXPECT_EQ(rig.controller().catalog(), nullptr);
+}
+
+/// Holds every route-map request until the test opens it; a cancelled request gives up.
+class MapGate final : public wizz::http::Transport {
+public:
+    explicit MapGate(std::shared_ptr<wizz::http::Transport> inner) : inner_(std::move(inner)) {}
+
+    wizz::http::Response send(const wizz::http::Request& request, std::stop_token stop) override
+    {
+        if (request.url.contains("/asset/map")) {
+            std::unique_lock lock{mutex_};
+            ++map_requests_;
+            if (!changed_.wait(lock, stop, [this] { return open_; })) {
+                wizz::throw_if_cancelled(stop);
+            }
+        }
+        return inner_->send(request, stop);
+    }
+
+    void open()
+    {
+        {
+            const std::lock_guard lock{mutex_};
+            open_ = true;
+        }
+        changed_.notify_all();
+    }
+
+    [[nodiscard]] int map_requests() const
+    {
+        const std::lock_guard lock{mutex_};
+        return map_requests_;
+    }
+
+private:
+    std::shared_ptr<wizz::http::Transport> inner_;
+    mutable std::mutex mutex_;
+    std::condition_variable_any changed_;
+    bool open_ = false;
+    int map_requests_ = 0;
+};
+
+TEST(MainWindowStart, A_search_started_during_the_start_delay_loads_the_map_once)
+{
+    StartClock clock;
+    WindowRigOptions options = start_options(true, clock);
+    std::shared_ptr<MapGate> gate;
+    options.wrap_transport = [&gate](std::shared_ptr<wizz::http::Transport> inner) {
+        gate = std::make_shared<MapGate>(std::move(inner));
+        return gate;
+    };
+    WindowRig rig{std::move(options)};
+    bool finished = false;
+    QObject::connect(&rig.window(), &MainWindow::startup_finished, [&finished] { finished = true; });
+    rig.window().show_main_window();
+    gui::settle();
+    ASSERT_FALSE(rig.window().startup_begun());
+
+    // Enter in the window before the delay is over: the search loads the map first (01 §11.4).
+    rig.controller().request_search_outbound();
+    ASSERT_TRUE(gui::wait_until([&] { return gate->map_requests() == 1; }));
+    ASSERT_TRUE(rig.controller().is_working());
+    clock.advance(MainWindow::kStartDelay);
+    ASSERT_TRUE(gui::wait_until([&] { return finished; })) << "the start-up leaves the map to the search";
+    gui::settle();
+    EXPECT_EQ(gate->map_requests(), 1) << "no second map load beside the search's";
+
+    gate->open();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.controller().is_working(); }));
+    EXPECT_NE(rig.controller().catalog(), nullptr);
+    EXPECT_EQ(std::ranges::count_if(rig.log_lines(),
+                                    [](const std::string& line) { return line.starts_with("Route map: "); }),
+              1);
+    EXPECT_EQ(rig.outbound().all_results().size(), 12u) << "the search ran to its end";
+    EXPECT_TRUE(rig.flow_errors.empty());
 }
 
 TEST(MainWindow, Default_size_minimum_size_and_centring)

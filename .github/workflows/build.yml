@@ -174,6 +174,16 @@ jobs:
         timeout-minutes: 30
         run: ctest --preset ${{ matrix.test }} --output-on-failure -L autotest
 
+      # Whether the runner animates windows and which start delay the app used (DECISIONS D-65):
+      # ctest shows a run's own summary only when it fails, so print one run's start-up record.
+      - name: Start-up record of the end-to-end runs
+        if: always() && matrix.name == 'msvc-release'
+        shell: pwsh
+        run: |
+          $file = 'build/msvc-x64/tests/gui/autotest/Release/autotest.named_destination/out/diagnostics.json'
+          if (Test-Path $file) { (Get-Content -Raw $file | ConvertFrom-Json).startup | ConvertTo-Json -Depth 4 }
+          else { Write-Output "no $file" }
+
       # The `dist` target writes WizzairHelper-<version>-win64.zip and -win64-setup.exe to
       # build/msvc-x64/dist, from the Release build tested above.
       - name: Package (portable zip + installer)

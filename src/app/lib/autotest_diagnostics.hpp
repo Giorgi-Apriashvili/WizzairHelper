@@ -12,6 +12,9 @@
 //               dispatches, overall and while busy, with their CPU time and the
 //               same attribution — EventWatchdog (null when the QApplication is
 //               not wizz::app::Application);
+//   startup     the start delay (D-65): whether Windows animates the window in (the
+//               probe's answer and the settings it reads), the delay used, and when the
+//               first work and the first busy period began after the first Shown;
 //   cancel      --cancel-after-ms: when Esc and Cancel were pressed, what the panel
 //               showed, and how many cancellation transitions they produced (D-11:
 //               exactly one while busy);
@@ -33,6 +36,7 @@
 
 #include "event_watchdog.hpp"
 #include "timer_gap_probe.hpp"
+#include "window_animation.hpp"
 
 #include "wizz/core/domain.hpp"
 #include "wizz/core/locale.hpp"
@@ -54,6 +58,14 @@ class QWidget;
 namespace wizz::app {
 
 class MainWindow;
+
+struct StartupDiagnostics {
+    bool window_animates = false;                     ///< MainWindow's probe at the first Shown
+    WindowAnimationSettings settings;                 ///< read_window_animation_settings() now
+    double start_delay_ms = 0;                        ///< MainWindow::kStartDelay or 0
+    std::optional<double> work_started_after_show_ms; ///< OnShownAsync and the updater started
+    std::optional<double> first_busy_after_show_ms;   ///< the first busy period began
+};
 
 struct CancelDiagnostics {
     std::chrono::milliseconds after{0};  ///< --cancel-after-ms
@@ -135,6 +147,7 @@ struct EnvironmentDiagnostics {
 struct AutoTestDiagnostics {
     TimerGapProbe::Stats timer;
     std::optional<EventWatchdog::Stats> events;  ///< null without an Application (in-process tests)
+    StartupDiagnostics startup;
     std::optional<CancelDiagnostics> cancel;
     std::vector<SearchDiagnostics> searches;
     std::vector<GridDiagnostics> grids;
@@ -149,6 +162,8 @@ inline constexpr std::string_view kDiagnosticsFileName = "diagnostics.json";
 /// The grid's rows against `result` (null = no stored result).
 [[nodiscard]] GridDiagnostics describe_grid(std::string name, std::span<const FlightResultPtr> rows,
                                             const LegSearchResult* result);
+/// How the window's start-up went (MainWindow::startup_record) and the animation settings.
+[[nodiscard]] StartupDiagnostics describe_startup(const MainWindow& window);
 /// The window's screen, scale and geometry.
 [[nodiscard]] DisplayDiagnostics describe_display(const MainWindow& window);
 /// layout_problems(window) and Cancel's visibility.

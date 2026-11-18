@@ -198,7 +198,7 @@ offline and reproducibly:
 | `--no-pacing` | No 1 s spacing between Wizz requests |
 | `--warm-cache` | Runs the outbound search once first, so the script's search is a cached replay |
 | `--cancel-after-ms <n>` | Presses Esc and Cancel n ms after the outbound search starts fetching |
-| `--diagnostics` | Writes `diagnostics.json` (40 ms timer gaps, UI-loop watchdog, cancel record, final grids, DPI, layout checks) |
+| `--diagnostics` | Writes `diagnostics.json` (40 ms timer gaps, UI-loop watchdog, start delay, cancel record, final grids, DPI, layout checks) |
 
 A run with `--autotest` or `--replay` on its command line never checks GitHub for updates (DECISIONS
 D-45), so self-tests stay offline and their request counts unchanged.

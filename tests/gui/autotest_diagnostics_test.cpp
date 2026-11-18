@@ -1,6 +1,7 @@
 // diagnostics.json of --autotest --diagnostics (D-30, 05 §5): the final-grid check
 // (late batches, rows of a previous search, duplicates), the layout merge over the
-// captured states, the display / environment collectors and the document's keys.
+// captured states, the start-up / display / environment collectors and the document's
+// keys.
 
 #include "app_test_support.hpp"
 #include "autotest_diagnostics.hpp"
@@ -98,11 +99,17 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
     diagnostics.grids.push_back({.name = "outbound", .rows = 3, .result_flights = 3});
     diagnostics.grids.push_back({.name = "return", .rows = 0, .result_flights = std::nullopt});
     diagnostics.layout = LayoutDiagnostics{.checks = 2, .problems = {}, .cancel_visible = true};
+    diagnostics.startup = wizz::app::StartupDiagnostics{
+        .window_animates = true,
+        .settings = {.client_area_animation = true, .minimize_animation = true, .policy_disallows = false},
+        .start_delay_ms = 300,
+        .work_started_after_show_ms = 300.04,
+        .first_busy_after_show_ms = std::nullopt};
     const std::string json = wizz::app::to_json(diagnostics);
 
     std::size_t at = 0;
-    for (const char* key : {"\"timer\"", "\"uiEvents\"", "\"cancel\"", "\"searches\"", "\"grids\"", "\"display\"",
-                            "\"layout\"", "\"environment\""}) {
+    for (const char* key : {"\"timer\"", "\"uiEvents\"", "\"startup\"", "\"cancel\"", "\"searches\"",
+                            "\"grids\"", "\"display\"", "\"layout\"", "\"environment\""}) {
         const std::size_t found = json.find(key, at);
         ASSERT_NE(found, std::string::npos) << key;
         at = found;
@@ -114,6 +121,13 @@ TEST(AutoTestDiagnostics, The_document_has_the_documented_keys_in_order)
     EXPECT_TRUE(json.contains("\"resultFlights\": null"));
     EXPECT_TRUE(json.contains("\"statesChecked\": 2"));
     EXPECT_TRUE(json.contains("\"finalStatusCut\": true"));
+    EXPECT_TRUE(json.contains("\"windowAnimates\": true"));
+    EXPECT_TRUE(json.contains("\"clientAreaAnimation\": true"));
+    EXPECT_TRUE(json.contains("\"minimizeAnimation\": true"));
+    EXPECT_TRUE(json.contains("\"policyDisallowsAnimations\": false"));
+    EXPECT_TRUE(json.contains("\"startDelayMs\": 300"));
+    EXPECT_TRUE(json.contains("\"workStartedAfterShowMs\": 300"));
+    EXPECT_TRUE(json.contains("\"firstBusyAfterShowMs\": null"));
     const wizz::json::Value parsed = wizz::json::parse(json);
     EXPECT_TRUE(parsed.is_object());
 }
@@ -129,6 +143,14 @@ TEST(AutoTestDiagnostics, Display_layout_and_environment_of_the_main_window)
     EXPECT_GT(display.outer_device_size.width(), 0);
     EXPECT_EQ(display.minimum_window, wizz::app::MainWindow::kMinimumSize);
     EXPECT_EQ(display.default_window, wizz::app::MainWindow::kDefaultSize);
+    // The start-up (D-65): the "minimal" platform never animates, so the map load began at once.
+    const wizz::app::StartupDiagnostics startup = wizz::app::describe_startup(rig.window());
+    EXPECT_EQ(startup.window_animates, rig.window().startup_record().window_animates);
+    EXPECT_EQ(startup.start_delay_ms, startup.window_animates ? 300.0 : 0.0);
+    ASSERT_TRUE(startup.work_started_after_show_ms.has_value());
+    ASSERT_TRUE(startup.first_busy_after_show_ms.has_value());
+    EXPECT_GE(*startup.work_started_after_show_ms, startup.start_delay_ms);
+    EXPECT_GE(*startup.first_busy_after_show_ms, *startup.work_started_after_show_ms);
     const LayoutDiagnostics layout = wizz::app::describe_layout(rig.window());
     EXPECT_EQ(layout.checks, 1);
     EXPECT_TRUE(layout.cancel_visible);

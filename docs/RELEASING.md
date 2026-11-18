@@ -196,6 +196,13 @@ while it shows results:
 - if a Windows 10 machine or real 150 % / 200 % monitors are at hand, check the window at the
   default and the minimum size there (both are simulated otherwise, RELEASE_CHECKS.md).
 
+**The start after the open animation** (DECISIONS D-65). The end-to-end runs check when the first
+work starts, not how it looks. For a release that changes the start-up or the main window, start
+the installed app with Windows' animations on (*Settings > Accessibility > Visual effects >
+Animation effects*): the window fades in as other windows do, and the route map loads right after,
+about a third of a second after the window appeared; the status line says `Ready.` until then and
+nothing flickers. Closing it at once leaves no `WizzairHelper.exe` running.
+
 **The updater against the real GitHub** (DECISIONS D-45..D-49, D-59..D-63). The tests run the
 updater on a scripted backend; CI never contacts GitHub. After publishing a release that changes
 the updater or the Settings window, in the installed X.Y.Z:
@@ -223,6 +230,7 @@ throughout.
 [ ] CI green on HEAD (msvc-release, msvc-debug and clang-cl-release)
 [ ] icon or installer changed: installed by hand, icons checked (Checking the installer locally)
 [ ] look changed: live light/dark switch and a contrast theme checked by hand (Checking the installer locally)
+[ ] start-up or main window changed: the window fades in, the route map loads right after (Checking the installer locally)
 [ ] updater or Settings window changed: the previous release updated by hand (Checking the installer locally)
 [ ] notes written in release-notes-X.Y.Z.md
 [ ] version bumped in CMakeLists.txt only; commit "Release X.Y.Z"

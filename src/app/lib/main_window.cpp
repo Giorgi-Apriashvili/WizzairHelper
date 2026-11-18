@@ -16,6 +16,7 @@
 #include "settings_dialog.hpp"
 #include "update_bar.hpp"
 #include "ui_style.hpp"
+#include "window_animation.hpp"
 #include "window_placement.hpp"
 
 #include "wizz/services/updater.hpp"
@@ -25,15 +26,16 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QKeyEvent>
-#include <QMetaObject>
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -97,14 +99,32 @@ template <class T>
     return window.isMaximized() ? WindowShowState::maximized : WindowShowState::normal;
 }
 
+/// A QElapsedTimer started now, in nanoseconds.
+[[nodiscard]] MainWindow::MonotonicClock elapsed_timer_clock()
+{
+    QElapsedTimer timer;
+    timer.start();
+    return [timer] { return timer.nsecsElapsed(); };
+}
+
 } // namespace
 
 MainWindow::MainWindow(std::shared_ptr<const AppServices> services, ui::AppSettings settings,
                        std::optional<ui::AutoTestOptions> autotest, QWidget* parent)
-    : QMainWindow(parent), services_(std::move(services)), settings_(std::move(settings)), autotest_(std::move(autotest))
+    : QMainWindow(parent),
+      services_(std::move(services)),
+      settings_(std::move(settings)),
+      autotest_(std::move(autotest)),
+      open_animation_probe_(&opens_with_animation),
+      clock_(elapsed_timer_clock())
 {
     setWindowTitle(main_window_title());
     build();
+    start_timer_ = new QTimer(this);
+    start_timer_->setObjectName(QStringLiteral("startTimer"));
+    start_timer_->setSingleShot(true);
+    start_timer_->setTimerType(Qt::PreciseTimer);
+    connect(start_timer_, &QTimer::timeout, this, &MainWindow::start_when_due);
 
     controller_ = new Controller(services_,
                                  MainViews{.input = input_,
@@ -211,8 +231,8 @@ bool MainWindow::enable_updates(UpdateHooks hooks)
     connect(update_bar_, &UpdateBar::action_clicked, updates_, &UpdateController::trigger_action);
     connect(update_bar_, &UpdateBar::later_clicked, updates_, &UpdateController::dismiss);
     connect(updates_, &UpdateController::restart_requested, this, &QWidget::close);
-    if (shown_once_) {
-        updates_->start();  // enabled after the first Shown: start at once
+    if (startup_begun()) {
+        updates_->start();  // enabled after the start-up work began: start at once
     }
     return true;
 }
@@ -229,6 +249,12 @@ void MainWindow::wire()
     connect(inbound_, &FlightGrid::contents_changed, controller, [controller] { controller->update_tab_titles(); });
     connect(trips_, &RoundTripGrid::filters_changed, controller, [controller] { controller->recompute_trips(); });
     connect(busy_, &BusyPanel::cancel_requested, controller, &Controller::cancel_work);
+    // The start of the first busy period, for diagnostics.json (D-65).
+    connect(busy_, &BusyPanel::animation_started, this, [this] {
+        if (shown_once_ && !startup_.first_busy_ms) {
+            startup_.first_busy_ms = since_shown_ms();
+        }
+    });
     connect(settings_button_, &QPushButton::clicked, this, [this] { (void)open_settings(); });
     outbound_->set_busy_query([controller] { return controller->is_working(); });
     inbound_->set_busy_query([controller] { return controller->is_working(); });
@@ -289,6 +315,16 @@ void MainWindow::show_main_window()
 {
     apply_start_geometry();
     show();
+}
+
+void MainWindow::set_start_timing(OpenAnimationProbe probe, MonotonicClock clock)
+{
+    if (probe) {
+        open_animation_probe_ = std::move(probe);
+    }
+    if (clock) {
+        clock_ = std::move(clock);
+    }
 }
 
 QSize MainWindow::normal_outer_device_size() const
@@ -406,23 +442,53 @@ void MainWindow::showEvent(QShowEvent* event)
         return;
     }
     shown_once_ = true;
+    shown_ns_ = clock_();  // show() sends Shown just before the native window appears
     input_->focus_from();
     // OnShownAsync runs once the window is visible, so the progress UI can be seen; the
-    // updater's first evaluation runs on its own worker next to it (D-45).
-    QMetaObject::invokeMethod(
-        this,
-        [this] {
-            controller_->spawn(on_shown());
-            if (updates_ != nullptr) {
-                updates_->start();
-            }
-        },
-        Qt::QueuedConnection);
+    // updater's first evaluation runs on its own worker next to it (D-45). While Windows
+    // animates the window in, both wait until the animation is over (D-65).
+    startup_.settings = read_window_animation_settings();  // what the probe saw, for the diagnostics
+    startup_.window_animates = open_animation_probe_(*this);
+    startup_.start_delay = startup_.window_animates ? kStartDelay : std::chrono::milliseconds{0};
+    start_timer_->start(startup_.start_delay);  // 0: the next event-loop pass
+}
+
+void MainWindow::start_when_due()
+{
+    const std::int64_t due = std::chrono::nanoseconds{startup_.start_delay}.count();
+    if (const std::int64_t waited = clock_() - shown_ns_; waited < due) {
+        // Timers may fire a little early: the first work never starts before the delay.
+        const std::int64_t rest_ms = (due - waited + 999'999) / 1'000'000;
+        start_timer_->start(std::chrono::milliseconds{rest_ms});
+        return;
+    }
+    begin_startup();
+}
+
+void MainWindow::begin_startup()
+{
+    if (closed_ || startup_begun()) {
+        return;  // closed during the delay: nothing starts
+    }
+    startup_.work_started_ms = since_shown_ms();
+    controller_->spawn(on_shown());
+    if (updates_ != nullptr) {
+        updates_->start();
+    }
+}
+
+double MainWindow::since_shown_ms() const
+{
+    return static_cast<double>(clock_() - shown_ns_) / 1'000'000.0;
 }
 
 Task<> MainWindow::on_shown()
 {
-    co_await controller_->load_catalog();
+    // A search started during the start delay loads the map itself (PrepareAsync, 01 §11.4);
+    // a second load beside it would take over its phase (stop source, busy panel).
+    if (!controller_->is_working()) {
+        co_await controller_->load_catalog();
+    }
     if (autotest_runner_ != nullptr) {
         co_await autotest_runner_->run();
     }
@@ -434,6 +500,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (SettingsDialog* settings = settings_dialog_.data(); settings != nullptr) {
         settings->close();  // e.g. "Update now" finished while it was open
     }
+    closed_ = true;
+    start_timer_->stop();        // closed during the start delay: no work starts (D-65)
     controller_->cancel_work();  // stop any running work first
     if (!is_autotest()) {
         input_->commit_numeric_edits();  // the X / Alt+F4 move no focus: read the typed number too

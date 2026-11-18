@@ -7,7 +7,8 @@
 // session is offered again at every start without any request (the backend counts them);
 // the real core offers an installer of an earlier session only when its bytes still match
 // the hash kept when it was verified, and confirms it against its release when a check
-// finds that release.
+// finds that release. The first evaluation starts with the start-up work, after the start
+// delay while Windows animates the window in (D-65).
 
 #include "update_test_support.hpp"
 
@@ -46,6 +47,7 @@ using namespace std::chrono_literals;
 using wizz::test::app::FakeUpdateBackend;
 using wizz::test::app::kRunningVersion;
 using wizz::test::app::release_info;
+using wizz::test::app::StartClock;
 using wizz::test::app::update_error;
 using wizz::test::app::UpdateRig;
 using wizz::test::app::UpdateRigOptions;
@@ -652,6 +654,35 @@ TEST(UpdateController, Reminds_at_start_of_a_verified_installer_as_ready_without
             EXPECT_TRUE(rig.launches.commands.empty()) << "download then ask: only Restart and update installs";
         }
     }
+}
+
+TEST(UpdateController, The_first_evaluation_waits_for_the_start_delay_like_the_map_load)
+{
+    // Its first evaluation may show the update bar, which moves the tabs: no UI work of the
+    // updater may land in Windows' open animation either (D-65).
+    StartClock clock;
+    UpdateRigOptions options = with_updates(choice(update::WhenFound::install_on_close));
+    options.window.open_animation = [](const QWidget&) { return true; };
+    options.window.start_clock = clock.reader();
+    UpdateRig rig{std::move(options)};
+    put_off_earlier(rig, true);
+    ASSERT_TRUE(rig.enable());
+    int fired = 0;
+    QObject::connect(rig.window().start_timer(), &QTimer::timeout, [&fired] { ++fired; });
+    rig.window().show_main_window();
+    ASSERT_TRUE(gui::wait_until([&] { return fired >= 1; }));
+    gui::settle();
+    EXPECT_FALSE(rig.controller()->is_started()) << "not while the window animates in";
+    EXPECT_EQ(rig.backend->evaluations(), 0);
+    EXPECT_EQ(rig.backend->cleanups(), 0);
+    EXPECT_FALSE(rig.bar().isVisible());
+
+    clock.advance(wizz::app::MainWindow::kStartDelay);
+    rig.wait_for_evaluations(1);
+    EXPECT_TRUE(rig.controller()->is_started());
+    EXPECT_TRUE(rig.window().startup_begun()) << "together with the map load";
+    EXPECT_TRUE(rig.bar().isVisible()) << "the reminder, after the delay";
+    EXPECT_EQ(rig.bar().message_label()->text(), q(kReadyText));
 }
 
 TEST(UpdateController, Restart_and_update_on_a_reminder_installs_without_any_request)
