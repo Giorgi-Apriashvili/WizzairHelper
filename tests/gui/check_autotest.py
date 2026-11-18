@@ -8,11 +8,11 @@ Runs the real WizzairHelper.exe as
 
 on an isolated profile and a replayed network, then checks summary.json, the
 test-only diagnostics.json (40 ms timer gaps, cancel transitions, final grids,
-layout and display) and the screenshots. The timer gaps and UI dispatches are
-checked by the UI thread's own CPU time always and by their wall-clock length
-unless other processes held the CPUs during them (DECISIONS D-50), so a busy
-machine does not fail a run. Run with `python -I` (no site or user
-paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
+layout and display, the start delay of DECISIONS D-65) and the screenshots. The
+timer gaps and UI dispatches are checked by the UI thread's own CPU time always and
+by their wall-clock length unless other processes held the CPUs during them
+(DECISIONS D-50), so a busy machine does not fail a run. Run with `python -I` (no
+site or user paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
 QT_SCALE_FACTOR (01 §15, 05 §5). `--window 980x600` starts the window at that size (the whole
 window in logical pixels, like 01 §4.1) through the profile's settings.json, which the app then
 must leave unchanged. `--color-scheme light|dark`, `--high-contrast`, `--fonts windows10` and
@@ -62,7 +62,11 @@ STARTED = ('[10:00:00] WizzairHelper started. Fares: wizzair.com (unofficial web
 ROUTE_MAP_LOG = '[10:00:00] Route map: {} airports, API https://be.wizzair.com/29.23.1/Api.'
 KEY_ORDER = ['startedAt', 'apiUrl', 'airports', 'outbound', 'return', 'roundTrips', 'afterCurrencySwitch',
              'exception', 'progressScreenshots', 'finalStatus', 'requestsToWizz', 'log']
-DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'cancel', 'searches', 'grids', 'display', 'layout', 'environment']
+DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'startup', 'cancel', 'searches', 'grids', 'display', 'layout',
+                    'environment']
+# MainWindow::kStartDelay (DECISIONS D-65): the first work waits this long after the first Shown
+# while Windows animates the window in.
+START_DELAY_MS = 300
 # The window and surface colours of the light and dark looks (style::Theme, DECISIONS D-53).
 LOOK_COLOURS = {'light': ('#f3f2f6', '#ffffff'), 'dark': ('#131217', '#1d1c22')}
 TEXT_RENDERINGS = ('natural-heavier', 'natural', 'hinted')
@@ -240,6 +244,32 @@ class Checker:
         return (isinstance(outer, list) and isinstance(default, list)
                 and outer == [round(default[0] * ratio), round(default[1] * ratio)])
 
+    def start_delay(self, max_gap_ms):
+        """DECISIONS D-65: while Windows animates a new window in (about 300 ms after show()), a flush
+        of it can block the UI thread for over 100 ms, so the first work (the route-map load, then the
+        script) starts START_DELAY_MS after the first Shown when Windows animates windows, and at once
+        when it does not; either way within 2 x max_gap_ms (200 ms in Release) of when it is due. Every
+        run checks it, not only the unlucky ones whose first busy frames would meet the animation. On
+        the real platform the answer must follow the animation settings the app reports, so a probe
+        that stopped reading them fails here too."""
+        animates = self.diag('startup.windowAnimates')
+        settings = self.diag('startup.animationSettings') or {}
+        if self.diag('display.platform') == 'windows':
+            wanted = (settings.get('clientAreaAnimation') is True and settings.get('minimizeAnimation') is True
+                      and settings.get('policyDisallowsAnimations') is False)
+            self.expect(animates == wanted, 'startup: windowAnimates is %r, but the animation settings %r say %r' %
+                        (animates, settings, wanted))
+        delay = self.diag_equal('startup.startDelayMs', START_DELAY_MS if animates else 0)
+        if not isinstance(delay, (int, float)):
+            return
+        slack = 2 * max_gap_ms
+        for key, what in (('workStartedAfterShowMs', 'the first work'),
+                          ('firstBusyAfterShowMs', 'the first busy period')):
+            after = self.diag('startup.' + key)
+            self.expect(isinstance(after, (int, float)) and delay <= after <= delay + slack,
+                        'startup: %s began %r ms after the window was shown, expected %r..%r ms (windowAnimates %r)' %
+                        (what, after, delay, delay + slack, animates))
+
     def look(self, expected):
         """D-53..D-56: the run shows `expected` ('light', 'dark' or 'high_contrast')."""
         self.diag_equal('environment.look', expected)
@@ -315,6 +345,7 @@ class Checker:
         self.diag_equal('layout.cancelVisible', True)
         self.expect((self.diag('layout.statesChecked') or 0) >= 2, 'layout: fewer than 2 states checked')
         self.window_placement()
+        self.start_delay(max_gap_ms)
         self.diag_equal('display.qtScaleFactor', scale)
         if scale is not None:
             self.expect(abs((self.diag('display.devicePixelRatio') or 0) - float(scale)) < 1e-9,

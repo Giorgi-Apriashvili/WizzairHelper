@@ -151,6 +151,32 @@ void write_events(json::Writer& writer, const std::optional<EventWatchdog::Stats
     writer.end_object();
 }
 
+void write_optional_ms(json::Writer& writer, const std::optional<double>& ms)
+{
+    if (ms) {
+        writer.number(tenths(*ms));
+    } else {
+        writer.null();
+    }
+}
+
+void write_startup(json::Writer& writer, const StartupDiagnostics& startup)
+{
+    writer.begin_object();
+    writer.key("windowAnimates").boolean(startup.window_animates);
+    writer.key("animationSettings").begin_object();
+    writer.key("clientAreaAnimation").boolean(startup.settings.client_area_animation);
+    writer.key("minimizeAnimation").boolean(startup.settings.minimize_animation);
+    writer.key("policyDisallowsAnimations").boolean(startup.settings.policy_disallows);
+    writer.end_object();
+    writer.key("startDelayMs").number(startup.start_delay_ms);
+    writer.key("workStartedAfterShowMs");
+    write_optional_ms(writer, startup.work_started_after_show_ms);
+    writer.key("firstBusyAfterShowMs");
+    write_optional_ms(writer, startup.first_busy_after_show_ms);
+    writer.end_object();
+}
+
 void write_cancel(json::Writer& writer, const std::optional<CancelDiagnostics>& cancel)
 {
     if (!cancel) {
@@ -201,6 +227,18 @@ GridDiagnostics describe_grid(std::string name, std::span<const FlightResultPtr>
         }
     }
     return grid;
+}
+
+StartupDiagnostics describe_startup(const MainWindow& window)
+{
+    const MainWindow::StartupRecord& record = window.startup_record();
+    return StartupDiagnostics{
+        .window_animates = record.window_animates,
+        .settings = read_window_animation_settings(),
+        .start_delay_ms = static_cast<double>(record.start_delay.count()),
+        .work_started_after_show_ms = record.work_started_ms,
+        .first_busy_after_show_ms = record.first_busy_ms,
+    };
 }
 
 DisplayDiagnostics describe_display(const MainWindow& window)
@@ -296,6 +334,8 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     write_timer(writer, diagnostics.timer);
     writer.key("uiEvents");
     write_events(writer, diagnostics.events);
+    writer.key("startup");
+    write_startup(writer, diagnostics.startup);
     writer.key("cancel");
     write_cancel(writer, diagnostics.cancel);
 

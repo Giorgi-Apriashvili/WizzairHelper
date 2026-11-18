@@ -17,13 +17,20 @@
 //     chooser and drop-downs are separate windows; a focused push button is clicked.
 //     Esc anywhere in the window, while working and with no drop-down open, is the
 //     Cancel button (BusyPanel::request_cancel, D-11). Focus starts in From.
-//   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest.
+//   * Start-up (§11.1): the first Shown loads the route map, then runs --autotest. While
+//     Windows animates the window in (window_animation.hpp), that first work starts
+//     kStartDelay after the first Shown, else in the next event-loop pass (D-65): during
+//     the open animation a flush of the window can block the UI thread for over 100 ms,
+//     and the map load repaints most of the window at once. Until then the window shows
+//     what it was built with ("Ready."); closing it first starts nothing. A search the
+//     user starts meanwhile loads the map itself (§11.4), so the start-up load is skipped.
 //   * Closing (§13): stop running work first, then commit a number typed but not yet
 //     entered and save settings.json (not in autotest), then let the updater start a
 //     verified installer (D-47).
 //   * The Log starts with the start-up line (§12.2).
 //   * Updates (D-45): enable_updates() turns the self-updater on in a normal run; it
-//     starts with the window's first Shown, next to OnShownAsync.
+//     starts with OnShownAsync, after the start delay (its first evaluation may show the
+//     update bar, which moves the tabs).
 //   * Settings (D-63): the gear "Settings" button at the right end of the tab row (the
 //     tab widget's corner, after the tab bar in the Tab order) opens the window-modal
 //     Settings window (open_settings). A change of its update options applies at once:
@@ -43,10 +50,14 @@
 #include <QPointer>
 #include <QSize>
 
+#include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
 class QTabWidget;
+class QTimer;
 
 namespace wizz::app {
 
@@ -75,6 +86,25 @@ public:
     static constexpr QSize kTabPadding{12, 4};
     /// Around the results card: the input cards' side margins (D-53).
     static constexpr QMargins kResultsMargins{16, 4, 16, 8};
+    /// From the first Shown to the first work while Windows animates the window in (D-65):
+    /// its open animation lasts about 300 ms, and a flush of the window during it blocked
+    /// the UI thread for up to 134 ms on the owner's PC; none 350 ms or more after show()
+    /// took longer than 7 ms.
+    static constexpr std::chrono::milliseconds kStartDelay{300};
+
+    /// Whether Windows animates `window` in when it is first shown (opens_with_animation).
+    using OpenAnimationProbe = std::function<bool(const QWidget& window)>;
+    /// Monotonic nanoseconds since an arbitrary start.
+    using MonotonicClock = std::function<std::int64_t()>;
+
+    /// How the start-up went (D-65; diagnostics.json's `startup`). Times are in ms after
+    /// the first Shown, which show() sends just before the native window appears.
+    struct StartupRecord {
+        bool window_animates = false;              ///< the probe's answer at the first Shown
+        std::chrono::milliseconds start_delay{0};  ///< kStartDelay when it animates, else 0
+        std::optional<double> work_started_ms;     ///< OnShownAsync and the updater started
+        std::optional<double> first_busy_ms;       ///< the busy panel's first busy period began
+    };
 
     /// `settings` were loaded before the window is built (01 §3); `autotest` turns on the
     /// self-test mode and its runner (01 §17).
@@ -90,9 +120,19 @@ public:
     /// apply_start_geometry() + show().
     void show_main_window();
 
+    /// Replaces how the start delay is decided and timed (tests; opens_with_animation and a
+    /// QElapsedTimer by default; an empty one keeps its default). Call before the first show().
+    void set_start_timing(OpenAnimationProbe probe, MonotonicClock clock = {});
+    [[nodiscard]] const StartupRecord& startup_record() const noexcept { return startup_; }
+    /// The single-shot timer that starts the first work (runs from the first Shown until then).
+    [[nodiscard]] QTimer* start_timer() const noexcept { return start_timer_; }
+    /// OnShownAsync and the updater have started.
+    [[nodiscard]] bool startup_begun() const noexcept { return startup_.work_started_ms.has_value(); }
+
     /// Turns the self-updater on (D-45): an UpdateController over `hooks` drives the
-    /// update bar and the Log, follows the controller's working state, starts with the
-    /// first Shown and may start the installer when the window closes. Returns false and
+    /// update bar and the Log, follows the controller's working state, starts with
+    /// OnShownAsync (after the start delay, D-65) and may start the installer when the
+    /// window closes. Returns false and
     /// does nothing in an --autotest run (never with --autotest, D-30) or when the
     /// updater is already on.
     bool enable_updates(UpdateHooks hooks);
@@ -152,6 +192,13 @@ protected:
 private:
     void build();
     void wire();
+    /// The start timer fired: the first work starts once the start delay has passed on the
+    /// clock (a timer may fire a little early), else the timer waits the rest.
+    void start_when_due();
+    /// OnShownAsync and the updater's first evaluation start (D-45, D-65).
+    void begin_startup();
+    /// Milliseconds since the first Shown, on the start clock.
+    [[nodiscard]] double since_shown_ms() const;
     /// OnShownAsync (01 §11.1).
     [[nodiscard]] Task<> on_shown();
     /// Esc pressed in `watched`: Cancel when it belongs to this window, work is running and
@@ -165,6 +212,12 @@ private:
     ui::AppSettings settings_;
     std::optional<ui::AutoTestOptions> autotest_;
     bool shown_once_ = false;
+    bool closed_ = false;
+    OpenAnimationProbe open_animation_probe_;
+    MonotonicClock clock_;
+    std::int64_t shown_ns_ = 0;
+    StartupRecord startup_;
+    QTimer* start_timer_ = nullptr;
 
     InputPanel* input_ = nullptr;
     QTabWidget* tabs_ = nullptr;

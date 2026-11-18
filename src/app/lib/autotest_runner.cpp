@@ -323,6 +323,7 @@ void AutoTestRunner::write_diagnostics()
         describe_grid("outbound", window_.outbound_grid()->all_results(), controller.outbound_result().get()),
         describe_grid("return", window_.return_grid()->all_results(), controller.return_result().get()),
     };
+    diagnostics_->startup = describe_startup(window_);
     diagnostics_->display = describe_display(window_);
     if (diagnostics_->layout.checks == 0) {
         diagnostics_->layout.merge("final", describe_layout(window_));  // no screenshot was taken

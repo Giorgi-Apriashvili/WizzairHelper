@@ -5,7 +5,9 @@
 //     scenarios under tests/replay, without their delays, or rules built in code;
 //   * the fixed test clock (2026-11-02T10:00:00Z, local zone UTC) and en-US;
 //   * no request pacing, no retry sleeps, no disk caches, a temporary data root;
-//   * recorded MessageBoxes, chooser and grid side effects instead of modal boxes.
+//   * recorded MessageBoxes, chooser and grid side effects instead of modal boxes;
+//   * on the "minimal" platform no open animation, so the first work starts at once after
+//     the first Shown, unless a test sets the open-animation probe (D-65).
 
 #include "busy_panel.hpp"
 #include "controller.hpp"
@@ -33,6 +35,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -126,6 +129,20 @@ struct DialogLog {
     }
 };
 
+/// A monotonic clock the test moves by hand (MainWindow::set_start_timing), so a start delay
+/// is measured on it instead of on the machine's time.
+class StartClock {
+public:
+    void advance(std::chrono::nanoseconds by) noexcept { *ns_ += by.count(); }
+    [[nodiscard]] wizz::app::MainWindow::MonotonicClock reader() const
+    {
+        return [ns = ns_] { return *ns; };
+    }
+
+private:
+    std::shared_ptr<std::int64_t> ns_ = std::make_shared<std::int64_t>(0);
+};
+
 struct WindowRigOptions {
     std::string scenario = "named_destination";
     /// Replaces the scenario's rules when set.
@@ -135,6 +152,11 @@ struct WindowRigOptions {
     std::optional<ui::AutoTestOptions> autotest;
     /// Wraps the replay transport (tests that inject failures).
     std::function<std::shared_ptr<http::Transport>(std::shared_ptr<http::Transport>)> wrap_transport;
+    /// Replaces MainWindow's open-animation probe (D-65); empty: the window's own, which
+    /// says no on the "minimal" platform.
+    wizz::app::MainWindow::OpenAnimationProbe open_animation;
+    /// Replaces the clock of the start delay; empty: a QElapsedTimer.
+    wizz::app::MainWindow::MonotonicClock start_clock;
 };
 
 class WindowRig {
@@ -162,6 +184,7 @@ public:
         config.geocoder_delay = [](Duration, std::stop_token stop) { throw_if_cancelled(stop); };
         services_ = wizz::app::AppServices::create(std::move(config));
         window_ = std::make_unique<wizz::app::MainWindow>(services_, options.settings, std::move(options.autotest));
+        window_->set_start_timing(std::move(options.open_animation), std::move(options.start_clock));
         controller().set_dialogs(dialogs.make(window_->busy_panel()));
         controller().flows().set_error_handler([this](std::exception_ptr error) { flow_errors.push_back(error); });
         for (wizz::app::FlightGrid* grid : {window_->outbound_grid(), window_->return_grid()}) {
