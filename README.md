@@ -65,7 +65,11 @@ cmake --workflow --preset release-package   # release ZIP + installer under buil
 Releases are cut by pushing a version tag; see [docs/RELEASING.md](docs/RELEASING.md).
 
 Settings, caches and `errors.log` live in `%LOCALAPPDATA%\WizzairHelper\`; the updater keeps its
-state, log and downloads in its `updates\` subfolder.
+state, log and downloads in its `updates\` subfolder. Fares fetched from Wizz Air are kept in
+`cache\fares.json` for up to 6 hours: a search asks Wizz Air only for the days it did not fetch
+within the time chosen under **Settings > Searches > Reuse fares fetched within** (30 minutes
+unless you change it; fares for today at most 30 minutes), and the Log says how old the reused
+fares were.
 
 Fares come from wizzair.com's unofficial website API; geocoding uses Photon / Nominatim
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.

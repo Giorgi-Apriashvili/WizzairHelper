@@ -1,7 +1,7 @@
 #pragma once
 // Where the app keeps its files (04 §6, 02 §7, 01 §3.2 and §13, 06 §3):
 //   %LOCALAPPDATA%\WizzairHelper\settings.json, errors.log
-//   %LOCALAPPDATA%\WizzairHelper\cache\api-url.txt, map.json, fx.json, geocode.json
+//   %LOCALAPPDATA%\WizzairHelper\cache\api-url.txt, map.json, fx.json, geocode.json, fares.json (D-67)
 //   %LOCALAPPDATA%\WizzairHelper\updates\update-state.json, update.log, downloads\ (updater, D-40)
 // Every function takes an optional root override so tests (and an isolated
 // --autotest profile, D-30) can supply their own directory.

@@ -192,16 +192,17 @@ offline and reproducibly:
 
 | Flag | Effect |
 |---|---|
-| `--data-root <dir>` | Settings, `errors.log` and caches in `<dir>` instead of `%LOCALAPPDATA%\WizzairHelper` |
+| `--data-root <dir>` | Settings, `errors.log` and caches in `<dir>` instead of `%LOCALAPPDATA%\WizzairHelper`; the reused fares are kept in `<dir>\cache\fares.json` too (without `--data-root` an `--autotest` run keeps them in memory only, DECISIONS D-67) |
 | `--replay <dir>` | Every HTTP request is answered from `<dir>/replay.json` (format: `src/ui_logic/include/wizz/ui/replay_transport.hpp`) |
 | `--fixed-now 2026-11-02T10:00:00Z` | Fixed clock, local zone UTC |
 | `--no-pacing` | No 1 s spacing between Wizz requests |
-| `--warm-cache` | Runs the outbound search once first, so the script's search is a cached replay |
+| `--warm-cache` | Runs the outbound search once first, so the script's search is a cached replay (every fare reused, D-66) |
 | `--cancel-after-ms <n>` | Presses Esc and Cancel n ms after the outbound search starts fetching |
 | `--diagnostics` | Writes `diagnostics.json` (40 ms timer gaps, UI-loop watchdog, start delay, cancel record, final grids, DPI, layout checks) |
 
 A run with `--autotest` or `--replay` on its command line never checks GitHub for updates (DECISIONS
-D-45), so self-tests stay offline and their request counts unchanged.
+D-45) and does not fetch the exchange rates at start (D-69), so self-tests stay offline and their request
+counts unchanged.
 
 Example (an isolated profile and a replayed network):
 
@@ -223,8 +224,11 @@ python -I tests\gui\check_autotest.py --exe build\msvc-x64\src\app\Release\Wizza
 ```
 
 Scenarios: `named_destination`, `anywhere_return_from_top`, `not_served`, `same_area`, `over_500`,
-`cancel_waiting`, `cancel_retrying`, and the generated heavy replays `heavy_cached` and
-`cancel_cached` (every route from Budapest in the frozen live map, about 6500 fares).
+`cancel_waiting`, `cancel_retrying`, the generated heavy replays `heavy_cached` and
+`cancel_cached` (every route from Budapest in the frozen live map, about 6500 fares), and
+`restart_shifted`: two runs on one `--data-root` profile, the second one day later and 20 minutes
+after the first, which must ask Wizz Air only for each route's new last day, take the rest from
+`fares.json`, say so in the Log and rewrite the file (DECISIONS D-66, D-67).
 
 ### The look's diagnostic switches
 
