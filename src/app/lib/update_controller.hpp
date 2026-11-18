@@ -4,12 +4,13 @@
 //
 //   * start() — when the main window starts its first work, after the start delay while
 //     Windows animates it in (D-65) — re-evaluates at once and then every hour, so a
-//     window left open across a day, week or month boundary checks at the next tick. Each evaluation runs on a JobRunner worker: the core's check_if_due with the
-//     model's policy (no request when no check is due or automatic checks are off; the
-//     calendar periods and the 1 h failure floor are the core's), or, after a download
-//     failure that may heal, the download again. The first one first deletes downloads
-//     of old versions and offers again an update put off in an earlier session, from
-//     update-state.json and the downloads folder alone — no request (the model's remind).
+//     window left open across a day, week or month boundary checks at the next tick. Each
+//     evaluation runs on a JobRunner worker: the core's check_if_due with the model's
+//     policy (no request when no check is due or automatic checks are off; the calendar
+//     periods and the 1 h failure floor are the core's), or, after a download failure that
+//     may heal, the download again. The first one first deletes downloads of old versions
+//     and offers again an update put off in an earlier session, from update-state.json and
+//     the downloads folder alone — no request (the model's remind).
 //   * One piece of work at a time: an automatic evaluation, a manual check (check_now,
 //     the Settings window's Check now), the check of "Update now" for a remembered update,
 //     or a download (after a check, "Update now", or a switch to a choice that downloads).

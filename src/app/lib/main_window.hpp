@@ -41,6 +41,7 @@
 #include "app_services.hpp"
 #include "task.hpp"
 #include "update_controller.hpp"
+#include "window_animation.hpp"
 
 #include "wizz/ui/autotest_options.hpp"
 #include "wizz/ui/settings.hpp"
@@ -86,10 +87,10 @@ public:
     static constexpr QSize kTabPadding{12, 4};
     /// Around the results card: the input cards' side margins (D-53).
     static constexpr QMargins kResultsMargins{16, 4, 16, 8};
-    /// From the first Shown to the first work while Windows animates the window in (D-65):
-    /// a flush of the window during that animation blocked the UI thread for up to 138 ms
-    /// on the owner's PC, every one of 20 ms or more within 240 ms of show(); later ones
-    /// took 11 ms at most.
+    /// From the first Shown to the first work while Windows animates the window in (D-65).
+    /// The Shown comes about 25 ms before show() returns. On the owner's PC a flush of the
+    /// window during the animation blocked the UI thread for up to 138 ms; flushes that began
+    /// 240-300 ms after show() took up to 19.5 ms, and from 300 ms on 11 ms at most.
     static constexpr std::chrono::milliseconds kStartDelay{300};
 
     /// Whether Windows animates `window` in when it is first shown (opens_with_animation).
@@ -101,6 +102,7 @@ public:
     /// the first Shown, which show() sends just before the native window appears.
     struct StartupRecord {
         bool window_animates = false;              ///< the probe's answer at the first Shown
+        std::optional<WindowAnimationSettings> settings;  ///< Windows' settings read at that Shown
         std::chrono::milliseconds start_delay{0};  ///< kStartDelay when it animates, else 0
         std::optional<double> work_started_ms;     ///< OnShownAsync and the updater started
         std::optional<double> first_busy_ms;       ///< the busy panel's first busy period began

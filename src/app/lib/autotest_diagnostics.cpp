@@ -234,7 +234,7 @@ StartupDiagnostics describe_startup(const MainWindow& window)
     const MainWindow::StartupRecord& record = window.startup_record();
     return StartupDiagnostics{
         .window_animates = record.window_animates,
-        .settings = read_window_animation_settings(),
+        .settings = record.settings.value_or(read_window_animation_settings()),
         .start_delay_ms = static_cast<double>(record.start_delay.count()),
         .work_started_after_show_ms = record.work_started_ms,
         .first_busy_after_show_ms = record.first_busy_ms,

@@ -67,6 +67,10 @@ DIAGNOSTICS_KEYS = ['timer', 'uiEvents', 'startup', 'cancel', 'searches', 'grids
 # MainWindow::kStartDelay (DECISIONS D-65): the first work waits this long after the first Shown
 # while Windows animates the window in.
 START_DELAY_MS = 300
+# How late the first work may start after it is due before the run counts it as not started: a
+# bound for a start that never came, not a timing limit (a busy runner can delay a timer by far
+# more than the 100 ms the R-03 checks allow, and those checks already cover responsiveness).
+START_LATE_LIMIT_MS = 5000
 # The window and surface colours of the light and dark looks (style::Theme, DECISIONS D-53).
 LOOK_COLOURS = {'light': ('#f3f2f6', '#ffffff'), 'dark': ('#131217', '#1d1c22')}
 TEXT_RENDERINGS = ('natural-heavier', 'natural', 'hinted')
@@ -248,10 +252,13 @@ class Checker:
         """DECISIONS D-65: while Windows animates a new window in (about 300 ms after show()), a flush
         of it can block the UI thread for over 100 ms, so the first work (the route-map load, then the
         script) starts START_DELAY_MS after the first Shown when Windows animates windows, and at once
-        when it does not; either way within 2 x max_gap_ms (200 ms in Release) of when it is due. Every
-        run checks it, not only the unlucky ones whose first busy frames would meet the animation. On
-        the real platform the answer must follow the animation settings the app reports, so a probe
-        that stopped reading them fails here too."""
+        when it does not. The lower bound is exact: every run where Windows animates checks it, not
+        only the unlucky ones whose first busy frames would meet the animation. The upper bound,
+        START_LATE_LIMIT_MS after it is due, only catches a start that never came, so a busy machine
+        cannot fail it (DECISIONS D-50). On the real platform the answer must follow the animation
+        settings the app read at the same Shown, so a probe that stopped reading them fails here too.
+        Where Windows does not animate (GitHub's runners) a removed delay looks like a correct start;
+        there the GUI tests (MainWindowStart.*) catch it."""
         animates = self.diag('startup.windowAnimates')
         settings = self.diag('startup.animationSettings') or {}
         if self.diag('display.platform') == 'windows':
@@ -262,7 +269,7 @@ class Checker:
         delay = self.diag_equal('startup.startDelayMs', START_DELAY_MS if animates else 0)
         if not isinstance(delay, (int, float)):
             return
-        slack = 2 * max_gap_ms
+        slack = START_LATE_LIMIT_MS
         for key, what in (('workStartedAfterShowMs', 'the first work'),
                           ('firstBusyAfterShowMs', 'the first busy period')):
             after = self.diag('startup.' + key)
@@ -1123,12 +1130,16 @@ def main():
     events = diagnostics.get('uiEvents') or {}
     print('timer: %s runs, %s ticks, longest gap %s ms (UI-thread CPU at most %s ms in one gap; longest gap not held '
           'by other processes %s ms; %s gaps of 100 ms or more held by them), mean %s ms, %s gaps over 50 ms; longest '
-          'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); DPR %s; window %s in '
+          'UI dispatch %s ms (while busy %s ms, CPU %s ms, not held by other processes %s ms); start-up: windows animate '
+          '%s, delay %s ms, first work %s ms and first busy %s ms after the Shown; DPR %s; window %s in '
           'work area %s; look %s (%s, %s, text rendering %s, hinting %s, weight axis %s; %s); %s' %
           (timer.get('runs'), timer.get('ticks'), timer.get('longestGapMs'), timer.get('longestGapCpuMs'),
            timer.get('longestOwnGapMs'), timer.get('heldGapsOver100Ms'), timer.get('meanGapMs'),
            timer.get('gapsOver50Ms'), events.get('longestMs'), events.get('longestBusyMs'),
            events.get('longestBusyCpuMs'), events.get('longestBusyOwnMs'),
+           diagnostics.get('startup', {}).get('windowAnimates'), diagnostics.get('startup', {}).get('startDelayMs'),
+           diagnostics.get('startup', {}).get('workStartedAfterShowMs'),
+           diagnostics.get('startup', {}).get('firstBusyAfterShowMs'),
            diagnostics.get('display', {}).get('devicePixelRatio'), diagnostics.get('display', {}).get('windowFrame'),
            diagnostics.get('display', {}).get('screenAvailable'), diagnostics.get('environment', {}).get('look'),
            diagnostics.get('environment', {}).get('style'), diagnostics.get('environment', {}).get('fontFamily'),

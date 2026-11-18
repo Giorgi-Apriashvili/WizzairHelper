@@ -447,6 +447,7 @@ void MainWindow::showEvent(QShowEvent* event)
     // OnShownAsync runs once the window is visible, so the progress UI can be seen; the
     // updater's first evaluation runs on its own worker next to it (D-45). While Windows
     // animates the window in, both wait until the animation is over (D-65).
+    startup_.settings = read_window_animation_settings();  // what the probe saw, for the diagnostics
     startup_.window_animates = open_animation_probe_(*this);
     startup_.start_delay = startup_.window_animates ? kStartDelay : std::chrono::milliseconds{0};
     start_timer_->start(startup_.start_delay);  // 0: the next event-loop pass
