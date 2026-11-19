@@ -46,12 +46,17 @@ wizz_copy_qt_plugins(wizzairhelper_gui_tests)
 # D-50), so running them beside the rest of the suite would only leave the wall-clock half
 # unchecked. ctest -L timing runs only these.
 set(_wizz_timing_tests "FlightGridPerformance.*:ControllerFlows.R_03_*:ControllerFlows.The_progress_timer_*")
+# Listing the tests starts the Qt application first (gui_test_main.cpp): about 0.3 s on a
+# desktop, but a cold CI runner took more than CTest's default 5 s twice (DECISIONS D-50).
+set(_wizz_gui_discovery_timeout 120)
 gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT ${_wizz_gui_discovery_timeout}
     TEST_FILTER "-${_wizz_timing_tests}"
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal:enable_fonts")
 gtest_discover_tests(wizzairhelper_gui_tests
     DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT ${_wizz_gui_discovery_timeout}
     TEST_FILTER "${_wizz_timing_tests}"
     PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=minimal:enable_fonts" LABELS timing RUN_SERIAL TRUE)
 
