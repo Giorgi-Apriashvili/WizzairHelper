@@ -17,6 +17,18 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 | [2.2.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.2.0) | 2026-11-18 | `be62626` | The Settings window: manual update check, automatic checks once a day / week / month, three choices for what happens with an update, reminders for a put-off update (DECISIONS D-59..D-63); the first work starts after Windows' open animation (D-65). |
 | [2.3.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.0) | 2026-11-18 | `edfd6af` | Fares reused per route and day and kept on disk (`fares.json`, at most 6 h), the "Reuse fares fetched within" setting, exchange rates fetched at start, the reused-fares Log line (DECISIONS D-66..D-70). |
 | [2.3.1](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.1) | 2026-11-19 | `1ded54e` | Fix: a retired Wizz Air API version answering HTTP 503 made every search fail "Wizz Air is busy"; the address is now looked up again on such a page and after 24 hours (DECISIONS D-71). |
+| [2.4.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.4.0) | 2026-11-19 | `3f9438d` | Homes on Airbnb: a button above each results table and a menu item open Airbnb's search around the destination city's centre for the row's stay, within 2 / 5 / 10 / 25 km set in Settings > Searches (DECISIONS D-72, D-73). |
+
+v2.4.0 verification: CI run 44527961958 on `79ee5d4` (the merge `82675da` plus the discovery timeout of D-50) and the
+tag's run 44531103430 on `3f9438d` passed on all three legs and published the release. Locally the merged code passed
+1762 / 1762 tests in Release (all end-to-end runs), Debug and with clang-cl 22.1.8; 15 rules of the feature were each
+broken on purpose and a test failed every time; an independent review found no bug, and its two fixes (a shortened
+city name must be the city itself; no stay before today) are in. The owner opened three generated links in his browser
+(2026-11-19: a 5 km box around central London and Budapest, and Santorini by name, 4-8 Dec, 2 adults): Airbnb kept the
+dates, the guests and the area. `tools/release_check.ps1 -Tag v2.4.0`: three assets (installer 10,172,893 bytes, ZIP
+11,775,078 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
+`WizzairHelper 2.4.0`, and `releases/latest` is v2.4.0. Not verified: the city-centre rule against the live geocoders
+for every destination (replayed answers only), a real update to 2.4.0 run by the installed app.
 
 v2.3.1 verification: CI run 44497505123 on the fix `4ea6d1a` and the tag's run 44499954681 on `1ded54e` passed on all
 three legs and published the release. Locally the fix passed 1714 / 1714 tests in Release (all end-to-end runs), Debug and
@@ -210,11 +222,9 @@ same 34 files.
   exchange rates fetched at start (the first search shows no rate download). The offline
   equivalents are `SearchCache.Request_counts_for_repeated_shifted_and_restarted_searches` and the
   end-to-end `restart_shifted` run.
-- Homes on Airbnb (2.4.0, DECISIONS D-72, D-73) in a real browser, by the owner: Airbnb documents
-  no search URL, so whether `airbnb.com/s/homes` keeps the map box (`ne_lat` … `sw_lng`,
-  `search_by_map=true`), the dates and the adults, and how it answers `query=` for an island, is
-  checked by opening the links by hand. The city-centre rule was simulated on every station of the
-  live map but geocoded only with replayed answers; a live sweep of all destinations would send
-  about 190 to 400 Photon requests and needs the owner's consent.
+- Homes on Airbnb (2.4.0, DECISIONS D-72, D-73) against the live geocoders: the city-centre rule was simulated on
+  every station of the live map and geocoded with replayed answers only; a live sweep of all destinations would send
+  about 190 to 400 Photon requests and needs the owner's consent. Airbnb's links were checked by the owner in a
+  browser (v2.4.0 above); Airbnb documents them nowhere, so they can change without notice.
 - Under `--fixed-now` the elapsed time stays `0:00` and summary `elapsedSeconds` is 0 (D-30 fixed
   clock), so the screenshots show no running time.
