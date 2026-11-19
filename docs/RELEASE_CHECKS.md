@@ -23,7 +23,7 @@ v2.4.0 verification: CI run 44527961958 on `79ee5d4` (the merge `82675da` plus t
 tag's run 44531103430 on `3f9438d` passed on all three legs and published the release. Locally the merged code passed
 1762 / 1762 tests in Release (all end-to-end runs), Debug and with clang-cl 22.1.8; 15 rules of the feature were each
 broken on purpose and a test failed every time; an independent review found no bug, and its two fixes (a shortened
-city name must be the city itself; no stay before today) are in. The owner opened three generated links in his browser
+city name must be the city itself; no stay before today) are in. The owner opened three generated links in their browser
 (2026-11-19: a 5 km box around central London and Budapest, and Santorini by name, 4-8 Dec, 2 adults): Airbnb kept the
 dates, the guests and the area. `tools/release_check.ps1 -Tag v2.4.0`: three assets (installer 10,172,893 bytes, ZIP
 11,775,078 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
