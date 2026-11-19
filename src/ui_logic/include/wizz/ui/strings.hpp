@@ -14,6 +14,7 @@
 
 #include "wizz/core/fare_days.hpp"
 #include "wizz/core/time.hpp"
+#include "wizz/ui/homes_stay.hpp"
 
 #include <array>
 #include <cstddef>
@@ -316,6 +317,33 @@ inline constexpr std::array<fare_days::ReuseWindow, 4> kReuseWindows{
     fare_days::ReuseWindow::six_hours};
 /// "30 minutes", "1 hour", "3 hours", "6 hours".
 [[nodiscard]] std::string_view reuse_window_label(fare_days::ReuseWindow window) noexcept;
+/// The "Homes on Airbnb" row (D-73): the label before the drop-down, the text after it,
+/// and the drop-down's accessible name.
+inline constexpr std::string_view kHomesWithin = "Homes on Airbnb within";
+inline constexpr std::string_view kHomesWithinSuffix = "of the city centre";
+inline constexpr std::string_view kHomesWithinName = "Homes on Airbnb within this distance of the city centre";
+/// "2 km", "5 km", "10 km", "25 km".
+[[nodiscard]] std::string_view homes_radius_label(HomesRadius radius) noexcept;
+
+// ---------------------------------------------------------------------------
+// Homes on Airbnb (DECISIONS D-72)
+// ---------------------------------------------------------------------------
+
+/// The result grids' button, menu item and accessible name.
+inline constexpr std::string_view kHomesOnAirbnb = "Homes on Airbnb";
+/// The button's tooltip (plain text).
+inline constexpr std::string_view kHomesToolTip =
+    "Open Airbnb in your browser with the homes around the city centre of the selected row's destination, for its "
+    "stay dates";
+/// "{in} – {out}, {n} adult(s)" with the dates already formatted.
+[[nodiscard]] std::string homes_stay_text(std::string_view check_in, std::string_view check_out, int adults);
+/// "Homes on Airbnb: looking up the centre of {place}…"
+[[nodiscard]] std::string homes_lookup_log(std::string_view place);
+/// "Homes on Airbnb within {radius} of the centre of {city}, {stay}."
+[[nodiscard]] std::string homes_centre_log(std::string_view radius, std::string_view city, std::string_view stay);
+/// "Homes on Airbnb: no city centre found, so Airbnb looks for “{query}” itself, {stay}." —
+/// or "Homes on Airbnb: the geocoders could not be reached, so …" when `lookup_failed`.
+[[nodiscard]] std::string homes_by_name_log(std::string_view query, bool lookup_failed, std::string_view stay);
 
 // ---------------------------------------------------------------------------
 // --autotest summary.json (01 §17.3)

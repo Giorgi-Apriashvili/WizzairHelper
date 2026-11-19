@@ -82,7 +82,7 @@ constexpr std::string_view kExample = R"({
 })";
 
 /// The same settings as this version writes them: the update options follow the twelve (D-60),
-/// then the reuse window of fetched fares (D-68).
+/// then the reuse window of fetched fares (D-68) and the distance of Homes on Airbnb (D-73).
 constexpr std::string_view kExampleWithUpdates = R"({
   "From": "Budapest",
   "To": "London",
@@ -99,7 +99,8 @@ constexpr std::string_view kExampleWithUpdates = R"({
   "CheckForUpdates": true,
   "UpdateCheckFrequency": "Daily",
   "WhenUpdateFound": "InstallOnClose",
-  "ReuseFaresWithin": "ThirtyMinutes"
+  "ReuseFaresWithin": "ThirtyMinutes",
+  "HomesWithin": "FiveKm"
 })";
 
 /// The same settings as 2.2 wrote them: the twelve and the update options.
@@ -245,11 +246,11 @@ TEST(Settings, Update_options_are_written_after_the_twelve_with_their_json_names
     };
     const Case cases[] = {
         {{.check_automatically = true, .check_frequency = CheckFrequency::daily, .when_found = WhenFound::install_on_close},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
         {{.check_automatically = false, .check_frequency = CheckFrequency::weekly, .when_found = WhenFound::download_then_ask},
-         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
+         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
         {{.check_automatically = true, .check_frequency = CheckFrequency::monthly, .when_found = WhenFound::notify_only},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
     };
     for (const Case& c : cases) {
         AppSettings settings;
@@ -393,7 +394,7 @@ TEST(Settings, A_file_of_2_2_reads_the_reuse_window_as_its_default)
     EXPECT_EQ(settings.fare_reuse, ReuseWindow::thirty_minutes);
 }
 
-TEST(Settings, The_reuse_window_is_written_last_with_its_json_name_and_round_trips)
+TEST(Settings, The_reuse_window_is_written_after_the_update_options_with_its_json_name_and_round_trips)
 {
     const std::pair<ReuseWindow, std::string_view> cases[] = {
         {ReuseWindow::thirty_minutes, "ThirtyMinutes"},
@@ -406,7 +407,7 @@ TEST(Settings, The_reuse_window_is_written_last_with_its_json_name_and_round_tri
         settings.fare_reuse = window;
         const std::string text = settings.to_json();
         EXPECT_TRUE(text.ends_with("  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"" +
-                                   std::string{name} + "\"\r\n}"))
+                                   std::string{name} + "\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"))
             << text;
         EXPECT_EQ(AppSettings::parse(text), settings);
         EXPECT_EQ(json_name(window), name);
@@ -462,6 +463,76 @@ TEST(Settings, A_file_with_the_reuse_window_read_by_the_rules_of_2_1_keeps_its_t
     ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
     EXPECT_EQ(old->from, "Wien");
     EXPECT_EQ(old->adults, 2);
+    EXPECT_EQ(old->max_nights, 7);
+}
+
+// --- HomesWithin (D-73) ----------------------------------------------------------------
+
+TEST(Settings, D_73_Homes_within_is_written_last_with_its_json_name_and_round_trips)
+{
+    const std::pair<HomesRadius, std::string_view> cases[] = {
+        {HomesRadius::two_km, "TwoKm"},
+        {HomesRadius::five_km, "FiveKm"},
+        {HomesRadius::ten_km, "TenKm"},
+        {HomesRadius::twenty_five_km, "TwentyFiveKm"},
+    };
+    for (const auto& [radius, name] : cases) {
+        AppSettings settings;
+        settings.homes_within = radius;
+        const std::string text = settings.to_json();
+        EXPECT_TRUE(text.ends_with("  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"" +
+                                   std::string{name} + "\"\r\n}"))
+            << text;
+        EXPECT_EQ(AppSettings::parse(text), settings);
+        EXPECT_EQ(json_name(radius), name);
+        EXPECT_EQ(parse_homes_radius(name), radius);
+    }
+    EXPECT_EQ(AppSettings{}.homes_within, HomesRadius::five_km) << "missing: 5 km";
+    EXPECT_EQ(AppSettings::parse(R"({"MaxNights": 12})").homes_within, HomesRadius::five_km);
+}
+
+TEST(Settings, D_73_Homes_within_values_ignore_ascii_case_but_the_name_does_not)
+{
+    EXPECT_EQ(AppSettings::parse(R"({"HomesWithin": "tenkm"})").homes_within, HomesRadius::ten_km);
+    EXPECT_EQ(AppSettings::parse(R"({"HomesWithin": "TWOKM"})").homes_within, HomesRadius::two_km);
+    EXPECT_EQ(parse_homes_radius("twentyFiveKM"), HomesRadius::twenty_five_km);
+    EXPECT_EQ(AppSettings::parse(R"({"homesWithin": "TwoKm"})"), AppSettings{}) << "an unknown property";
+}
+
+TEST(Settings, D_73_An_unknown_homes_distance_gives_that_property_its_default_only)
+{
+    for (const std::string_view unknown : {"FiftyKm", "", " TwoKm", "2 km", "2"}) {
+        const std::string text = R"({"MaxNights": 12, "ReuseFaresWithin": "OneHour", "HomesWithin": ")" +
+                                 std::string{unknown} + R"("})";
+        const AppSettings settings = AppSettings::parse(text);
+        EXPECT_EQ(settings.max_nights, 12) << text;
+        EXPECT_EQ(settings.fare_reuse, ReuseWindow::one_hour) << text;
+        EXPECT_EQ(settings.homes_within, HomesRadius::five_km) << text;
+    }
+    EXPECT_EQ(parse_homes_radius("FiftyKm"), std::nullopt);
+}
+
+TEST(Settings, D_73_A_wrong_type_for_the_homes_distance_gives_all_defaults)
+{
+    for (const std::string_view bad : {
+             R"({"MaxNights": 12, "HomesWithin": 5})",
+             R"({"MaxNights": 12, "HomesWithin": null})",
+             R"({"MaxNights": 12, "HomesWithin": false})",
+             R"({"MaxNights": 12, "HomesWithin": ["TwoKm"]})",
+         }) {
+        EXPECT_EQ(AppSettings::parse(bad), AppSettings{}) << bad;
+    }
+}
+
+TEST(Settings, D_73_A_file_with_the_homes_distance_read_by_the_rules_of_2_1_keeps_its_twelve_values)
+{
+    AppSettings settings;
+    settings.from = "Wien";
+    settings.max_nights = 7;
+    settings.homes_within = HomesRadius::twenty_five_km;
+    const std::optional<Settings21> old = read_like_2_1(settings.to_json());
+    ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
+    EXPECT_EQ(old->from, "Wien");
     EXPECT_EQ(old->max_nights, 7);
 }
 

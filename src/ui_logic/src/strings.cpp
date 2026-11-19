@@ -244,4 +244,40 @@ std::string_view reuse_window_label(fare_days::ReuseWindow window) noexcept
     return "30 minutes";
 }
 
+std::string_view homes_radius_label(HomesRadius radius) noexcept
+{
+    switch (radius) {
+    case HomesRadius::two_km:
+        return "2 km";
+    case HomesRadius::five_km:
+        return "5 km";
+    case HomesRadius::ten_km:
+        return "10 km";
+    case HomesRadius::twenty_five_km:
+        return "25 km";
+    }
+    return "5 km";
+}
+
+std::string homes_stay_text(std::string_view check_in, std::string_view check_out, int adults)
+{
+    return std::format("{} – {}, {} {}", check_in, check_out, adults, adults == 1 ? "adult" : "adults");
+}
+
+std::string homes_lookup_log(std::string_view place)
+{
+    return std::format("Homes on Airbnb: looking up the centre of {}…", place);
+}
+
+std::string homes_centre_log(std::string_view radius, std::string_view city, std::string_view stay)
+{
+    return std::format("Homes on Airbnb within {} of the centre of {}, {}.", radius, city, stay);
+}
+
+std::string homes_by_name_log(std::string_view query, bool lookup_failed, std::string_view stay)
+{
+    return std::format("Homes on Airbnb: {}, so Airbnb looks for “{}” itself, {}.",
+                       lookup_failed ? "the geocoders could not be reached" : "no city centre found", query, stay);
+}
+
 } // namespace wizz::ui::strings

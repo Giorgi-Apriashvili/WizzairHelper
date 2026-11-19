@@ -208,4 +208,34 @@ TEST(Strings, Settings_window_searches_texts)
     EXPECT_EQ(reuse_window_label(ReuseWindow::six_hours), "6 hours");
 }
 
+TEST(Strings, D_73_Settings_window_homes_texts)
+{
+    using wizz::ui::HomesRadius;
+    EXPECT_EQ(kHomesWithin, "Homes on Airbnb within");
+    EXPECT_EQ(kHomesWithinSuffix, "of the city centre");
+    EXPECT_EQ(kHomesWithinName, "Homes on Airbnb within this distance of the city centre");
+    EXPECT_EQ(homes_radius_label(HomesRadius::two_km), "2 km");
+    EXPECT_EQ(homes_radius_label(HomesRadius::five_km), "5 km");
+    EXPECT_EQ(homes_radius_label(HomesRadius::ten_km), "10 km");
+    EXPECT_EQ(homes_radius_label(HomesRadius::twenty_five_km), "25 km");
+}
+
+TEST(Strings, D_72_Homes_on_Airbnb_texts)
+{
+    EXPECT_EQ(kHomesOnAirbnb, "Homes on Airbnb");
+    EXPECT_EQ(kHomesToolTip, "Open Airbnb in your browser with the homes around the city centre of the selected row's "
+                             "destination, for its stay dates");
+    EXPECT_EQ(homes_stay_text("04 Dec", "08 Dec", 2), "04 Dec – 08 Dec, 2 adults");
+    EXPECT_EQ(homes_stay_text("04 Dec", "05 Dec", 1), "04 Dec – 05 Dec, 1 adult");
+    EXPECT_EQ(homes_lookup_log("London Luton"), "Homes on Airbnb: looking up the centre of London Luton…");
+    EXPECT_EQ(homes_centre_log("5 km", "London", "04 Dec – 08 Dec, 2 adults"),
+              "Homes on Airbnb within 5 km of the centre of London, 04 Dec – 08 Dec, 2 adults.");
+    EXPECT_EQ(homes_by_name_log("Santorini, Greece", false, "04 Dec – 08 Dec, 1 adult"),
+              "Homes on Airbnb: no city centre found, so Airbnb looks for “Santorini, Greece” itself, "
+              "04 Dec – 08 Dec, 1 adult.");
+    EXPECT_EQ(homes_by_name_log("London Luton, United Kingdom", true, "04 Dec – 05 Dec, 1 adult"),
+              "Homes on Airbnb: the geocoders could not be reached, so Airbnb looks for “London Luton, United "
+              "Kingdom” itself, 04 Dec – 05 Dec, 1 adult.");
+}
+
 } // namespace
