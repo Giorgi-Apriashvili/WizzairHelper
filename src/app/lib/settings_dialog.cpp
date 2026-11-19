@@ -5,6 +5,7 @@
 #include "section_card.hpp"
 #include "ui_style.hpp"
 
+#include "wizz/ui/settings.hpp"
 #include "wizz/ui/strings.hpp"
 
 #include <QButtonGroup>
@@ -211,6 +212,31 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     reuse_hint_->setFont(style::hint_font());
     style::set_text_tone(*reuse_hint_, style::TextTone::muted);
     searches_card_->body()->addWidget(reuse_hint_);
+
+    // How far around the city centre "Homes on Airbnb" searches (D-73).
+    homes_label_ = plain_label(searches_card_, false);
+    homes_label_->setObjectName(QStringLiteral("homesLabel"));
+    homes_label_->setText(to_qstring(search_strings::kHomesWithin));
+    homes_ = new QComboBox(searches_card_);
+    homes_->setObjectName(QStringLiteral("homesWithin"));
+    homes_->setAccessibleName(to_qstring(search_strings::kHomesWithinName));
+    ModernStyle::use_styled_popup(*homes_);
+    for (const ui::HomesRadius radius : ui::kHomesRadii) {
+        homes_->addItem(to_qstring(search_strings::homes_radius_label(radius)), static_cast<int>(radius));
+    }
+    homes_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    homes_label_->setBuddy(homes_);
+    homes_suffix_ = plain_label(searches_card_, false);
+    homes_suffix_->setObjectName(QStringLiteral("homesSuffix"));
+    homes_suffix_->setText(to_qstring(search_strings::kHomesWithinSuffix));
+    auto* homes_row = new QHBoxLayout;
+    homes_row->setContentsMargins(0, 0, 0, 0);
+    homes_row->setSpacing(kColumnGap);
+    homes_row->addWidget(homes_label_, 0, Qt::AlignVCenter);
+    homes_row->addWidget(homes_, 0, Qt::AlignVCenter);
+    homes_row->addWidget(homes_suffix_, 0, Qt::AlignVCenter);
+    homes_row->addStretch(1);
+    searches_card_->body()->addLayout(homes_row);
     outer->addWidget(searches_card_);
     outer->addSpacing(kButtonsGap);
     auto* buttons = new QHBoxLayout;
@@ -231,7 +257,8 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
         previous = button;
     }
     QWidget::setTabOrder(previous, reuse_);
-    QWidget::setTabOrder(reuse_, close_);
+    QWidget::setTabOrder(reuse_, homes_);
+    QWidget::setTabOrder(homes_, close_);
 
     connect(check_now_, &QPushButton::clicked, this, &SettingsDialog::check_now_requested);
     connect(close_, &QPushButton::clicked, this, &QDialog::accept);
@@ -250,6 +277,11 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
             Q_EMIT fare_reuse_changed(this->fare_reuse());
         }
     });
+    connect(homes_, &QComboBox::currentIndexChanged, this, [this] {
+        if (!showing_) {
+            Q_EMIT homes_radius_changed(this->homes_radius());
+        }
+    });
     style::on_theme_change(this, [this] {
         apply_status_colour();
         QMetaObject::invokeMethod(this, [this] { fit_size(); }, Qt::QueuedConnection);  // High Contrast's metrics
@@ -257,6 +289,7 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
 
     show_options(options);
     show_fare_reuse(fare_reuse);
+    show_homes_radius(ui::AppSettings{}.homes_within);
     show_status(status);
 
     // Focus starts on the first control that can take it.
@@ -312,6 +345,19 @@ fare_days::ReuseWindow SettingsDialog::fare_reuse() const
     const QVariant window = reuse_->currentData();
     return window.isValid() ? static_cast<fare_days::ReuseWindow>(window.toInt())
                             : fare_days::ReuseWindow::thirty_minutes;
+}
+
+void SettingsDialog::show_homes_radius(ui::HomesRadius radius)
+{
+    const bool was_showing = std::exchange(showing_, true);  // no homes_radius_changed for what is shown
+    homes_->setCurrentIndex(std::max(0, homes_->findData(static_cast<int>(radius))));
+    showing_ = was_showing;
+}
+
+ui::HomesRadius SettingsDialog::homes_radius() const
+{
+    const QVariant radius = homes_->currentData();
+    return radius.isValid() ? static_cast<ui::HomesRadius>(radius.toInt()) : ui::AppSettings{}.homes_within;
 }
 
 void SettingsDialog::report_options()

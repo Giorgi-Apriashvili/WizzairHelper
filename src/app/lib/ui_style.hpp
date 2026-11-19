@@ -284,6 +284,8 @@ inline constexpr char16_t kSettings = 0xE713;
 inline constexpr char16_t kSync = 0xE895;
 /// The Settings window's "Searches" card ("History", D-68).
 inline constexpr char16_t kHistory = 0xE81C;
+/// The result grids' "Homes on Airbnb" button ("Home", D-72).
+inline constexpr char16_t kHome = 0xE80F;
 } // namespace glyph
 
 /// Wizz magenta RGB(197, 0, 110) = #C5006E: the accent of the light and dark looks.

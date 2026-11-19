@@ -22,6 +22,7 @@
 
 #include "app_services.hpp"
 #include "controller_dialogs.hpp"
+#include "grid_actions.hpp"
 #include "job_runner.hpp"
 #include "task.hpp"
 #include "task_scope.hpp"
@@ -30,10 +31,13 @@
 #include "wizz/core/domain.hpp"
 #include "wizz/core/progress.hpp"
 #include "wizz/core/time.hpp"
+#include "wizz/services/city_centre.hpp"
+#include "wizz/ui/homes_stay.hpp"
 
 #include <QObject>
 #include <QString>
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -101,6 +105,17 @@ public:
     /// on a JobRunner worker. Silent: no busy phase, no Log line, every failure swallowed
     /// (a search then decides with its own notices); stopped when the controller goes.
     [[nodiscard]] Task<> prefetch_rates();
+    /// "Homes on Airbnb" (D-72): the centre of `stay`'s destination city (find_city_centre on
+    /// a JobRunner worker, or the answer remembered for that station in this session), then
+    /// Airbnb's search through `actions`: `radius` around the centre, or Airbnb's own search
+    /// by name without one. A Log line before a lookup and one with the outcome. No busy
+    /// phase: a running search goes on, Esc and Cancel do not stop it; closing the window
+    /// does, and then nothing opens. An unexpected lookup error searches by name.
+    [[nodiscard]] Task<> open_homes(ui::HomesStay stay, ui::HomesRadius radius, GridActions actions);
+    /// Starts open_homes unless a lookup is running (one at a time; the request is dropped).
+    void request_homes(const ui::HomesStay& stay, ui::HomesRadius radius, GridActions actions);
+    /// A lookup of open_homes is running.
+    [[nodiscard]] bool is_finding_homes() const noexcept { return homes_lookup_running_; }
     /// OnCurrencyChanged (§11.7): re-prices the stored legs without requests.
     void on_currency_changed();
     /// RecomputeTrips (§11.8).
@@ -196,7 +211,11 @@ private:
     bool working_ = false;
     bool shutting_down_ = false;
     std::optional<std::stop_source> stop_source_;
-    std::stop_source background_stop_;  ///< the rate prefetch (D-69)
+    std::stop_source background_stop_;  ///< the rate prefetch (D-69), the homes lookup (D-72)
+    bool homes_lookup_running_ = false;
+    /// The city-centre answers of this session by station code (D-72); unreachable
+    /// geocoders are not remembered, so the next request tries again.
+    std::map<std::string, CityCentreLookup, std::less<>> city_centres_;
     AirportCatalogPtr catalog_;
     LegSearchResultPtr outbound_result_;
     LegSearchResultPtr return_result_;

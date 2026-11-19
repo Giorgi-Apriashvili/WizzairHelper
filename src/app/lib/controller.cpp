@@ -7,7 +7,9 @@
 #include "qt_strings.hpp"
 #include "round_trip_grid.hpp"
 
+#include "wizz/core/airbnb_links.hpp"
 #include "wizz/core/cancellation.hpp"
+#include "wizz/core/city_names.hpp"
 #include "wizz/core/http.hpp"
 #include "wizz/core/planner.hpp"
 #include "wizz/core/progress.hpp"
@@ -178,6 +180,69 @@ Task<> Controller::prefetch_rates()
         // Cancelled when the window closes, or anything unexpected: the prefetch is only a
         // head start, so it stays silent. No exception is bound here (D-64).
     }
+}
+
+// ---------------------------------------------------------------------------
+// Homes on Airbnb (D-72)
+// ---------------------------------------------------------------------------
+
+void Controller::request_homes(const ui::HomesStay& stay, ui::HomesRadius radius, GridActions actions)
+{
+    if (homes_lookup_running_ || shutting_down_ || !stay.destination || background_stop_.stop_requested()) {
+        return;
+    }
+    spawn(open_homes(stay, radius, std::move(actions)));
+}
+
+Task<> Controller::open_homes(ui::HomesStay stay, ui::HomesRadius radius, GridActions actions)
+{
+    const AirportPtr station = stay.destination;
+    CityCentreLookup lookup;
+    if (const auto known = city_centres_.find(station->iata); known != city_centres_.end()) {
+        lookup = known->second;
+    } else {
+        // No busy phase (a search may be running): the lookup runs beside it, like the rate
+        // prefetch (D-69), and only closing the window stops it.
+        std::string place = city_names::clean_name(station->name);
+        if (place.empty()) {
+            place = std::string{text::trim(station->name)};
+        }
+        log(strings::homes_lookup_log(place));
+        homes_lookup_running_ = true;
+        bool unexpected = false;
+        try {
+            lookup = co_await jobs_->run(jobs_->new_job_id(), background_stop_.get_token(),
+                                         [places = services_->places, station](const JobChannel& channel) {
+                                             return find_city_centre(*places, *station, channel.stop_token());
+                                         });
+        } catch (...) {
+            unexpected = true;  // no exception is bound here (D-64)
+        }
+        homes_lookup_running_ = false;
+        if (background_stop_.stop_requested()) {
+            co_return;  // the window is closing: open nothing
+        }
+        if (unexpected) {
+            lookup = CityCentreLookup{.centre = std::nullopt, .place_name = place, .lookup_failed = true};
+        }
+        if (!lookup.lookup_failed) {
+            city_centres_.insert_or_assign(station->iata, lookup);
+        }
+    }
+
+    const std::string stay_text = strings::homes_stay_text(
+        locale().format_date(stay.check_in, "dd MMM"), locale().format_date(stay.check_out, "dd MMM"), stay.adults);
+    std::string url;
+    if (lookup.centre) {
+        url = airbnb_links::homes_in_box(airbnb_links::box_around(lookup.centre->location, ui::radius_km(radius)),
+                                         stay.check_in, stay.check_out, stay.adults);
+        log(strings::homes_centre_log(strings::homes_radius_label(radius), lookup.centre->name, stay_text));
+    } else {
+        const std::string query = airbnb_links::place_query(lookup.place_name, station->country_name);
+        url = airbnb_links::homes_by_name(query, stay.check_in, stay.check_out, stay.adults);
+        log(strings::homes_by_name_log(query, lookup.lookup_failed, stay_text));
+    }
+    (void)open_url_or_warn(actions, url);  // a Warning box names the URL on failure
 }
 
 // ---------------------------------------------------------------------------

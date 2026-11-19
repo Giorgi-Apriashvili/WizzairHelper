@@ -8,10 +8,12 @@ A Windows desktop app that finds the cheapest Wizz Air trips from every Wizz air
 start, to every airport near where you want to go (or anywhere), over a date range — then searches
 the way back and pairs both legs into the cheapest round trips for your stay. Fares stream in while
 the search runs, prices are converted to one currency, and double-clicking a fare opens it on
-wizzair.com.
+wizzair.com. **Homes on Airbnb** (a button above each results table, also in the right-click menu)
+opens Airbnb's own search in your browser for the homes around the destination city's centre, for
+the stay dates of the selected row.
 
 WizzairHelper is an independent project. It is not affiliated with, endorsed by or connected to
-Wizz Air; its icon is original artwork, not an airline logo.
+Wizz Air or Airbnb; its icon is original artwork, not an airline logo.
 
 It follows Windows' light or dark app mode, also when you switch it while the app runs, and
 Windows' High Contrast themes.
@@ -70,6 +72,14 @@ state, log and downloads in its `updates\` subfolder. Fares fetched from Wizz Ai
 within the time chosen under **Settings > Searches > Reuse fares fetched within** (30 minutes
 unless you change it; fares for today at most 30 minutes), and the Log says how old the reused
 fares were.
+
+**Homes on Airbnb** asks Photon / Nominatim (cached like any place) where the destination city's
+centre is, then opens `airbnb.com` in your default browser on the area within **Settings >
+Searches > Homes on Airbnb within** of it (5 km unless you change it), for the selected row's stay
+dates and adults. The app itself never contacts Airbnb, and Airbnb shows its own current prices.
+Islands and regions without one city (Santorini, Gran Canaria, Malta) open Airbnb's search for
+the name instead. An outbound row stays the minimum nights of "stay N to M nights" from its date,
+a return row as many nights before it, and a round trip from the outbound to the return.
 
 Fares come from wizzair.com's unofficial website API; geocoding uses Photon / Nominatim
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.

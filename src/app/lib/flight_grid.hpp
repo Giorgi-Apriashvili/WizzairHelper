@@ -13,6 +13,8 @@
 //   * double-click / Enter open the booking URL, right-click makes the row
 //     current and opens the context menu, header clicks sort (01 §8.4, §8.8,
 //     §8.9); Copy details with the clipboard retry and its busy box;
+//   * "Homes on Airbnb" (D-72): a button at the right end of the top bar and a
+//     menu item, enabled while the current row has a stay, raise homes_requested;
 //   * the self-test accessors of 01 §8.10.
 //
 // UI thread only.
@@ -21,6 +23,7 @@
 #include "grid_actions.hpp"
 
 #include "wizz/ui/flight_rows.hpp"
+#include "wizz/ui/homes_stay.hpp"
 
 #include "wizz/core/domain.hpp"
 #include "wizz/core/locale.hpp"
@@ -33,6 +36,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -45,6 +49,7 @@ class QMenu;
 namespace wizz::app {
 
 class ElidedLabel;
+class GridBarButton;
 class GridTableView;
 
 class FlightGrid final : public QWidget {
@@ -92,8 +97,13 @@ public:
 
     /// `IsBusy()` for the context menu's third item (UI-9); not busy when unset.
     void set_busy_query(std::function<bool()> is_busy);
+    /// The stay "Homes on Airbnb" searches for a fare (D-72; asked again at every use, so it
+    /// sees the current night limits and date); while unset, or when it gives nullopt for
+    /// the current row, the button and the menu item are disabled.
+    void set_homes_query(std::function<std::optional<ui::HomesStay>(const FlightResult&)> stay_for);
     /// Browser, clipboard and MessageBox side effects (GridActions::system() by default).
     void set_actions(GridActions actions);
+    [[nodiscard]] const GridActions& actions() const noexcept { return actions_; }
 
     // --- Actions (also bound to the mouse, the keyboard and the context menu) ---------------
 
@@ -104,6 +114,10 @@ public:
     void copy_selected();
     /// "Search return flights from this destination": raises plan_return_requested(Selected).
     void request_plan_return();
+    /// The stay of the current row ("Homes on Airbnb"), or nullopt.
+    [[nodiscard]] std::optional<ui::HomesStay> selected_stay() const;
+    /// "Homes on Airbnb": raises homes_requested with the current row's stay, if it has one.
+    void request_homes();
     /// The context menu with its texts and enabled states set for the current row and
     /// IsBusy() (01 §8.9); it is shown by right-clicks, the Menu key and Shift+F10.
     QMenu* prepare_context_menu();
@@ -115,10 +129,13 @@ public:
     [[nodiscard]] QComboBox* view_combo() const noexcept { return view_; }
     [[nodiscard]] ElidedLabel* summary_label() const noexcept { return summary_; }
     [[nodiscard]] QMenu* context_menu() const noexcept { return menu_; }
+    [[nodiscard]] GridBarButton* homes_button() const noexcept { return homes_; }
 
 Q_SIGNALS:
     /// The user asked for return flights from `fare`'s destination (01 §8.9, §11.6).
     void plan_return_requested(wizz::FlightResultPtr fare);
+    /// The user asked for the homes on Airbnb around `stay`'s destination (D-72).
+    void homes_requested(const wizz::ui::HomesStay& stay);
     /// Opening a booking URL failed (after the Warning box was shown).
     void open_url_failed(const QString& url, const QString& message);
     /// After every change of the fares (Clear, Append, SetResults): tab titles (01 §5).
@@ -137,15 +154,20 @@ private:
     void update_headers();
     void update_sort_indicator();
     void sync_current_row();
+    /// The button follows whether the current row has a stay.
+    void refresh_homes();
 
     FlightTableModel* model_ = nullptr;
     GridTableView* table_ = nullptr;
     QComboBox* view_ = nullptr;
     ElidedLabel* summary_ = nullptr;
+    GridBarButton* homes_ = nullptr;
     QMenu* menu_ = nullptr;
     QAction* open_ = nullptr;
     QAction* copy_ = nullptr;
+    QAction* homes_action_ = nullptr;
     QAction* plan_return_ = nullptr;
+    std::function<std::optional<ui::HomesStay>(const FlightResult&)> stay_for_;
     QTimer clipboard_retry_;
     QString pending_copy_;
     int copy_attempts_left_ = 0;

@@ -27,10 +27,11 @@ start afresh. The program writes nowhere else.
 Network
 -------
 WizzairHelper talks to wizzair.com (fares), photon.komoot.io and
-nominatim.openstreetmap.org (places) and the exchange-rate services listed in
-THIRD-PARTY-NOTICES.txt, through the Windows proxy settings. Requests to
-Wizz Air are spaced about one second apart and a search is limited to 500
-requests.
+nominatim.openstreetmap.org (places, and the city centres for Homes on
+Airbnb) and the exchange-rate services listed in THIRD-PARTY-NOTICES.txt,
+through the Windows proxy settings. Requests to Wizz Air are spaced about one
+second apart and a search is limited to 500 requests. Homes on Airbnb opens
+airbnb.com in your browser; the program itself never contacts Airbnb.
 
 Licenses
 --------

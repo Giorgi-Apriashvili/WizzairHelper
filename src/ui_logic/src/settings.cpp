@@ -117,6 +117,8 @@ void apply_member(AppSettings& settings, const json::Member& member)
         settings.updates.when_found = read_enum(value, &parse_when_found, update::UpdateOptions{}.when_found);
     } else if (name == "ReuseFaresWithin") {
         settings.fare_reuse = read_enum(value, &parse_reuse_window, AppSettings{}.fare_reuse);
+    } else if (name == "HomesWithin") {
+        settings.homes_within = read_enum(value, &parse_homes_radius, AppSettings{}.homes_within);
     }
     // unknown properties are ignored
 }
@@ -177,6 +179,21 @@ std::string_view json_name(fare_days::ReuseWindow window) noexcept
     return "ThirtyMinutes";
 }
 
+std::string_view json_name(HomesRadius radius) noexcept
+{
+    switch (radius) {
+    case HomesRadius::two_km:
+        return "TwoKm";
+    case HomesRadius::five_km:
+        return "FiveKm";
+    case HomesRadius::ten_km:
+        return "TenKm";
+    case HomesRadius::twenty_five_km:
+        return "TwentyFiveKm";
+    }
+    return "FiveKm";
+}
+
 std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept
 {
     for (const update::CheckFrequency frequency : kFrequencies) {
@@ -202,6 +219,16 @@ std::optional<fare_days::ReuseWindow> parse_reuse_window(std::string_view text) 
     for (const fare_days::ReuseWindow window : kReuseWindows) {
         if (equals_ascii_ignoring_case(text, json_name(window))) {
             return window;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<HomesRadius> parse_homes_radius(std::string_view text) noexcept
+{
+    for (const HomesRadius radius : kHomesRadii) {
+        if (equals_ascii_ignoring_case(text, json_name(radius))) {
+            return radius;
         }
     }
     return std::nullopt;
@@ -264,6 +291,7 @@ std::string AppSettings::to_json() const
         .key("UpdateCheckFrequency").string(json_name(updates.check_frequency))
         .key("WhenUpdateFound").string(json_name(updates.when_found))
         .key("ReuseFaresWithin").string(json_name(fare_reuse))
+        .key("HomesWithin").string(json_name(homes_within))
         .end_object();
     return writer.take();
 }

@@ -7,6 +7,7 @@
 
 #include "round_trip_grid.hpp"
 #include "elided_label.hpp"
+#include "grid_bar_button.hpp"
 #include "round_trip_table_model.hpp"
 #include "grid_colors.hpp"
 #include "grid_table_view.hpp"
@@ -393,7 +394,7 @@ TEST(RoundTripGridWidget, Tab_visits_the_grid_before_the_filter_checkboxes)
     grid->set_trips(rt01_trips(), "EUR", "");
     settle();
     EXPECT_EQ(tab_stops(window), (std::vector<QWidget*>{tabs->tabBar(), grid->table(), grid->same_home_box(),
-                                                        grid->same_away_box()}));
+                                                        grid->same_away_box(), grid->homes_button()}));
 
     // Tab on the tab strip goes to the grid.
     tabs->tabBar()->setFocus(Qt::TabFocusReason);
@@ -426,12 +427,15 @@ TEST(RoundTripGridWidget, CT_RT_01_Open_one_combined_booking_or_both_one_way_boo
               "https://www.wizzair.com/en-gb/booking/select-flight/BUD/LTN/2026-11-10/2026-11-13/1/0/0/null");
     EXPECT_EQ(text_at(f.grid, 3, TripColumn::booking_notes), "one booking");
 
-    // The menu: always enabled; outbound only and return only.
-    const QList<QAction*> actions = f.grid.context_menu()->actions();
-    ASSERT_EQ(actions.size(), 3);
+    // The menu: the three booking items always enabled; outbound only and return only;
+    // then, after a separator, Homes on Airbnb (D-72).
+    const QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
+    ASSERT_EQ(actions.size(), 5);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Open outbound only"));
     EXPECT_EQ(actions[2]->text(), QStringLiteral("Open return only"));
+    EXPECT_TRUE(actions[3]->isSeparator());
+    EXPECT_EQ(actions[4]->text(), QStringLiteral("Homes on Airbnb"));
     for (const QAction* action : actions) {
         EXPECT_TRUE(action->isEnabled());
     }
@@ -443,14 +447,58 @@ TEST(RoundTripGridWidget, CT_RT_01_Open_one_combined_booking_or_both_one_way_boo
     EXPECT_EQ(f.recorder.opened[4].toStdString(), trips[3].inbound->booking_url);
     EXPECT_EQ(f.recorder.opened[5], f.recorder.opened[2]);
 
-    // No current trip: the items stay enabled and do nothing.
+    // No current trip: the booking items stay enabled and do nothing; Homes on Airbnb is off.
     f.grid.set_trips({}, "EUR", "");
-    for (QAction* action : f.grid.context_menu()->actions()) {
-        EXPECT_TRUE(action->isEnabled());
-        action->trigger();
+    const QList<QAction*> empty = f.grid.prepare_context_menu()->actions();
+    for (qsizetype i = 0; i < 3; ++i) {
+        EXPECT_TRUE(empty[i]->isEnabled());
+        empty[i]->trigger();
     }
+    EXPECT_FALSE(empty[4]->isEnabled());
+    EXPECT_FALSE(f.grid.homes_button()->isEnabled());
     f.grid.open_selected();
     EXPECT_EQ(f.recorder.opened.size(), 6u);
+}
+
+TEST(RoundTripGridWidget, D_72_Homes_on_Airbnb_requests_the_current_trips_stay)
+{
+    TripFixture f;
+    f.grid.resize(1600, 400);
+    f.grid.show();
+    EXPECT_FALSE(f.grid.homes_button()->isEnabled()) << "no trips";
+    const std::vector<RoundTrip> trips = rt01_trips();
+    f.grid.set_trips(trips, "EUR", "");
+    settle();
+    ASSERT_TRUE(f.grid.homes_button()->isEnabled());
+
+    std::vector<wizz::ui::HomesStay> requested;
+    QObject::connect(&f.grid, &RoundTripGrid::homes_requested,
+                     [&](const wizz::ui::HomesStay& stay) { requested.push_back(stay); });
+    f.grid.homes_button()->click();
+    ASSERT_EQ(requested.size(), 1u);
+    EXPECT_EQ(requested[0], *wizz::ui::stay_for_trip(*f.grid.selected(), wizz::Date::min_value()));
+
+    click(*f.grid.table(), cell_center(*f.grid.table(), 3, col(TripColumn::outbound)));
+    f.grid.prepare_context_menu()->actions()[4]->trigger();
+    ASSERT_EQ(requested.size(), 2u);
+    EXPECT_EQ(requested[1].destination, trips[3].outbound->to_airport);
+    EXPECT_EQ(requested[1].check_in, trips[3].outbound->date());
+    EXPECT_EQ(requested[1].check_out, trips[3].inbound->date());
+    EXPECT_TRUE(f.recorder.opened.empty()) << "the grid opens nothing itself";
+}
+
+TEST(RoundTripGridWidget, D_72_The_homes_button_keeps_the_bar_as_tall_as_its_check_boxes)
+{
+    // 14 round trips must stay in view at the default window (D-53): the button may not
+    // make the bar taller than its check boxes do.
+    TripFixture f;
+    f.grid.resize(1600, 400);
+    f.grid.show();
+    settle();
+    EXPECT_LE(f.grid.homes_button()->height(), f.grid.same_home_box()->height());
+    EXPECT_GE(f.grid.homes_button()->height(), f.grid.same_home_box()->height() - 2) << "about as tall";
+    EXPECT_EQ(f.grid.homes_button()->minimumSizeHint(), f.grid.homes_button()->sizeHint());
+    EXPECT_GT(f.grid.homes_button()->geometry().left(), f.grid.summary_label()->geometry().left());
 }
 
 TEST(RoundTripGridWidget, Right_click_makes_the_row_current_and_opens_the_menu)

@@ -225,6 +225,9 @@ private:
     /// The Settings window changed the reuse window of fetched fares (D-68): keep it, give it
     /// to the Wizz client for the next search and save settings.json (not in autotest).
     void apply_fare_reuse(fare_days::ReuseWindow window);
+    /// The Settings window changed how far "Homes on Airbnb" reaches (D-73): keep it for the
+    /// next use and save settings.json (not in autotest).
+    void apply_homes_radius(ui::HomesRadius radius);
 
     std::shared_ptr<const AppServices> services_;
     ui::AppSettings settings_;

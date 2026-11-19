@@ -210,5 +210,11 @@ same 34 files.
   exchange rates fetched at start (the first search shows no rate download). The offline
   equivalents are `SearchCache.Request_counts_for_repeated_shifted_and_restarted_searches` and the
   end-to-end `restart_shifted` run.
+- Homes on Airbnb (2.4.0, DECISIONS D-72, D-73) in a real browser, by the owner: Airbnb documents
+  no search URL, so whether `airbnb.com/s/homes` keeps the map box (`ne_lat` … `sw_lng`,
+  `search_by_map=true`), the dates and the adults, and how it answers `query=` for an island, is
+  checked by opening the links by hand. The city-centre rule was simulated on every station of the
+  live map but geocoded only with replayed answers; a live sweep of all destinations would send
+  about 190 to 400 Photon requests and needs the owner's consent.
 - Under `--fixed-now` the elapsed time stays `0:00` and summary `elapsedSeconds` is 0 (D-30 fixed
   clock), so the screenshots show no running time.

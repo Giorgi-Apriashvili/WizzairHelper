@@ -6,6 +6,7 @@
 // accessors. Side effects go to an ActionRecorder. en-US.
 
 #include "elided_label.hpp"
+#include "grid_bar_button.hpp"
 #include "flight_grid_samples.hpp"
 #include "grid_test_support.hpp"
 
@@ -26,7 +27,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -440,33 +444,36 @@ TEST(FlightGridBehaviour, UI_9_Context_menu_texts_and_enabled_states)
     bool busy = false;
     f.grid.set_busy_query([&] { return busy; });
     QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
-    ASSERT_EQ(actions.size(), 4);
+    ASSERT_EQ(actions.size(), 5);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Copy details"));
-    EXPECT_TRUE(actions[2]->isSeparator());
-    EXPECT_EQ(actions[3]->text(), QStringLiteral("Search return flights from this destination"));
+    EXPECT_EQ(actions[2]->text(), QStringLiteral("Homes on Airbnb"));  // D-72
+    EXPECT_TRUE(actions[3]->isSeparator());
+    EXPECT_EQ(actions[4]->text(), QStringLiteral("Search return flights from this destination"));
     EXPECT_FALSE(actions[0]->isEnabled());  // no rows: Selected is null
     EXPECT_FALSE(actions[1]->isEnabled());
-    EXPECT_FALSE(actions[3]->isEnabled());
+    EXPECT_FALSE(actions[2]->isEnabled());
+    EXPECT_FALSE(actions[4]->isEnabled());
 
     f.grid.set_results(fss01(), "EUR", "");
     actions = f.grid.prepare_context_menu()->actions();
     EXPECT_TRUE(actions[0]->isEnabled());
     EXPECT_TRUE(actions[1]->isEnabled());
-    EXPECT_TRUE(actions[3]->isEnabled());
+    EXPECT_FALSE(actions[2]->isEnabled()) << "no stay query: Homes on Airbnb stays disabled";
+    EXPECT_TRUE(actions[4]->isEnabled());
 
     busy = true;
     actions = f.grid.prepare_context_menu()->actions();
     EXPECT_TRUE(actions[0]->isEnabled());
     EXPECT_TRUE(actions[1]->isEnabled());
-    EXPECT_FALSE(actions[3]->isEnabled());
-    EXPECT_EQ(actions[3]->text().toStdString(),
+    EXPECT_FALSE(actions[4]->isEnabled());
+    EXPECT_EQ(actions[4]->text().toStdString(),
               "Search return flights from this destination (finish or cancel the current search first)");
 
     busy = false;
     actions = f.grid.prepare_context_menu()->actions();
-    EXPECT_TRUE(actions[3]->isEnabled());
-    EXPECT_EQ(actions[3]->text(), QStringLiteral("Search return flights from this destination"));
+    EXPECT_TRUE(actions[4]->isEnabled());
+    EXPECT_EQ(actions[4]->text(), QStringLiteral("Search return flights from this destination"));
 }
 
 TEST(FlightGridBehaviour, Return_grid_menu_has_no_plan_return_item)
@@ -474,10 +481,95 @@ TEST(FlightGridBehaviour, Return_grid_menu_has_no_plan_return_item)
     Fixture f{false};
     f.grid.set_results(fss01(), "EUR", "");
     const QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
-    ASSERT_EQ(actions.size(), 2);
+    ASSERT_EQ(actions.size(), 3);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Copy details"));
+    EXPECT_EQ(actions[2]->text(), QStringLiteral("Homes on Airbnb"));
     EXPECT_FALSE(f.grid.offers_plan_return());
+}
+
+TEST(FlightGridBehaviour, D_72_Homes_on_Airbnb_follows_the_current_rows_stay)
+{
+    Fixture f;
+    f.grid.resize(1200, 500);
+    f.grid.show();
+    wizz::app::GridBarButton* button = f.grid.homes_button();
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(button->text(), QStringLiteral("Homes on Airbnb"));
+    EXPECT_EQ(button->accessibleName(), QStringLiteral("Homes on Airbnb"));
+    EXPECT_FALSE(button->isEnabled()) << "no query, no rows";
+
+    std::vector<std::string> asked;  // the station codes the query was asked for
+    bool usable = true;
+    f.grid.set_homes_query([&](const wizz::FlightResult& fare) -> std::optional<wizz::ui::HomesStay> {
+        asked.push_back(fare.to_airport->iata);
+        if (!usable) {
+            return std::nullopt;
+        }
+        return wizz::ui::HomesStay{.destination = fare.to_airport, .check_in = fare.date(),
+                                   .check_out = fare.date().add_days(2), .adults = fare.adults};
+    });
+    EXPECT_FALSE(button->isEnabled()) << "still no rows";
+
+    std::vector<wizz::ui::HomesStay> requested;
+    QObject::connect(&f.grid, &wizz::app::FlightGrid::homes_requested,
+                     [&](const wizz::ui::HomesStay& stay) { requested.push_back(stay); });
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    ASSERT_TRUE(button->isEnabled());
+    const wizz::FlightResultPtr first = f.grid.selected();
+    ASSERT_NE(first, nullptr);
+
+    button->click();
+    ASSERT_EQ(requested.size(), 1u);
+    EXPECT_EQ(requested[0].destination, first->to_airport);
+    EXPECT_EQ(requested[0].check_in, first->date());
+    EXPECT_EQ(requested[0].check_out, first->date().add_days(2));
+
+    // The menu item raises the same request; a row without a stay disables both.
+    f.grid.prepare_context_menu()->actions()[2]->trigger();
+    EXPECT_EQ(requested.size(), 2u);
+    usable = false;
+    EXPECT_FALSE(f.grid.prepare_context_menu()->actions()[2]->isEnabled());
+    EXPECT_FALSE(button->isEnabled());
+    f.grid.request_homes();
+    EXPECT_EQ(requested.size(), 2u) << "nothing to request";
+    usable = true;
+
+    // Moving to another row asks again for that row.
+    asked.clear();
+    tap_key(f.grid.table(), Qt::Key_Down);
+    settle();
+    ASSERT_FALSE(asked.empty());
+    EXPECT_EQ(asked.back(), f.grid.selected()->to_airport->iata);
+    EXPECT_TRUE(button->isEnabled());
+
+    // Clearing the grid disables it.
+    f.grid.clear("EUR", false);
+    EXPECT_FALSE(button->isEnabled());
+}
+
+TEST(FlightGridBehaviour, D_72_The_homes_button_ends_the_top_bar_and_the_tab_order)
+{
+    Fixture f;
+    f.grid.resize(1200, 500);
+    f.grid.show();
+    f.grid.set_homes_query([](const wizz::FlightResult& fare) {
+        return std::optional{wizz::ui::HomesStay{
+            .destination = fare.to_airport, .check_in = fare.date(), .check_out = fare.date().add_days(1), .adults = 1}};
+    });
+    f.grid.set_results(fss01(), "EUR", "");
+    settle();
+    const wizz::app::GridBarButton* button = f.grid.homes_button();
+    EXPECT_GT(button->geometry().left(), f.grid.summary_label()->geometry().left());
+    EXPECT_LE(button->geometry().right(), f.grid.width());
+    EXPECT_LE(button->height(), f.grid.view_combo()->height()) << "it never makes the bar taller";
+    EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+    const std::vector<QWidget*> stops = tab_stops(f.grid);
+    const auto combo = std::ranges::find(stops, f.grid.view_combo());
+    ASSERT_NE(combo, stops.end());
+    ASSERT_NE(std::next(combo), stops.end());
+    EXPECT_EQ(*std::next(combo), button) << "table, view combo, then the button (01 §6.3)";
 }
 
 TEST(FlightGridBehaviour, Plan_return_raises_the_signal_with_the_selected_fare)
