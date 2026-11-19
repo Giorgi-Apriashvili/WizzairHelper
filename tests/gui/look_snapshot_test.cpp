@@ -15,7 +15,8 @@
 // alone at 100, 150 and 200 %: <look>-tab-row-settings.png, -focus-settings.png,
 // -hover-settings.png, -window-with-settings.png (the window open over the main window),
 // -settings-<state>.png (with the title bar: never, latest, checking, available,
-// downloading, ready, failed, failed-never, portable, autotest) and -update-bar-<choice>.png (the bar of
+// downloading, ready, failed, failed-never, failed-ready, portable, autotest; the update's
+// button under Check now where one is offered, D-74) and -update-bar-<choice>.png (the bar of
 // each install choice), for light, dark and High Contrast ("contrast"); every window it
 // renders has its layout checked.
 
@@ -510,16 +511,26 @@ void render_working(const QString& scheme)
                                              text::LastCheck::failed);
     UpdateStatusView failed_never = failed;
     failed_never.version_line = text::version_line(running, std::nullopt, clock, locale, text::LastCheck::failed);
+    // The update's button under Check now (D-74), as the update model offers it.
+    const auto offering = [](UpdateStatusView status, std::string_view action) {
+        status.action = std::string{action};
+        status.action_enabled = true;
+        return status;
+    };
     return {
         {QStringLiteral("never"), never},
         {QStringLiteral("latest"), view(UpdateStatusKind::up_to_date, std::string{text::kUpToDate})},
         {QStringLiteral("checking"), view(UpdateStatusKind::checking, std::string{text::kChecking})},
-        {QStringLiteral("available"), view(UpdateStatusKind::available, text::available_text(next))},
+        {QStringLiteral("available"),
+         offering(view(UpdateStatusKind::available, text::available_text(next)), text::kUpdateNow)},
         {QStringLiteral("downloading"), view(UpdateStatusKind::downloading, text::downloading_text(next))},
-        {QStringLiteral("ready"), view(UpdateStatusKind::ready, text::ready_to_install_text(next))},
+        {QStringLiteral("ready"),
+         offering(view(UpdateStatusKind::ready, text::ready_to_install_text(next)), text::kRestartAndUpdate)},
         {QStringLiteral("failed"), failed},
         {QStringLiteral("failed-never"), failed_never},
-        {QStringLiteral("portable"), portable},
+        // Check now failed while an installer is ready: the longest status beside the button.
+        {QStringLiteral("failed-ready"), offering(failed, text::kRestartAndUpdate)},
+        {QStringLiteral("portable"), offering(portable, text::kDownload)},
         {QStringLiteral("autotest"), wizz::ui::updates_off_view(running)},
     };
 }

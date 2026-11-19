@@ -68,7 +68,7 @@ The app draws its own look instead of the WinForms one of 01; these files hold i
 | `src/app/lib/modern_style.hpp/.cpp` | `ModernStyle`, the `QProxyStyle` over Fusion that paints inputs, buttons, check boxes, radio buttons, tabs, headers, scroll bars, list and menu items, popups, tooltips and focus rings from the tokens; `control_height` and `line_height`; `menu_item_font` |
 | `src/app/lib/section_card.hpp/.cpp` | `SectionCard` (a titled input card, also the Settings window's "Updates") and `GlyphLabel` (one icon glyph) |
 | `src/app/lib/settings_button.hpp/.cpp` | The gear `Settings` button in the corner of the result tabs, as tall as the tab bar (D-63) |
-| `src/app/lib/settings_dialog.hpp/.cpp` | The Settings window: the "Updates" card over `ui::UpdateStatusView` and `update::UpdateOptions` (D-62, D-63), and the "Searches" card with the reuse window of fetched fares (D-68) |
+| `src/app/lib/settings_dialog.hpp/.cpp` | The Settings window: the "Updates" card over `ui::UpdateStatusView` and `update::UpdateOptions` (D-62, D-63) with the update's button under Check now (D-74), and the "Searches" card with the reuse window of fetched fares (D-68) |
 | `src/app/lib/trailing_row_layout.hpp/.cpp` | The card row that keeps a search button at its right end and moves it under the row when it does not fit |
 | `src/app/lib/panel_progress_bar.hpp/.cpp` | The busy panel's self-painted bar, still while idle (D-34) |
 

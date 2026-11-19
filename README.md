@@ -105,7 +105,9 @@ To change this, click **Settings** (the gear at the right end of the Outbound / 
 trips / Log tabs). Its "Updates" section shows your version, when it last checked (after a
 check that failed: when it last checked successfully) and what it found, and has:
 
-- **Check now**, which checks at once, also when automatic checks are off;
+- **Check now**, which checks at once, also when automatic checks are off; when an update is
+  ready or available, its button (**Restart and update**, **Update now** or, for a portable copy,
+  **Download**) appears right under Check now, so you need not close the window to use the bar;
 - **Check for updates automatically** with **Once a day**, **Once a week** or **Once a month**
   (the first time you open the app on a new day, in a new week starting on Monday, or in a new
   month); clear the box and the app contacts GitHub only when you press Check now, or "Update now"
@@ -117,7 +119,7 @@ check that failed: when it last checked successfully) and what it found, and has
 
 Changes apply at once and are kept in `settings.json`. A portable copy shows the install choices
 greyed out, since it can only point you to the release page.
-Details: [DECISIONS D-40..D-49, D-59..D-63](docs/DECISIONS.md#self-updater).
+Details: [DECISIONS D-40..D-49, D-59..D-63, D-74](docs/DECISIONS.md#self-updater).
 
 ## License
 

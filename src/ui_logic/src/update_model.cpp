@@ -495,9 +495,11 @@ UpdateModel::Offer UpdateModel::offer() const noexcept
 
 UpdateBarView UpdateModel::bar(bool working) const
 {
-    if (dismissed_) {
-        return {};
-    }
+    return dismissed_ ? UpdateBarView{} : offer_view(working);
+}
+
+UpdateBarView UpdateModel::offer_view(bool working) const
+{
     switch (offer()) {
     case Offer::none:
         return {};
@@ -545,6 +547,7 @@ BarAction UpdateModel::on_action(bool working)
             return BarAction::none;
         }
         install_requested_ = true;
+        dismissed_ = false;  // pressed in the Settings window after "Later": the bar shows the download (D-74)
         if (!newer_pending()) {
             return BarAction::check_then_download;  // a remembered update: its release is checked for first
         }
@@ -577,7 +580,7 @@ std::optional<update::InstallerCommand> UpdateModel::exit_command() const
     return std::nullopt;
 }
 
-UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& locale) const
+UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& locale, bool working) const
 {
     UpdateStatusView view;
     view.version_line = update_strings::version_line(running_, saved_.last_success, clock, locale,
@@ -588,6 +591,9 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
     view.options_enabled = true;
     view.when_found_enabled = kind_ == update::InstallKind::installed;
     view.when_found_note = kind_ == update::InstallKind::portable ? std::string{update_strings::kPortableNote} : "";
+    UpdateBarView offered = offer_view(working);  // the bar's action, even after "Later" (D-74)
+    view.action = std::move(offered.action);
+    view.action_enabled = !view.action.empty() && offered.action_enabled;
 
     const auto set = [&view](UpdateStatusKind kind, std::string text) {
         view.kind = kind;
@@ -624,6 +630,13 @@ UpdateStatusView UpdateModel::status_view(const Clock& clock, const Locale& loca
         set(UpdateStatusKind::available, update_strings::available_text(*saved_.latest_seen));
     } else if (saved_.last_success) {
         set(UpdateStatusKind::up_to_date, std::string{update_strings::kUpToDate});
+    }
+    // Nothing is offered beside "Downloading WizzairHelper X.Y.Z…": that download is under
+    // way, and it may be of a newer release than the verified installer the bar still offers,
+    // which the button would install (D-74).
+    if (view.kind == UpdateStatusKind::downloading) {
+        view.action.clear();
+        view.action_enabled = false;
     }
     return view;
 }

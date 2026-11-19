@@ -34,8 +34,9 @@
 //     hides the bar for the rest of the session.
 //   * The Settings window's "Updates" status (UpdateStatusView): the version and the
 //     last successful check ("last checked", or "last successful check" after a failed
-//     check), and checking / up to date / available / downloading / ready / failed in
-//     plain words.
+//     check), checking / up to date / available / downloading / ready / failed in plain
+//     words, and the bar's action under Check now (D-74), so that the update a check
+//     found is one click away without closing the window.
 //   * The installer command the app runs when it closes.
 //
 // The Qt side (src/app/lib/update_controller.hpp) runs the core's checks and downloads
@@ -202,6 +203,14 @@ struct UpdateStatusView {
     bool options_enabled = true;      ///< the check box and the drop-down; false in an `off` run
     bool when_found_enabled = true;   ///< the three install choices; false for a portable copy or an `off` run
     std::string when_found_note;      ///< kPortableNote for a portable copy, else empty
+    /// The button under Check now (D-74): the update bar's action — "Restart and update",
+    /// "Update now" or "Download" — also after "Later" hid the bar; empty = none: nothing on
+    /// offer, or the status is `downloading` (a download under way — "Update now"'s, or a
+    /// newer release's while the bar still offers an older verified installer).
+    std::string action;
+    /// As in the bar: "Restart and update" and "Update now" are disabled while a search or
+    /// phase is working; "Download" (a portable copy's release page) is not.
+    bool action_enabled = false;
 
     friend bool operator==(const UpdateStatusView&, const UpdateStatusView&) = default;
 };
@@ -386,10 +395,12 @@ public:
     ///   does not vanish until the download is verified;
     /// - otherwise hidden (an installed copy downloading on its own shows nothing yet).
     [[nodiscard]] UpdateBarView bar(bool working) const;
-    /// The bar's action button: what bar() offers, unless it is disabled while `working`.
+    /// The bar's action button, or the same button of the Settings window (D-74): what
+    /// bar() offers — also after "Later" — unless it is disabled while `working`.
     /// "Restart and update" sets restart_requested(); "Update now" sets install_requested()
     /// (none when its download is already running: it restarts when verified; for a
-    /// remembered() update check_then_download).
+    /// remembered() update check_then_download) and, pressed in the Settings window after
+    /// "Later", shows the bar again with the download's progress.
     [[nodiscard]] BarAction on_action(bool working);
     /// "Later": the bar stays hidden for the rest of the session (until a manual check
     /// finds a newer release; the next start reminds again, remind()) and a pending
@@ -420,7 +431,9 @@ public:
     /// available (also a remembered update); up to date (a check this session found
     /// nothing newer); before any check this session, from saved_state(): available when
     /// it saw a newer version, up to date after a successful check, else not checked.
-    [[nodiscard]] UpdateStatusView status_view(const Clock& clock, const Locale& locale) const;
+    /// The action is the bar's (bar(working)) whether or not "Later" hid the bar, and none
+    /// while the status is downloading (D-74).
+    [[nodiscard]] UpdateStatusView status_view(const Clock& clock, const Locale& locale, bool working = false) const;
 
     [[nodiscard]] const update::Version& running() const noexcept { return running_; }
     [[nodiscard]] update::InstallKind install_kind() const noexcept { return kind_; }
@@ -437,6 +450,8 @@ private:
     };
 
     [[nodiscard]] Offer offer() const noexcept;
+    /// What bar() shows when "Later" has not hidden it.
+    [[nodiscard]] UpdateBarView offer_view(bool working) const;
     /// on_check without its bookkeeping of the checks in flight.
     [[nodiscard]] CheckOutcome take_check(const CheckResult& result, CheckOrigin origin);
     /// pending_ is newer than any ready installer.

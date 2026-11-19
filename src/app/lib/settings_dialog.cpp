@@ -13,7 +13,6 @@
 #include <QComboBox>
 #include <QEvent>
 #include <QFontMetrics>
-#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -58,6 +57,15 @@ constexpr int kNoteGap = 4;
     label->setWordWrap(wrap);
     label->setFocusPolicy(Qt::NoFocus);
     return label;
+}
+
+/// The height of two lines of `label`'s text as the label draws them (two wrapped lines are
+/// a little taller than twice the font's line spacing).
+[[nodiscard]] int two_lines(const QLabel& label)
+{
+    return label.fontMetrics()
+        .boundingRect(QRect{0, 0, 100'000, 100'000}, Qt::AlignLeft | Qt::AlignTop, QStringLiteral("Ag\nAg"))
+        .height();
 }
 
 /// The width `button` asks for with `text` on it (QPushButton::sizeHint for another text).
@@ -115,15 +123,35 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     check_now_ = new QPushButton(to_qstring(strings::kCheckNow), card_);
     check_now_->setObjectName(QStringLiteral("checkNow"));
     check_now_->setAutoDefault(false);  // Close stays the primary button; keyPressEvent clicks a focused one
-    auto* top = new QGridLayout;
+    // The update's button (D-74) under Check now, beside the status line, while one is on offer.
+    update_action_ = new QPushButton(card_);
+    update_action_->setObjectName(QStringLiteral("updateAction"));
+    update_action_->setAutoDefault(false);
+    update_action_->hide();
+    auto* version_row = new QHBoxLayout;
+    version_row->setContentsMargins(0, 0, 0, 0);
+    version_row->setSpacing(kColumnGap);
+    version_row->addWidget(version_, 1, Qt::AlignVCenter);
+    version_row->addWidget(check_now_, 0, Qt::AlignVCenter);
+    // The status line takes the whole width, less the update's button while that shows (a
+    // row of its own, so the button never narrows the version line).
+    auto* action_cell = new QVBoxLayout;
+    action_cell->setContentsMargins(0, kActionGap - kStatusGap, 0, 0);
+    action_cell->setSpacing(0);
+    action_cell->addWidget(update_action_);
+    action_cell->addStretch(1);
+    auto* status_row = new QHBoxLayout;
+    status_row->setContentsMargins(0, 0, 0, 0);
+    status_row->setSpacing(kColumnGap);
+    status_row->addWidget(status_line_, 1);
+    status_row->addLayout(action_cell);
+    auto* top = new QVBoxLayout;
     top->setContentsMargins(0, 0, 0, 0);
-    top->setHorizontalSpacing(kColumnGap);
-    top->setVerticalSpacing(kStatusGap);
-    top->addWidget(version_, 0, 0, Qt::AlignVCenter);
-    top->addWidget(check_now_, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
-    top->addWidget(status_line_, 1, 0, 1, 2);
-    top->setColumnStretch(0, 1);
+    top->setSpacing(kStatusGap);
+    top->addLayout(version_row);
+    top->addLayout(status_row);
     body->addLayout(top);  // the status line's second line, empty or not, separates the next group
+    status_line_->installEventFilter(this);  // its width decides how its text sits beside the button
 
     // Automatic checks and how often.
     automatic_ = new QCheckBox(to_qstring(strings::kCheckAutomatically), card_);
@@ -248,8 +276,9 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     buttons->addWidget(close_);
     outer->addLayout(buttons);
 
-    // Reading order (D-63).
-    QWidget::setTabOrder(check_now_, automatic_);
+    // Reading order (D-63, D-74).
+    QWidget::setTabOrder(check_now_, update_action_);
+    QWidget::setTabOrder(update_action_, automatic_);
     QWidget::setTabOrder(automatic_, frequency_);
     QWidget* previous = frequency_;
     for (QAbstractButton* button : when_found_->buttons()) {
@@ -261,6 +290,7 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     QWidget::setTabOrder(homes_, close_);
 
     connect(check_now_, &QPushButton::clicked, this, &SettingsDialog::check_now_requested);
+    connect(update_action_, &QPushButton::clicked, this, &SettingsDialog::update_action_requested);
     connect(close_, &QPushButton::clicked, this, &QDialog::accept);
     connect(automatic_, &QCheckBox::toggled, this, [this] {
         update_enabled_states();
@@ -390,7 +420,48 @@ void SettingsDialog::show_status(const ui::UpdateStatusView& status)
     note_row_->setVisible(!note.isEmpty());
     apply_status_colour();
     update_enabled_states();
+    show_update_action();
     fit_size();
+}
+
+void SettingsDialog::show_update_action()
+{
+    const QString text = to_qstring(status_.action);
+    if (update_action_->text() != text) {
+        update_action_->setText(text);
+    }
+    update_action_->setVisible(!text.isEmpty());
+    centre_status_on_action();
+}
+
+void SettingsDialog::centre_status_on_action()
+{
+    // Beside the update's button the status's text is centred on the button (D-74), within
+    // the room of two lines the status line keeps, so the window keeps its height; a longer
+    // text starts at the top as it does without the button.
+    int top = 0;
+    if (update_action_->isVisibleTo(this) && status_line_->width() > 0) {
+        // The text's own height (QLabel::heightForWidth would include the two lines' room).
+        const QFontMetrics metrics = status_line_->fontMetrics();
+        const int text = metrics
+                             .boundingRect(QRect{0, 0, status_line_->width(), 100'000},
+                                           Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, status_line_->text())
+                             .height();
+        const int room = two_lines(*status_line_);
+        top = std::clamp(kActionGap - kStatusGap + (update_action_->sizeHint().height() - text) / 2, 0,
+                         std::max(0, room - text));
+    }
+    if (status_line_->contentsMargins().top() != top) {
+        status_line_->setContentsMargins(0, top, 0, 0);
+    }
+}
+
+bool SettingsDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == status_line_ && event->type() == QEvent::Resize) {
+        centre_status_on_action();
+    }
+    return QDialog::eventFilter(watched, event);
 }
 
 QColor SettingsDialog::status_colour(ui::UpdateStatusKind kind)
@@ -430,10 +501,15 @@ void SettingsDialog::update_enabled_states()
     // next Space (to check again, say) would turn automatic checks off and save that. The
     // focus waits on the status line instead, which reports the check (a screen reader
     // reads it), and comes back when Check now does — unless the user moved it meanwhile.
-    if (!status_.check_now_enabled && focusWidget() == check_now_) {
+    // The update's button does the same when it hides or is disabled under the focus
+    // ("Update now" starts its download, D-74).
+    const bool action_usable = !status_.action.empty() && status_.action_enabled;
+    if ((!status_.check_now_enabled && focusWidget() == check_now_) ||
+        (!action_usable && focusWidget() == update_action_)) {
         status_line_->setFocus(Qt::OtherFocusReason);
         check_now_focus_parked_ = true;
     }
+    update_action_->setEnabled(status_.action_enabled);
     check_now_->setEnabled(status_.check_now_enabled);
     if (status_.check_now_enabled && std::exchange(check_now_focus_parked_, false) && focusWidget() == status_line_) {
         check_now_->setFocus(Qt::OtherFocusReason);
@@ -476,7 +552,8 @@ void SettingsDialog::fit_size()
     check_now_->setMinimumWidth(std::max(button_width(*check_now_, to_qstring(strings::kCheckNow)),
                                          button_width(*check_now_, to_qstring(strings::kCheckNowBusy))));
     // The status line keeps room for two lines, so the usual statuses never resize the window.
-    status_line_->setMinimumHeight(2 * status_line_->fontMetrics().lineSpacing());
+    status_line_->setMinimumHeight(two_lines(*status_line_));
+    centre_status_on_action();
     QLayout* const top = layout();
     top->invalidate();
     const int height = top->hasHeightForWidth() ? top->totalHeightForWidth(kClientWidth) : top->totalSizeHint().height();

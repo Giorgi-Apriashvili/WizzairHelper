@@ -111,7 +111,7 @@ void UpdateController::start()
 
 ui::UpdateStatusView UpdateController::status_view() const
 {
-    return model_.status_view(hooks_.backend->clock(), *hooks_.locale);
+    return model_.status_view(hooks_.backend->clock(), *hooks_.locale, working_);
 }
 
 void UpdateController::evaluate()
@@ -317,7 +317,7 @@ Task<> UpdateController::download()
 void UpdateController::set_working(bool working)
 {
     working_ = working;
-    refresh_bar();
+    refresh();  // the bar's action and the Settings window's (D-74) wait while work runs
 }
 
 void UpdateController::trigger_action()

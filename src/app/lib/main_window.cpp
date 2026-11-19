@@ -427,6 +427,8 @@ SettingsDialog* MainWindow::open_settings()
     if (updates_ != nullptr) {
         UpdateController* const updates = updates_;
         connect(dialog, &SettingsDialog::check_now_requested, updates, &UpdateController::check_now);
+        // The update's button under Check now does what the bar's action does (D-74).
+        connect(dialog, &SettingsDialog::update_action_requested, updates, &UpdateController::trigger_action);
         // A check or a download shows live, and so does what the bar's buttons did (D-62).
         connect(updates, &UpdateController::status_changed, dialog,
                 [dialog, updates] { dialog->show_status(updates->status_view()); });

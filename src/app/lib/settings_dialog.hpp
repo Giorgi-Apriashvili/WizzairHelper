@@ -1,11 +1,13 @@
 #pragma once
-// The Settings window (DECISIONS D-62, D-63, D-68, D-73): a fixed, window-modal dialog owned by
+// The Settings window (DECISIONS D-62, D-63, D-68, D-73, D-74): a fixed, window-modal dialog owned by
 // the main window (no minimise / maximise, no taskbar button), titled "Settings", with two
 // cards, "Updates" and "Searches":
 //
 //   ┌ (⟳) UPDATES ─────────────────────────────────────────────────┐
 //   │ WizzairHelper 2.1.0 · last checked today at 15:53  [Check now] │
 //   │ You have the latest version.                                   │
+//   │   — or, with an update on offer (D-74):                        │
+//   │ WizzairHelper 2.2.0 is ready to install. [Restart and update]  │
 //   │                                                                │
 //   │ [x] Check for updates automatically   [Once a day      v]      │
 //   │                                                                │
@@ -29,8 +31,17 @@
 // reports what the user does and changes nothing itself: options_changed() after every
 // change of the check box, the drop-down or the choice, fare_reuse_changed() and
 // homes_radius_changed() after a change of theirs (they apply at once; the main window
-// saves settings.json), check_now_requested() for Check now. show_status() follows the controller while the window is open, so a check or
-// download shows live; Check now is disabled and reads "Checking…" while it runs.
+// saves settings.json), check_now_requested() for Check now, update_action_requested() for
+// the update's button. show_status() follows the controller while the window is open, so a
+// check or download shows live; Check now is disabled and reads "Checking…" while it runs.
+//
+//   * The update's button (D-74) shows the update bar's action — "Restart and update",
+//     "Update now" or "Download" (ui::UpdateStatusView::action) — right under Check now,
+//     right-aligned, beside the status line, whose text is centred on it. It is hidden
+//     when nothing is on offer and while the status says "Downloading…"; "Restart and
+//     update" and "Update now" are disabled while a search runs, as in the bar. So the
+//     update Check now found is installed from here, not from the bar behind the window.
+//     It costs no height: it fits in the room the status line keeps.
 //
 //   * The status line takes the theme's success colour when up to date, the failure
 //     colour when something failed, the secondary text colour while checking or
@@ -42,13 +53,18 @@
 //     disabled in a run without updates (--autotest, --replay). The reuse window and the
 //     homes distance are always enabled.
 //   * Close is the default (primary) button; Enter clicks the focused push button (Check
-//     now or Close), else Close; Esc and the title bar's close box close too.
-//   * Tab order: Check now, the check box, the drop-down, the selected choice (the arrow
+//     now, the update's button or Close), else Close; Esc and the title bar's close box
+//     close too.
+//   * Tab order: Check now, the update's button, the check box, the drop-down, the selected choice (the arrow
 //     keys move among the three and select — and so apply — each one, as an exclusive
-//     radio group does), the reuse window, the homes distance, Close. Focus starts on the first of them that is
-//     enabled (the reuse window in a run without updates). When
+//     radio group does), the reuse window, the homes distance, Close. Focus starts on the
+//     first of Check now, the check box and the reuse window that is enabled (the reuse
+//     window in a run without updates) — never on the update's button, so an Enter right
+//     after opening cannot restart the app. When
 //     Check now is disabled under the focus (its check or a download runs), the focus
-//     waits on the status line and returns to Check now when it is enabled again.
+//     waits on the status line and returns to Check now when it is enabled again; so does
+//     the focus of the update's button when that hides or is disabled ("Update now" starts
+//     its download).
 //   * Look (D-53): the window colour behind a SectionCard, the UI font, ModernStyle's
 //     controls (radio buttons included), every colour taken from the theme again when the
 //     look changes; High Contrast uses the plain native style and the system colours.
@@ -88,6 +104,8 @@ public:
     /// Between the groups inside the card (status, automatic checks, the choices), and
     /// between the two cards.
     static constexpr int kGroupGap = 12;
+    /// Between Check now and the update's button under it (D-74).
+    static constexpr int kActionGap = 6;
 
     SettingsDialog(const update::UpdateOptions& options, const ui::UpdateStatusView& status,
                    fare_days::ReuseWindow fare_reuse, QWidget* parent = nullptr);
@@ -114,6 +132,8 @@ public:
     [[nodiscard]] QLabel* version_label() const noexcept { return version_; }
     [[nodiscard]] QLabel* status_label() const noexcept { return status_line_; }
     [[nodiscard]] QPushButton* check_now_button() const noexcept { return check_now_; }
+    /// "Restart and update", "Update now" or "Download" under Check now (D-74).
+    [[nodiscard]] QPushButton* update_action_button() const noexcept { return update_action_; }
     [[nodiscard]] QCheckBox* check_automatically_box() const noexcept { return automatic_; }
     [[nodiscard]] QComboBox* frequency_box() const noexcept { return frequency_; }
     [[nodiscard]] QLabel* when_found_caption() const noexcept { return when_found_caption_; }
@@ -136,6 +156,8 @@ Q_SIGNALS:
     void options_changed(const wizz::update::UpdateOptions& options);
     /// Check now was pressed.
     void check_now_requested();
+    /// The update's button was pressed (the update bar's action, D-74).
+    void update_action_requested();
     /// The user chose another reuse window of fetched fares.
     void fare_reuse_changed(wizz::fare_days::ReuseWindow window);
     /// The user chose another distance for "Homes on Airbnb".
@@ -144,11 +166,16 @@ Q_SIGNALS:
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void changeEvent(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void report_options();
     void apply_status_colour();
     void update_enabled_states();
+    /// Shows or hides the update's button.
+    void show_update_action();
+    /// Beside the update's button, the status's text centred on it (within its two lines).
+    void centre_status_on_action();
     /// Fixes the size: kClientWidth wide, as tall as the layout needs at that width.
     void fit_size();
 
@@ -157,6 +184,7 @@ private:
     QLabel* version_ = nullptr;
     QLabel* status_line_ = nullptr;
     QPushButton* check_now_ = nullptr;
+    QPushButton* update_action_ = nullptr;
     QCheckBox* automatic_ = nullptr;
     QComboBox* frequency_ = nullptr;
     QLabel* when_found_caption_ = nullptr;
@@ -174,7 +202,8 @@ private:
     QPushButton* close_ = nullptr;
     bool showing_ = false;
     bool fitting_ = false;
-    /// Check now had the focus when it was disabled: the status line holds it until then.
+    /// Check now (or the update's button) had the focus when it was disabled or hidden: the
+    /// status line holds it until Check now is enabled.
     bool check_now_focus_parked_ = false;
 };
 

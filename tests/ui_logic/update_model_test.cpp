@@ -938,6 +938,122 @@ TEST(UpdateModel, A_manual_check_shows_the_bar_again_after_Later)
     EXPECT_TRUE(up_to_date.dismissed()) << "nothing to show";
 }
 
+TEST(UpdateModel, D_74_The_status_offers_the_bars_action_also_after_Later)
+{
+    const auto status_while = [](const UpdateModel& model, bool working) {
+        return model.status_view(settings_clock(), *wizz::Locale::en_us(), working);
+    };
+    // Install on close: nothing to press while it downloads on its own, then Restart and update.
+    UpdateModel model{kRunning, InstallKind::installed};
+    EXPECT_EQ(status(model).action, "") << "nothing on offer";
+    EXPECT_FALSE(status(model).action_enabled);
+    (void)model.on_check(found(kNew), CheckOrigin::manual);
+    EXPECT_EQ(status(model).action, "") << "downloading on its own: nothing to press yet";
+    (void)run_download(model, downloaded(kNew));
+    UpdateStatusView view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::ready);
+    EXPECT_EQ(view.action, "Restart and update");
+    EXPECT_TRUE(view.action_enabled);
+    EXPECT_EQ(view.action, model.bar(false).action) << "the bar's very action";
+    view = status_while(model, true);
+    EXPECT_EQ(view.action, "Restart and update");
+    EXPECT_FALSE(view.action_enabled) << "it waits for the search, as the bar does";
+    EXPECT_FALSE(model.bar(true).action_enabled);
+    model.dismiss();
+    EXPECT_FALSE(model.bar(false).visible);
+    EXPECT_EQ(status(model).action, "Restart and update") << "Later hides the bar, not the update";
+    EXPECT_TRUE(status(model).action_enabled);
+    EXPECT_EQ(model.on_action(false), BarAction::restart);
+    EXPECT_TRUE(model.restart_requested());
+
+    // Only tell me: Update now, gone while its download runs.
+    UpdateModel notify{kRunning, InstallKind::installed, UpdateOptions{.when_found = WhenFound::notify_only}};
+    (void)notify.on_check(found(kNew), CheckOrigin::manual);
+    EXPECT_EQ(status(notify).kind, UpdateStatusKind::available);
+    EXPECT_EQ(status(notify).action, "Update now");
+    EXPECT_TRUE(status(notify).action_enabled);
+    EXPECT_FALSE(status_while(notify, true).action_enabled);
+    ASSERT_EQ(notify.on_action(false), BarAction::download);
+    notify.begin_download();
+    EXPECT_EQ(status(notify).kind, UpdateStatusKind::downloading);
+    EXPECT_EQ(status(notify).action, "") << "under way: nothing more to press";
+    EXPECT_FALSE(status(notify).action_enabled);
+
+    // A portable copy: Download, also while a search runs (it only opens the page).
+    UpdateModel portable{kRunning, InstallKind::portable};
+    (void)portable.on_check(found(kNew));
+    EXPECT_EQ(status(portable).action, "Download");
+    EXPECT_TRUE(status_while(portable, true).action_enabled);
+
+    // An update put off in an earlier session: Update now checks for it first.
+    UpdateModel put_off{kRunning, InstallKind::installed};
+    (void)put_off.remind(wizz::ui::EarlierUpdate{.version = kNew, .page_url = {}, .installer = std::nullopt});
+    EXPECT_EQ(status(put_off).action, "Update now");
+
+    EXPECT_EQ(wizz::ui::updates_off_view(kRunning).action, "") << "a run without updates offers nothing";
+}
+
+TEST(UpdateModel, D_74_No_button_beside_Downloading_even_while_an_older_installer_is_ready)
+{
+    // Ask first: 1.2.0 is verified and offered; a later check finds 1.3.0, which downloads on
+    // its own while the bar still offers 1.2.0. The status names the download, so the button
+    // beside it, which would install 1.2.0, is not offered until 1.3.0 is verified.
+    const Version newer{1, 3, 0};
+    UpdateModel model{kRunning, InstallKind::installed, UpdateOptions{.when_found = WhenFound::download_then_ask}};
+    (void)model.on_check(found(kNew));
+    (void)run_download(model, downloaded(kNew));
+    ASSERT_EQ(status(model).action, "Restart and update");
+    ASSERT_TRUE(model.on_check(found(newer)).download);
+    model.begin_download();
+    UpdateStatusView view = status(model);
+    EXPECT_EQ(view.kind, UpdateStatusKind::downloading);
+    EXPECT_EQ(view.status, "Downloading WizzairHelper 1.3.0\u2026");
+    EXPECT_EQ(view.action, "");
+    EXPECT_FALSE(view.action_enabled);
+    EXPECT_EQ(model.bar(false).text, "WizzairHelper 1.2.0 is ready to install.") << "the bar still offers 1.2.0";
+    EXPECT_EQ(model.bar(false).action, "Restart and update");
+    (void)model.on_download(downloaded(newer), false);
+    view = status(model);
+    EXPECT_EQ(view.status, "WizzairHelper 1.3.0 is ready to install.");
+    EXPECT_EQ(view.action, "Restart and update") << "offered again with the version it installs";
+
+    // Later during "Update now"'s download: the status still says Downloading, so no
+    // second "Update now" beside it.
+    UpdateModel notify{kRunning, InstallKind::installed, UpdateOptions{.when_found = WhenFound::notify_only}};
+    (void)notify.on_check(found(kNew));
+    ASSERT_EQ(notify.on_action(false), BarAction::download);
+    notify.begin_download();
+    notify.dismiss();
+    EXPECT_EQ(status(notify).kind, UpdateStatusKind::downloading);
+    EXPECT_EQ(status(notify).action, "");
+}
+
+TEST(UpdateModel, D_74_Update_now_pressed_after_Later_shows_the_bar_again)
+{
+    // Later hid the bar; Update now pressed in the Settings window brings it back with the
+    // download's progress, so a restart never comes out of nowhere.
+    UpdateModel model{kRunning, InstallKind::installed, UpdateOptions{.when_found = WhenFound::notify_only}};
+    (void)model.on_check(found(kNew));
+    model.dismiss();
+    ASSERT_FALSE(model.bar(false).visible);
+    EXPECT_EQ(model.on_action(false), BarAction::download);
+    EXPECT_FALSE(model.dismissed());
+    EXPECT_TRUE(model.install_requested());
+    model.begin_download();
+    const UpdateBarView bar = model.bar(false);
+    EXPECT_TRUE(bar.visible);
+    EXPECT_EQ(bar.text, "Downloading WizzairHelper 1.2.0…");
+    const UpdateModel::DownloadOutcome outcome = model.on_download(downloaded(kNew), false);
+    EXPECT_TRUE(outcome.restart);
+
+    // Pressed while a search runs, it does nothing and Later still holds.
+    UpdateModel busy{kRunning, InstallKind::installed, UpdateOptions{.when_found = WhenFound::notify_only}};
+    (void)busy.on_check(found(kNew));
+    busy.dismiss();
+    EXPECT_EQ(busy.on_action(true), BarAction::none);
+    EXPECT_TRUE(busy.dismissed());
+}
+
 TEST(UpdateModel, The_status_before_any_check_comes_from_update_state_json)
 {
     UpdateModel model{Version{2, 1, 0}, InstallKind::installed};

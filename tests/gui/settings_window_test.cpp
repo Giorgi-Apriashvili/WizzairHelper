@@ -164,6 +164,58 @@ void wait_idle(UpdateRig& rig)
     return widget->palette().color(QPalette::WindowText);
 }
 
+/// The first and last rows of `area` with a pixel far (more than 64 in a channel) from
+/// `background`: the ink of the text drawn on it.
+[[nodiscard]] std::optional<std::pair<int, int>> ink_rows(const QImage& image, const QRect& area,
+                                                          const QColor& background)
+{
+    std::optional<std::pair<int, int>> rows;
+    for (int y = area.top(); y <= area.bottom(); ++y) {
+        if (pixels_near(image, QRect{area.left(), y, area.width(), 1}, background, 64) < area.width()) {
+            rows = std::pair{rows ? rows->first : y, y};
+        }
+    }
+    return rows;
+}
+
+/// `widget`'s rectangle in `ancestor`'s coordinates.
+[[nodiscard]] QRect rect_in(const QWidget& widget, const QWidget& ancestor)
+{
+    return QRect{widget.mapTo(&ancestor, QPoint{0, 0}), widget.size()};
+}
+
+/// The update's button (D-74) sits right under Check now with their right edges aligned,
+/// the status line leaves it its column, and the status's first line is centred on it:
+/// its ink spans the rows of the button label's ink.
+void expect_under_check_now(SettingsDialog& dialog, const char* state)
+{
+    const QPushButton& action = *dialog.update_action_button();
+    const QPushButton& check_now = *dialog.check_now_button();
+    const QLabel& status = *dialog.status_label();
+    QWidget& card = *dialog.updates_card();  // grab() is not const
+    ASSERT_TRUE(action.isVisible()) << state;
+    const QRect button = rect_in(action, card);
+    const QRect above = rect_in(check_now, card);
+    EXPECT_EQ(button.right(), above.right()) << state << ": right-aligned under Check now";
+    EXPECT_EQ(button.top() - above.bottom() - 1, SettingsDialog::kActionGap) << state << ": just under it";
+    const QRect line = rect_in(status, card);
+    EXPECT_LT(line.right(), button.left()) << state << ": the status line leaves the button its column";
+    EXPECT_TRUE(wizz::app::is_fully_visible(action)) << state;
+
+    const QImage image = card.grab().toImage();
+    ASSERT_EQ(image.size(), card.size()) << "grabbed at 100 %";
+    // Inside the button's frame, on its fill; the status on the card behind its top-right corner.
+    const QRect inside = button.adjusted(4, 4, -4, -4);
+    const std::optional<std::pair<int, int>> label_ink =
+        ink_rows(image, inside, image.pixelColor(inside.left(), inside.center().y()));
+    const std::optional<std::pair<int, int>> status_ink =
+        ink_rows(image, line, image.pixelColor(line.right(), line.top()));
+    ASSERT_TRUE(label_ink.has_value()) << state << ": the button's label is drawn";
+    ASSERT_TRUE(status_ink.has_value()) << state << ": the status is drawn";
+    EXPECT_LE(std::abs(status_ink->first - label_ink->first), 1) << state << ": the status's first line is centred on it";
+    EXPECT_LE(std::abs(status_ink->second - label_ink->second), 1) << state;
+}
+
 // ---------------------------------------------------------------------------
 // The gear at the end of the tab row
 // ---------------------------------------------------------------------------
@@ -324,16 +376,17 @@ TEST(SettingsWindow, Check_now_keeps_the_keyboard_focus_through_its_check)
     ASSERT_EQ(dialog.status().kind, UpdateStatusKind::ready);
     EXPECT_EQ(dialog.focusWidget(), check_now);
 
-    // Moved away meanwhile, the focus stays where the user put it.
+    // Moved away meanwhile, the focus stays where the user put it: on the update's button
+    // (D-74), the next stop after Check now while the installer is ready.
     rig.clock->advance(std::chrono::minutes{1});
     rig.backend->script_checks({std::unexpected(update_error(UpdateErrorKind::network, "no route to host"))});
     gui::tap_key(check_now, Qt::Key_Space);
     EXPECT_EQ(dialog.focusWidget(), dialog.status_label());
-    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.check_automatically_box()}))
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.update_action_button()}))
         << "Tab moves on from the status line";
     wait_idle(rig);
     EXPECT_TRUE(check_now->isEnabled());
-    EXPECT_EQ(dialog.focusWidget(), dialog.check_automatically_box());
+    EXPECT_EQ(dialog.focusWidget(), dialog.update_action_button());
 }
 
 TEST(SettingsWindow, Is_a_fixed_modal_window_of_the_main_window_and_closes_with_Close_or_Esc)
@@ -649,6 +702,160 @@ TEST(SettingsWindow, With_checks_off_an_offered_update_keeps_Update_now_when_the
     EXPECT_TRUE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
 }
 
+// ---------------------------------------------------------------------------
+// The update's button under Check now (D-74)
+// ---------------------------------------------------------------------------
+
+TEST(SettingsWindow, D_74_Check_now_that_finds_an_update_offers_Restart_and_update_under_it)
+{
+    UpdateRig rig;
+    rig.start();  // up to date
+    SettingsDialog& dialog = open_settings(rig.window());
+    QPushButton* action = dialog.update_action_button();
+    EXPECT_FALSE(action->isVisible()) << "nothing on offer";
+    const QSize size = dialog.size();
+    const int status_width = dialog.status_label()->width();
+
+    // Install on close (the default) downloads first: nothing to press until it is verified.
+    rig.clock->advance(std::chrono::minutes{5});
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.backend->hold_downloads();
+    dialog.check_now_button()->click();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_FALSE(action->isVisible()) << "downloading";
+    rig.backend->release_downloads();
+    ASSERT_TRUE(gui::wait_until([&] { return dialog.status().kind == UpdateStatusKind::ready; }));
+    gui::settle();
+    ASSERT_TRUE(action->isVisible());
+    EXPECT_EQ(action->text(), "Restart and update");
+    EXPECT_TRUE(action->isEnabled());
+    EXPECT_FALSE(action->isDefault()) << "Close stays the primary button";
+    EXPECT_EQ(dialog.status_label()->text(), "WizzairHelper 1.2.0 is ready to install.");
+    expect_under_check_now(dialog, "ready");
+    EXPECT_EQ(dialog.size(), size) << "the button costs no height";
+    EXPECT_LT(dialog.status_label()->width(), status_width);
+    EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{});
+    EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "the focus stays where it was";
+    EXPECT_EQ(press_tab(dialog, 2), (std::vector<QWidget*>{action, dialog.check_automatically_box()}))
+        << "Check now, the update's button, the check box";
+    QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(action);
+    ASSERT_NE(accessible, nullptr);
+    EXPECT_EQ(accessible->text(QAccessible::Name), "Restart and update");
+
+    // Enter on it restarts into the installer, as the bar's button does, with the window open.
+    action->setFocus(Qt::TabFocusReason);
+    gui::send_key(action, QEvent::KeyPress, Qt::Key_Return);
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); }));
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_TRUE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
+}
+
+TEST(SettingsWindow, D_74_Update_now_under_Check_now_downloads_then_restarts_and_parks_the_focus)
+{
+    UpdateRig rig{rig_options(options(WhenFound::notify_only))};
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    rig.backend->script_checks({release_info(kNewVersion)});
+    dialog.check_now_button()->click();
+    wait_idle(rig);
+    QPushButton* action = dialog.update_action_button();
+    ASSERT_TRUE(action->isVisible());
+    EXPECT_EQ(action->text(), "Update now");
+    EXPECT_EQ(dialog.status_label()->text(), "WizzairHelper 1.2.0 is available.");
+    expect_under_check_now(dialog, "available");
+    EXPECT_TRUE(rig.backend->downloaded().empty()) << "nothing downloaded until the user asks";
+
+    // Pressed with Space, it starts the download and hides; the focus waits on the status
+    // line, not on the check box, where the next Space would turn automatic checks off.
+    rig.backend->hold_downloads();
+    action->setFocus(Qt::TabFocusReason);
+    gui::tap_key(action, Qt::Key_Space);
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    EXPECT_FALSE(action->isVisible()) << "under way: nothing more to press";
+    EXPECT_EQ(dialog.status_label()->text(), q("Downloading WizzairHelper 1.2.0…"));
+    EXPECT_EQ(dialog.status_label()->contentsMargins().top(), 0) << "the status moves back to the top";
+    EXPECT_EQ(dialog.focusWidget(), dialog.status_label());
+    gui::tap_key(dialog.focusWidget(), Qt::Key_Space);
+    EXPECT_TRUE(dialog.check_automatically_box()->isChecked()) << "automatic checks untouched";
+    ASSERT_TRUE(rig.bar().isVisible());
+    EXPECT_EQ(rig.bar().message_label()->text(), q("Downloading WizzairHelper 1.2.0…"));
+    rig.backend->release_downloads();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); })) << "verified: the app restarts";
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_TRUE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
+}
+
+TEST(SettingsWindow, D_74_After_Later_the_window_still_offers_the_update_and_the_bar_comes_back_for_it)
+{
+    UpdateRig rig{rig_options(options(WhenFound::notify_only))};
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.start();
+    ASSERT_TRUE(rig.bar().isVisible());
+    rig.bar().later_button()->click();
+    gui::settle();
+    ASSERT_FALSE(rig.bar().isVisible());
+    SettingsDialog& dialog = open_settings(rig.window());
+    QPushButton* action = dialog.update_action_button();
+    ASSERT_TRUE(action->isVisible()) << "Later hid the bar, not the update";
+    EXPECT_EQ(action->text(), "Update now");
+    rig.backend->hold_downloads();
+    action->click();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.backend->downloads_started() == 1; }));
+    gui::settle();
+    ASSERT_TRUE(rig.bar().isVisible()) << "the download shows in the bar again";
+    EXPECT_EQ(rig.bar().message_label()->text(), q("Downloading WizzairHelper 1.2.0…"));
+    dialog.close_button()->click();
+    rig.backend->release_downloads();
+    ASSERT_TRUE(gui::wait_until([&] { return !rig.window().isVisible(); })) << "verified: the app restarts";
+    ASSERT_EQ(rig.launches.commands.size(), 1u);
+    EXPECT_TRUE(rig.launches.commands.front().command_line().ends_with(L" /RELAUNCH"));
+}
+
+TEST(SettingsWindow, D_74_Restart_and_update_under_Check_now_waits_for_a_running_search)
+{
+    UpdateRig rig{rig_options(options(WhenFound::download_then_ask))};
+    rig.backend->schedule().record_success(kNewVersion);  // an earlier session today saw 1.2.0
+    rig.backend->place_verified_installer(kNewVersion);
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    QPushButton* action = dialog.update_action_button();
+    ASSERT_TRUE(action->isVisible());
+    EXPECT_EQ(action->text(), "Restart and update");
+    action->setFocus(Qt::TabFocusReason);
+    rig.controller()->set_working(true);  // as Controller::working_changed reports a search
+    gui::settle();
+    EXPECT_TRUE(action->isVisible());
+    EXPECT_FALSE(action->isEnabled()) << "it waits for the search, as the bar's button does";
+    EXPECT_FALSE(rig.bar().action_button()->isEnabled());
+    EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "the focus moves back to Check now, not on";
+    rig.controller()->set_working(false);
+    gui::settle();
+    EXPECT_TRUE(action->isEnabled());
+    EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button());
+    EXPECT_TRUE(rig.launches.commands.empty());
+}
+
+TEST(SettingsWindow, D_74_A_portable_copy_offers_Download_under_Check_now)
+{
+    UpdateRig rig{rig_options(options(WhenFound::install_on_close), InstallKind::portable)};
+    rig.backend->script_checks({release_info(kNewVersion)});
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    QPushButton* action = dialog.update_action_button();
+    ASSERT_TRUE(action->isVisible());
+    EXPECT_EQ(action->text(), "Download");
+    action->click();
+    EXPECT_EQ(rig.launches.opened_pages, std::vector<std::string>{release_info(kNewVersion).html_url})
+        << "the release page, as the bar's button opens";
+    EXPECT_TRUE(rig.window().isVisible());
+    EXPECT_EQ(rig.window().settings_dialog(), &dialog) << "the window stays open";
+    EXPECT_TRUE(action->isVisible());
+}
+
 TEST(SettingsWindow, A_portable_copy_shows_the_install_choices_disabled_with_the_reason)
 {
     UpdateRig rig{rig_options(options(WhenFound::install_on_close), InstallKind::portable)};
@@ -916,7 +1123,22 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     failed.version_line = "WizzairHelper 22.10.10 · last successful check on Wed 30 Sep 2026 at 23:59";
     UpdateStatusView failed_never = failed;
     failed_never.version_line = "WizzairHelper 22.10.10 · no successful check yet";
+    // With the update's button under Check now (D-74).
+    const auto offering = [](UpdateStatusView status, std::string_view action, bool enabled = true) {
+        status.action = std::string{action};
+        status.action_enabled = enabled;
+        return status;
+    };
+    UpdateStatusView ready = view(UpdateStatusKind::ready, "WizzairHelper 22.10.10 is ready to install.");
+    // Check now failed while an installer is ready: the longest text beside the button.
+    UpdateStatusView failed_ready = offering(failed, strings::kRestartAndUpdate);
     return {
+        {"available, Update now",
+         offering(view(UpdateStatusKind::available, "WizzairHelper 22.10.10 is available."), strings::kUpdateNow)},
+        {"ready, Restart and update", offering(ready, strings::kRestartAndUpdate)},
+        {"ready, a search runs", offering(ready, strings::kRestartAndUpdate, false)},
+        {"portable, Download", offering(portable, strings::kDownload)},
+        {"failed, Restart and update", failed_ready},
         {"not checked", never},
         {"latest", view(UpdateStatusKind::up_to_date, std::string{strings::kUpToDate})},
         {"checking", view(UpdateStatusKind::checking, std::string{strings::kChecking})},
@@ -951,8 +1173,14 @@ TEST(SettingsWindow, Lays_out_cleanly_in_every_state_and_fits_the_minimum_window
             << name << ": the status is not cut";
         EXPECT_TRUE(wizz::app::is_fully_visible(*dialog.close_button())) << name;
         EXPECT_EQ(dialog.note_label()->isVisible(), !status.when_found_note.empty()) << name;
-        // The usual statuses (one or two lines) keep one height, so the window never jumps.
-        if (status.when_found_note.empty() && name != "failed long") {
+        EXPECT_EQ(dialog.update_action_button()->isVisible(), !status.action.empty()) << name;
+        EXPECT_EQ(dialog.update_action_button()->isEnabled(), status.action_enabled) << name;
+        if (name == "available, Update now" || name == "ready, Restart and update") {
+            expect_under_check_now(dialog, name.c_str());  // a label with a descender, like the status
+        }
+        // Every status of one or two lines keeps one height, also beside the update's button
+        // (D-74), so the window never jumps.
+        if (status.when_found_note.empty()) {
             if (!usual_height) {
                 usual_height = dialog.height();
             }

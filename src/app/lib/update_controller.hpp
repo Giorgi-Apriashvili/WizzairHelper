@@ -134,10 +134,12 @@ public:
 public Q_SLOTS:
     /// The hourly tick: one evaluation unless work is running or the window is closing.
     void evaluate();
-    /// Controller::working_changed: "Restart and update" and "Update now" wait while work runs.
+    /// Controller::working_changed: "Restart and update" and "Update now" wait while work
+    /// runs, in the bar and in the Settings window (status_changed).
     void set_working(bool working);
-    /// The bar's action: "Restart and update", "Update now" (for a remembered update: a
-    /// check for its release first, then the download) or "Download".
+    /// The bar's action, or the same button under the Settings window's Check now (D-74):
+    /// "Restart and update", "Update now" (for a remembered update: a check for its release
+    /// first, then the download) or "Download".
     void trigger_action();
     /// "Later".
     void dismiss();
