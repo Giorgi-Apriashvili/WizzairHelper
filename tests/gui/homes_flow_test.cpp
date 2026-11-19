@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -174,7 +175,7 @@ TEST(HomesOnAirbnb, D_72_Each_grid_opens_Airbnb_around_the_city_centre_and_remem
     ASSERT_NE(trip, nullptr);
     rig.trips().homes_button()->click();
     ASSERT_TRUE(gui::wait_until([&] { return rig.actions.opened.size() == 3; }));
-    EXPECT_EQ(rig.actions.opened[2].toStdString(), box_url(*wizz::ui::stay_for_trip(*trip), 5.0));
+    EXPECT_EQ(rig.actions.opened[2].toStdString(), box_url(*wizz::ui::stay_for_trip(*trip, today), 5.0));
 
     // Again for the same station: no new lookup.
     rig.outbound().homes_button()->click();
@@ -244,6 +245,51 @@ TEST(HomesOnAirbnb, D_72_Unreachable_geocoders_search_by_name_and_are_tried_agai
     rig.outbound().request_homes();
     ASSERT_TRUE(gui::wait_until([&] { return rig.actions.opened.size() == 2; }));
     EXPECT_EQ(count_lines(rig, lookup_line(fare)), 2u) << "a failure is not remembered";
+}
+
+/// Every geocoder request fails with an error that is not a service failure: it escapes the
+/// place resolver and the city-centre lookup.
+class BrokenGeocoder final : public wizz::http::Transport {
+public:
+    explicit BrokenGeocoder(std::shared_ptr<wizz::http::Transport> inner) : inner_(std::move(inner)) {}
+
+    wizz::http::Response send(const wizz::http::Request& request, std::stop_token stop) override
+    {
+        if (request.url.contains("photon") || request.url.contains("nominatim")) {
+            throw std::logic_error("broken geocoder");
+        }
+        return inner_->send(request, stop);
+    }
+
+private:
+    std::shared_ptr<wizz::http::Transport> inner_;
+};
+
+TEST(HomesOnAirbnb, D_72_An_unexpected_lookup_error_searches_by_name_and_is_tried_again_next_time)
+{
+    WindowRigOptions options;
+    options.wrap_transport = [](std::shared_ptr<wizz::http::Transport> inner) {
+        return std::make_shared<BrokenGeocoder>(std::move(inner));
+    };
+    WindowRig rig{std::move(options)};
+    rig.start();
+    run_searches(rig);
+    const FlightResultPtr fare = rig.outbound().selected();
+    const std::optional<HomesStay> stay = rig.outbound().selected_stay();
+    ASSERT_TRUE(stay.has_value());
+    rig.outbound().request_homes();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.actions.opened.size() == 1; }));
+    const std::string query =
+        links::place_query(wizz::city_names::clean_name(fare->to_airport->name), fare->to_airport->country_name);
+    EXPECT_EQ(rig.actions.opened[0].toStdString(),
+              links::homes_by_name(query, stay->check_in, stay->check_out, stay->adults));
+    EXPECT_TRUE(rig.log_contains(strings::homes_by_name_log(query, true, stay_text(*stay))));
+    EXPECT_FALSE(rig.controller().is_finding_homes());
+    EXPECT_TRUE(rig.flow_errors.empty()) << "the flow handles it";
+
+    rig.outbound().request_homes();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.actions.opened.size() == 2; }));
+    EXPECT_EQ(count_lines(rig, lookup_line(fare)), 2u) << "not remembered";
 }
 
 TEST(HomesOnAirbnb, D_72_The_lookup_runs_beside_a_search_and_Cancel_stops_only_the_search)

@@ -23,6 +23,7 @@
 #include <QWidget>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -68,6 +69,9 @@ public:
     /// Browser and MessageBox side effects (GridActions::system() by default).
     void set_actions(GridActions actions);
     [[nodiscard]] const GridActions& actions() const noexcept { return actions_; }
+    /// Today's local date for "Homes on Airbnb" (a trip that has begun has no stay, D-72);
+    /// while unset, every trip has one.
+    void set_today_query(std::function<Date()> today);
 
     // --- Actions (01 §9.4) ------------------------------------------------------------------
 
@@ -120,6 +124,7 @@ private:
     GridBarButton* homes_ = nullptr;
     QMenu* menu_ = nullptr;
     QAction* homes_action_ = nullptr;
+    std::function<Date()> today_;
     GridActions actions_;
     bool syncing_ = false;  ///< model-driven view changes are not user navigation
 };

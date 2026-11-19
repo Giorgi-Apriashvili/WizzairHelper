@@ -86,6 +86,25 @@ TEST(CityNames, D_72_A_hit_names_the_city_when_its_key_starts_with_the_candidate
     EXPECT_FALSE(city_names::names_city("Budapest2", "Budapest")) << "a digit continues the word";
 }
 
+TEST(CityNames, D_72_A_shortened_name_must_be_the_city_itself)
+{
+    EXPECT_TRUE(city_names::names_city_shortened("London", "London"));
+    EXPECT_TRUE(city_names::names_city_shortened("Frankfurt am Main", "Frankfurt")) << "a lower-case word goes on";
+    EXPECT_TRUE(city_names::names_city_shortened("Sharm el-Sheikh", "Sharm"));
+    EXPECT_TRUE(city_names::names_city_shortened("BARCELONA", "Barcelona")) << "the same key";
+    EXPECT_FALSE(city_names::names_city_shortened("Gran Tarajal", "Gran")) << "another place sharing the first word";
+    EXPECT_FALSE(city_names::names_city_shortened("Tel Aviv-Yafo", "Tel"));
+    EXPECT_FALSE(city_names::names_city_shortened("Brandenburg an der Havel", "Berlin"));
+    EXPECT_FALSE(city_names::names_city_shortened("Granadilla de Abona", "Gran")) << "not even a whole word";
+    EXPECT_FALSE(city_names::names_city_shortened("London", ""));
+    EXPECT_TRUE(city_names::names_city_shortened("Oslo  am-See", "Oslo")) << "spaces and hyphens separate words";
+    // "Santiago de" goes on with an upper-case word in both: neither is taken for it (the whole
+    // name "Santiago de Compostela" is tried first and names the city).
+    EXPECT_FALSE(city_names::names_city_shortened("Santiago de Compostela", "Santiago de"));
+    EXPECT_FALSE(city_names::names_city_shortened("Santiago de Chile", "Santiago de"));
+    EXPECT_TRUE(city_names::names_city("Santiago de Compostela", "Santiago de Compostela"));
+}
+
 // --- the frozen live map -------------------------------------------------------------
 
 [[nodiscard]] const wizz::AirportCatalog& live()

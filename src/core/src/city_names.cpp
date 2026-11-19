@@ -130,4 +130,36 @@ bool names_city(std::string_view hit_name, std::string_view candidate)
            (hit.size() == wanted.size() || !text::is_letter_or_digit(hit[wanted.size()]));
 }
 
+bool names_city_shortened(std::string_view hit_name, std::string_view candidate)
+{
+    if (!names_city(hit_name, candidate)) {
+        return false;
+    }
+    const std::u16string wanted = city_key(candidate);
+    if (city_key(hit_name) == wanted) {
+        return true;
+    }
+    // The hit's word after the candidate's words, in its own spelling (words split at white
+    // space and hyphens, as in the keys).
+    const auto candidate_words = static_cast<std::size_t>(std::ranges::count(wanted, u' ')) + 1;
+    const std::u16string hit = text::utf8_to_utf16(hit_name);
+    std::size_t word = 0;
+    bool in_word = false;
+    for (const char16_t unit : hit) {
+        const bool separator = text::is_white_space(unit) || unit == u'-';
+        if (separator) {
+            in_word = false;
+            continue;
+        }
+        if (!in_word) {
+            in_word = true;
+            if (word == candidate_words) {
+                return text::is_letter(unit) && text::to_upper_invariant(unit) != unit;  // a lower-case letter
+            }
+            ++word;
+        }
+    }
+    return false;
+}
+
 } // namespace wizz::city_names

@@ -38,4 +38,11 @@ inline constexpr std::size_t kMinLength = 3;
 /// "El Prat de Llobregat" for "Barcelona El Prat"). False for an empty candidate key.
 [[nodiscard]] bool names_city(std::string_view hit_name, std::string_view candidate);
 
+/// The stricter test for a candidate shortened from the station's name (words left off,
+/// "London" for "London Luton"): the hit `names_city` the candidate and is either just the
+/// candidate (same key) or goes on, in its own spelling, with a word that starts with a
+/// lower-case letter ("Frankfurt am Main", "Sharm el-Sheikh"). Another place that merely
+/// begins with the same word is not the city ("Gran Tarajal" for "Gran" from "Gran Canaria").
+[[nodiscard]] bool names_city_shortened(std::string_view hit_name, std::string_view candidate);
+
 } // namespace wizz::city_names

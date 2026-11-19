@@ -9,6 +9,9 @@ namespace wizz::ui {
 std::optional<HomesStay> stay_for_flight(const FlightResult& flight, StayLeg leg, int min_nights, Date today)
 {
     const int nights = std::max(1, min_nights);
+    if (flight.date() < today) {
+        return std::nullopt;  // flown already (the results stayed open past midnight)
+    }
     if (leg == StayLeg::outbound) {
         if (!flight.to_airport) {
             return std::nullopt;
@@ -32,9 +35,9 @@ std::optional<HomesStay> stay_for_flight(const FlightResult& flight, StayLeg leg
                      .adults = std::max(1, flight.adults)};
 }
 
-std::optional<HomesStay> stay_for_trip(const RoundTrip& trip)
+std::optional<HomesStay> stay_for_trip(const RoundTrip& trip, Date today)
 {
-    if (!trip.outbound || !trip.inbound || !trip.outbound->to_airport) {
+    if (!trip.outbound || !trip.inbound || !trip.outbound->to_airport || trip.outbound->date() < today) {
         return std::nullopt;
     }
     const Date check_in = trip.outbound->date();

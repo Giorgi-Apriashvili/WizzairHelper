@@ -103,6 +103,33 @@ TEST(CityCentre, D_72_An_island_without_a_city_leaves_the_name_to_Airbnb)
                                               nominatim("Gran")}));
 }
 
+TEST(CityCentre, D_72_A_shortened_name_takes_only_the_city_itself)
+{
+    // Gran Canaria is an island: "Gran" must not land on Gran Tarajal (Fuerteventura, ~138 km).
+    const GeoPoint gando{27.93, -15.39};
+    ResolverRig island(photon_by_query({{"Gran", photon_body({{"Gran Tarajal", north_of(gando, 138.0)}})}}));
+    const CityCentreLookup lookup =
+        find_city_centre(island.resolver, station("LPA", "Gran Canaria (Canary Islands)", "Spain", gando), {});
+    EXPECT_FALSE(lookup.centre.has_value());
+    EXPECT_EQ(lookup.place_name, "Gran Canaria");
+
+    // "Frankfurt Hahn" → "Frankfurt" → "Frankfurt am Main", about 105 km away.
+    const GeoPoint hahn{49.9487, 7.2639};
+    const GeoPoint frankfurt{50.1106, 8.6821};
+    ResolverRig hahn_rig(photon_by_query({{"Frankfurt", photon_body({{"Frankfurt am Main", frankfurt}})}}));
+    const CityCentreLookup city =
+        find_city_centre(hahn_rig.resolver, station("HHN", "Frankfurt Hahn", "Germany", hahn), {});
+    ASSERT_TRUE(city.centre.has_value());
+    EXPECT_EQ(city.centre->name, "Frankfurt am Main");
+
+    // The station's whole name still takes a longer hit ("Tel-Aviv" → "Tel Aviv-Yafo").
+    const GeoPoint ben_gurion{32.0114, 34.8867};
+    ResolverRig tlv(photon_by_query({{"Tel-Aviv", photon_body({{"Tel Aviv-Yafo", GeoPoint{32.0853, 34.7818}}})}}));
+    const CityCentreLookup tel_aviv = find_city_centre(tlv.resolver, station("TLV", "Tel-Aviv", "Israel", ben_gurion), {});
+    ASSERT_TRUE(tel_aviv.centre.has_value());
+    EXPECT_EQ(tel_aviv.centre->name, "Tel Aviv-Yafo");
+}
+
 TEST(CityCentre, D_72_When_the_geocoders_cannot_be_reached_the_lookup_stops)
 {
     ResolverRig rig(offline);

@@ -183,6 +183,12 @@ void RoundTripGrid::set_actions(GridActions actions)
     actions_ = std::move(actions);
 }
 
+void RoundTripGrid::set_today_query(std::function<Date()> today)
+{
+    today_ = std::move(today);
+    refresh_homes();
+}
+
 void RoundTripGrid::open_selected()
 {
     open_urls(model_->state().open_selected_urls());
@@ -205,7 +211,7 @@ void RoundTripGrid::open_return()
 std::optional<ui::HomesStay> RoundTripGrid::selected_stay() const
 {
     const RoundTrip* trip = selected();
-    return trip != nullptr ? ui::stay_for_trip(*trip) : std::nullopt;
+    return trip != nullptr ? ui::stay_for_trip(*trip, today_ ? today_() : Date::min_value()) : std::nullopt;
 }
 
 void RoundTripGrid::request_homes()

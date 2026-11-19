@@ -283,6 +283,7 @@ void MainWindow::wire()
     };
     outbound_->set_homes_query(stay_for(ui::StayLeg::outbound));
     inbound_->set_homes_query(stay_for(ui::StayLeg::inbound));
+    trips_->set_today_query([this] { return services_->clock->local_today(); });
     connect(outbound_, &FlightGrid::homes_requested, controller, [this, controller](const ui::HomesStay& stay) {
         controller->request_homes(stay, settings_.homes_within, outbound_->actions());
     });

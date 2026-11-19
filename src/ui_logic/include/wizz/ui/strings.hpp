@@ -342,7 +342,8 @@ inline constexpr std::string_view kHomesToolTip =
 /// "Homes on Airbnb within {radius} of the centre of {city}, {stay}."
 [[nodiscard]] std::string homes_centre_log(std::string_view radius, std::string_view city, std::string_view stay);
 /// "Homes on Airbnb: no city centre found, so Airbnb looks for “{query}” itself, {stay}." —
-/// or "Homes on Airbnb: the geocoders could not be reached, so …" when `lookup_failed`.
+/// or "Homes on Airbnb: the city centre could not be looked up, so …" when `lookup_failed`
+/// (the geocoders unreachable, or an unexpected error).
 [[nodiscard]] std::string homes_by_name_log(std::string_view query, bool lookup_failed, std::string_view stay);
 
 // ---------------------------------------------------------------------------

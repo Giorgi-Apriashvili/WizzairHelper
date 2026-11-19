@@ -476,7 +476,7 @@ TEST(RoundTripGridWidget, D_72_Homes_on_Airbnb_requests_the_current_trips_stay)
                      [&](const wizz::ui::HomesStay& stay) { requested.push_back(stay); });
     f.grid.homes_button()->click();
     ASSERT_EQ(requested.size(), 1u);
-    EXPECT_EQ(requested[0], *wizz::ui::stay_for_trip(*f.grid.selected()));
+    EXPECT_EQ(requested[0], *wizz::ui::stay_for_trip(*f.grid.selected(), wizz::Date::min_value()));
 
     click(*f.grid.table(), cell_center(*f.grid.table(), 3, col(TripColumn::outbound)));
     f.grid.prepare_context_menu()->actions()[4]->trigger();

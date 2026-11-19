@@ -234,8 +234,8 @@ TEST(Strings, D_72_Homes_on_Airbnb_texts)
               "Homes on Airbnb: no city centre found, so Airbnb looks for “Santorini, Greece” itself, "
               "04 Dec – 08 Dec, 1 adult.");
     EXPECT_EQ(homes_by_name_log("London Luton, United Kingdom", true, "04 Dec – 05 Dec, 1 adult"),
-              "Homes on Airbnb: the geocoders could not be reached, so Airbnb looks for “London Luton, United "
-              "Kingdom” itself, 04 Dec – 05 Dec, 1 adult.");
+              "Homes on Airbnb: the city centre could not be looked up, so Airbnb looks for “London Luton, "
+              "United Kingdom” itself, 04 Dec – 05 Dec, 1 adult.");
 }
 
 } // namespace

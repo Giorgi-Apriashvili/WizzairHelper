@@ -30,14 +30,16 @@ struct HomesStay {
 /// An Outbound row: its arrival station, check-in on the flight's date, check-out
 /// max(1, min_nights) nights later. A Return row: its departure station, check-out on the
 /// flight's date, check-in max(1, min_nights) nights earlier but not before `today`;
-/// nullopt when that leaves no night (a return flight today). nullopt without the station.
+/// nullopt when that leaves no night (a return flight today). nullopt without the station,
+/// and for a flight before `today` (results kept open past midnight).
 [[nodiscard]] std::optional<HomesStay> stay_for_flight(const FlightResult& flight, StayLeg leg, int min_nights,
                                                        Date today);
 
 /// A round trip: the outbound's arrival station, check-in on the outbound's date,
 /// check-out on the return's date and at least one night later (a same-day return
-/// stays one night). nullopt without both flights or the station.
-[[nodiscard]] std::optional<HomesStay> stay_for_trip(const RoundTrip& trip);
+/// stays one night). nullopt without both flights or the station, and when the outbound
+/// flies before `today`.
+[[nodiscard]] std::optional<HomesStay> stay_for_trip(const RoundTrip& trip, Date today);
 
 /// settings.json `HomesWithin` (D-73): how far around the city centre the search reaches.
 enum class HomesRadius { two_km, five_km, ten_km, twenty_five_km };

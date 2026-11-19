@@ -277,7 +277,7 @@ std::string homes_centre_log(std::string_view radius, std::string_view city, std
 std::string homes_by_name_log(std::string_view query, bool lookup_failed, std::string_view stay)
 {
     return std::format("Homes on Airbnb: {}, so Airbnb looks for “{}” itself, {}.",
-                       lookup_failed ? "the geocoders could not be reached" : "no city centre found", query, stay);
+                       lookup_failed ? "the city centre could not be looked up" : "no city centre found", query, stay);
 }
 
 } // namespace wizz::ui::strings

@@ -97,18 +97,31 @@ TEST(HomesStay, D_72_A_round_trip_stays_from_the_outbound_to_the_return)
 {
     RoundTrip trip{.outbound = flight(kBud, kLtn, day(12, 4), 3), .inbound = flight(kLtn, kBud, day(12, 9), 3),
                    .nights = 5};
-    const std::optional<HomesStay> stay = wizz::ui::stay_for_trip(trip);
+    const std::optional<HomesStay> stay = wizz::ui::stay_for_trip(trip, kToday);
     ASSERT_TRUE(stay.has_value());
     EXPECT_EQ(*stay, (HomesStay{.destination = kLtn, .check_in = day(12, 4), .check_out = day(12, 9), .adults = 3}));
 
     // A same-day return still stays one night.
     trip.inbound = flight(kLtn, kBud, day(12, 4));
-    ASSERT_TRUE(wizz::ui::stay_for_trip(trip).has_value());
-    EXPECT_EQ(wizz::ui::stay_for_trip(trip)->check_out, day(12, 5));
+    ASSERT_TRUE(wizz::ui::stay_for_trip(trip, kToday).has_value());
+    EXPECT_EQ(wizz::ui::stay_for_trip(trip, kToday)->check_out, day(12, 5));
 
     trip.inbound = nullptr;
-    EXPECT_FALSE(wizz::ui::stay_for_trip(trip).has_value());
-    EXPECT_FALSE(wizz::ui::stay_for_trip(RoundTrip{}).has_value());
+    EXPECT_FALSE(wizz::ui::stay_for_trip(trip, kToday).has_value());
+    EXPECT_FALSE(wizz::ui::stay_for_trip(RoundTrip{}, kToday).has_value());
+}
+
+TEST(HomesStay, D_72_A_flight_before_today_has_no_stay)
+{
+    // Results kept open past midnight: yesterday's flights are gone.
+    const Date yesterday = kToday.add_days(-1);
+    EXPECT_FALSE(wizz::ui::stay_for_flight(*flight(kBud, kLtn, yesterday), StayLeg::outbound, 2, kToday).has_value());
+    EXPECT_FALSE(wizz::ui::stay_for_flight(*flight(kLtn, kBud, yesterday), StayLeg::inbound, 2, kToday).has_value());
+    const RoundTrip begun{.outbound = flight(kBud, kLtn, yesterday), .inbound = flight(kLtn, kBud, day(11, 9)),
+                          .nights = 8};
+    EXPECT_FALSE(wizz::ui::stay_for_trip(begun, kToday).has_value());
+    EXPECT_TRUE(wizz::ui::stay_for_trip(begun, yesterday).has_value());
+    EXPECT_TRUE(wizz::ui::stay_for_trip(begun, Date::min_value()).has_value()) << "no today: every trip";
 }
 
 TEST(HomesStay, D_73_The_radius_choices)
