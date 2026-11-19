@@ -7,13 +7,16 @@
 // Enter open the combined booking or the outbound then the return booking;
 // right-click makes the row current and opens the menu "Open on wizzair.com",
 // "Open outbound only", "Open return only" (always enabled; no-ops without a
-// current trip). UI thread only.
+// current trip) and, after a separator, "Homes on Airbnb" (D-72), which like the
+// button at the right end of the top bar is enabled while there is a current
+// trip and raises homes_requested with its stay. UI thread only.
 
 #include "grid_actions.hpp"
 #include "round_trip_table_model.hpp"
 
 #include "wizz/core/domain.hpp"
 #include "wizz/core/locale.hpp"
+#include "wizz/ui/homes_stay.hpp"
 
 #include <QPoint>
 #include <QString>
@@ -21,6 +24,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -33,6 +37,7 @@ class QMenu;
 namespace wizz::app {
 
 class ElidedLabel;
+class GridBarButton;
 class GridTableView;
 
 class RoundTripGrid final : public QWidget {
@@ -62,6 +67,7 @@ public:
 
     /// Browser and MessageBox side effects (GridActions::system() by default).
     void set_actions(GridActions actions);
+    [[nodiscard]] const GridActions& actions() const noexcept { return actions_; }
 
     // --- Actions (01 §9.4) ------------------------------------------------------------------
 
@@ -71,7 +77,13 @@ public:
     void open_outbound();
     /// "Open return only".
     void open_return();
-    /// The context menu (its items are always enabled).
+    /// The current trip's stay ("Homes on Airbnb", ui::stay_for_trip), or nullopt.
+    [[nodiscard]] std::optional<ui::HomesStay> selected_stay() const;
+    /// "Homes on Airbnb": raises homes_requested with the current trip's stay, if any.
+    void request_homes();
+    /// The context menu with "Homes on Airbnb" enabled for the current trip (the three
+    /// booking items are always enabled).
+    QMenu* prepare_context_menu();
     [[nodiscard]] QMenu* context_menu() const noexcept { return menu_; }
 
     // --- Parts (tests, autotest screenshots) ------------------------------------------------
@@ -81,12 +93,15 @@ public:
     [[nodiscard]] QCheckBox* same_home_box() const noexcept { return same_home_; }
     [[nodiscard]] QCheckBox* same_away_box() const noexcept { return same_away_; }
     [[nodiscard]] ElidedLabel* summary_label() const noexcept { return summary_; }
+    [[nodiscard]] GridBarButton* homes_button() const noexcept { return homes_; }
 
 Q_SIGNALS:
     /// Either checkbox changed (`FiltersChanged` → MainForm.RecomputeTrips).
     void filters_changed();
     /// Opening a booking URL failed (after the Warning box was shown).
     void open_url_failed(const QString& url, const QString& message);
+    /// The user asked for the homes on Airbnb around `stay`'s destination (D-72).
+    void homes_requested(const wizz::ui::HomesStay& stay);
 
 private:
     void open_urls(const std::vector<std::string>& urls);
@@ -94,13 +109,17 @@ private:
     void on_cell_pressed(int row, Qt::MouseButton button);
     void update_sort_indicator();
     void sync_current_row();
+    /// The button follows whether there is a current trip.
+    void refresh_homes();
 
     RoundTripTableModel* model_ = nullptr;
     GridTableView* table_ = nullptr;
     QCheckBox* same_home_ = nullptr;
     QCheckBox* same_away_ = nullptr;
     ElidedLabel* summary_ = nullptr;
+    GridBarButton* homes_ = nullptr;
     QMenu* menu_ = nullptr;
+    QAction* homes_action_ = nullptr;
     GridActions actions_;
     bool syncing_ = false;  ///< model-driven view changes are not user navigation
 };

@@ -37,5 +37,7 @@ inline constexpr QMargins kLabelMargin{0, 0, 8, 0};
 inline constexpr QMargins kDefaultMargin{0, 0, 0, 0};
 /// The round-trip checkboxes.
 inline constexpr QMargins kCheckBoxMargin{0, 0, 22, 0};
+/// The action button at the right end ("Homes on Airbnb", D-72).
+inline constexpr QMargins kActionMargin{12, 0, 0, 0};
 
 } // namespace wizz::app::grid_bar

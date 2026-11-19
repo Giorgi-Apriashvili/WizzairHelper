@@ -273,6 +273,25 @@ void MainWindow::wire()
     connect(settings_button_, &QPushButton::clicked, this, [this] { (void)open_settings(); });
     outbound_->set_busy_query([controller] { return controller->is_working(); });
     inbound_->set_busy_query([controller] { return controller->is_working(); });
+
+    // Homes on Airbnb (D-72): the stay is asked at each use (the night limits and today
+    // change), the distance is the Settings window's at the click (D-73).
+    const auto stay_for = [this](ui::StayLeg leg) {
+        return [this, leg](const FlightResult& fare) {
+            return ui::stay_for_flight(fare, leg, input_->min_nights(), services_->clock->local_today());
+        };
+    };
+    outbound_->set_homes_query(stay_for(ui::StayLeg::outbound));
+    inbound_->set_homes_query(stay_for(ui::StayLeg::inbound));
+    connect(outbound_, &FlightGrid::homes_requested, controller, [this, controller](const ui::HomesStay& stay) {
+        controller->request_homes(stay, settings_.homes_within, outbound_->actions());
+    });
+    connect(inbound_, &FlightGrid::homes_requested, controller, [this, controller](const ui::HomesStay& stay) {
+        controller->request_homes(stay, settings_.homes_within, inbound_->actions());
+    });
+    connect(trips_, &RoundTripGrid::homes_requested, controller, [this, controller](const ui::HomesStay& stay) {
+        controller->request_homes(stay, settings_.homes_within, trips_->actions());
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +417,12 @@ SettingsDialog* MainWindow::open_settings()
         updates_ != nullptr ? updates_->status_view()
                             : ui::updates_off_view(update::parse_version(WIZZ_VERSION_STRING).value_or(update::Version{}));
     auto* dialog = new SettingsDialog(settings_.updates, status, settings_.fare_reuse, this);
+    dialog->show_homes_radius(settings_.homes_within);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     settings_dialog_ = dialog;
     connect(dialog, &SettingsDialog::options_changed, this, &MainWindow::apply_update_options);
     connect(dialog, &SettingsDialog::fare_reuse_changed, this, &MainWindow::apply_fare_reuse);
+    connect(dialog, &SettingsDialog::homes_radius_changed, this, &MainWindow::apply_homes_radius);
     if (updates_ != nullptr) {
         UpdateController* const updates = updates_;
         connect(dialog, &SettingsDialog::check_now_requested, updates, &UpdateController::check_now);
@@ -428,6 +449,14 @@ void MainWindow::apply_fare_reuse(fare_days::ReuseWindow window)
 {
     settings_.fare_reuse = window;
     services_->wizz->set_timetable_reuse_window(fare_days::duration_of(window));  // the next search takes it
+    if (!is_autotest()) {
+        (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
+    }
+}
+
+void MainWindow::apply_homes_radius(ui::HomesRadius radius)
+{
+    settings_.homes_within = radius;  // the next "Homes on Airbnb" takes it (D-73)
     if (!is_autotest()) {
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
     }

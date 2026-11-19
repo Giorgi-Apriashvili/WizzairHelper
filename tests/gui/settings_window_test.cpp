@@ -781,6 +781,45 @@ TEST(SettingsWindow, Searches_shows_the_saved_reuse_window_and_applies_and_saves
     EXPECT_EQ(saved(rig).fare_reuse, ReuseWindow::one_hour);
 }
 
+TEST(SettingsWindow, D_73_Searches_shows_the_saved_homes_distance_and_saves_a_change_at_once)
+{
+    using wizz::ui::HomesRadius;
+    WindowRigOptions setup;
+    setup.settings.homes_within = HomesRadius::ten_km;
+    setup.settings.from = "Wien";
+    WindowRig rig{std::move(setup)};
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+
+    EXPECT_EQ(dialog.homes_box()->currentText(), "10 km");
+    EXPECT_EQ(dialog.homes_radius(), HomesRadius::ten_km);
+    std::vector<QString> items;
+    for (int i = 0; i < dialog.homes_box()->count(); ++i) {
+        items.push_back(dialog.homes_box()->itemText(i));
+    }
+    EXPECT_EQ(items, (std::vector<QString>{"2 km", "5 km", "10 km", "25 km"}));
+    EXPECT_TRUE(dialog.homes_box()->isEnabled()) << "in every run";
+    EXPECT_GT(dialog.homes_box()->y(), dialog.reuse_hint()->y()) << "under the reuse hint";
+    EXPECT_EQ(dialog.homes_label()->parentWidget(), dialog.homes_box()->parentWidget()) << "in the Searches card";
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig))) << "opening saves nothing";
+
+    std::vector<HomesRadius> reported;
+    QObject::connect(&dialog, &SettingsDialog::homes_radius_changed,
+                     [&reported](HomesRadius radius) { reported.push_back(radius); });
+    dialog.homes_box()->setCurrentIndex(3);
+    EXPECT_EQ(reported, std::vector<HomesRadius>{HomesRadius::twenty_five_km});
+    EXPECT_EQ(saved(rig).homes_within, HomesRadius::twenty_five_km);
+    EXPECT_EQ(saved(rig).from, "Wien") << "the other settings are saved as they are";
+    EXPECT_EQ(rig.window().current_settings().homes_within, HomesRadius::twenty_five_km);
+
+    dialog.show_homes_radius(HomesRadius::two_km);
+    EXPECT_EQ(reported.size(), 1u) << "showing a value reports nothing";
+
+    dialog.close();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    EXPECT_EQ(open_settings(rig.window()).homes_radius(), HomesRadius::twenty_five_km);
+}
+
 TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
 {
     UpdateRig rig;
@@ -791,11 +830,13 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     QRadioButton* notify = dialog.when_found_button(WhenFound::notify_only);
     EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "focus starts on the first control";
     // Real Tab presses: an exclusive radio group is one stop, its selected choice (D-63); the
-    // reuse window of the "Searches" card comes before Close (D-68: changed deliberately).
-    EXPECT_EQ(press_tab(dialog, 6),
+    // reuse window and the homes distance of the "Searches" card come before Close (D-68,
+    // D-73: changed deliberately).
+    EXPECT_EQ(press_tab(dialog, 7),
               (std::vector<QWidget*>{dialog.check_automatically_box(), dialog.frequency_box(), install, dialog.reuse_box(),
-                                     dialog.close_button(), dialog.check_now_button()}));
-    EXPECT_EQ(press_tab(dialog, 3, true), (std::vector<QWidget*>{dialog.close_button(), dialog.reuse_box(), install}));
+                                     dialog.homes_box(), dialog.close_button(), dialog.check_now_button()}));
+    EXPECT_EQ(press_tab(dialog, 4, true),
+              (std::vector<QWidget*>{dialog.close_button(), dialog.homes_box(), dialog.reuse_box(), install}));
     // The arrow keys move among the choices and select each one, which applies it at once.
     gui::send_key(install, QEvent::KeyPress, Qt::Key_Down);
     EXPECT_EQ(dialog.focusWidget(), ask);
@@ -821,15 +862,20 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     EXPECT_EQ(dialog.searches_card()->title_label()->text(), "Searches");
     EXPECT_EQ(dialog.reuse_box()->accessibleName(), "Reuse fares fetched within");
     EXPECT_EQ(dialog.reuse_label()->text(), "Reuse fares fetched within");
+    EXPECT_EQ(dialog.homes_box()->accessibleName(), "Homes on Airbnb within this distance of the city centre");
+    EXPECT_EQ(dialog.homes_label()->text(), "Homes on Airbnb within");
+    EXPECT_EQ(dialog.homes_suffix()->text(), "of the city centre");
     for (QWidget* control : std::initializer_list<QWidget*>{dialog.check_now_button(), dialog.check_automatically_box(),
                                                              dialog.frequency_box(), install, ask, notify,
-                                                             dialog.reuse_box(), dialog.close_button()}) {
+                                                             dialog.reuse_box(), dialog.homes_box(),
+                                                             dialog.close_button()}) {
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(control);
         ASSERT_NE(accessible, nullptr);
         EXPECT_FALSE(accessible->text(QAccessible::Name).isEmpty()) << control->metaObject()->className();
     }
     for (const QLabel* label : {dialog.version_label(), dialog.status_label(), dialog.when_found_caption(),
-                                dialog.note_label(), dialog.reuse_label(), dialog.reuse_hint()}) {
+                                dialog.note_label(), dialog.reuse_label(), dialog.reuse_hint(), dialog.homes_label(),
+                                dialog.homes_suffix()}) {
         EXPECT_EQ(label->textFormat(), Qt::PlainText) << "plain text (D-58)";
     }
 

@@ -1,9 +1,11 @@
 #include "flight_grid.hpp"
 
 #include "elided_label.hpp"
+#include "grid_bar_button.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
 #include "modern_style.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
@@ -81,16 +83,20 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     view_->setFixedWidth(kViewComboWidth);
     ModernStyle::use_styled_popup(*view_);
     summary_ = grid_bar::make_summary_label(this);
+    homes_ = new GridBarButton(style::glyph::kHome, grid_bar::text(ui::strings::kHomesOnAirbnb),
+                               grid_bar::text(ui::strings::kHomesToolTip), this);
+    homes_->setObjectName(QStringLiteral("homesButton"));
     QHBoxLayout* bar = grid_bar::make_row();
     grid_bar::add(bar, show, grid_bar::kLabelMargin);
     grid_bar::add(bar, view_, grid_bar::kDefaultMargin);
     grid_bar::add(bar, summary_, grid_bar::kSummaryMargin, 1);
+    grid_bar::add(bar, homes_, grid_bar::kActionMargin);
 
     // Grid.
     table_ = new GridTableView(this);
     table_->setModel(model_);
     build_columns();
-    setTabOrder(table_, view_);  // the grid before its view combo (01 §6.3)
+    setTabOrder({table_, view_, homes_});  // the grid before its bar (01 §6.3)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -102,6 +108,9 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     menu_ = new QMenu(this);
     open_ = menu_->addAction(grid_bar::text(ui::strings::kOpenOnWizzair));
     copy_ = menu_->addAction(grid_bar::text(ui::strings::kCopyDetails));
+    homes_action_ = menu_->addAction(grid_bar::text(ui::strings::kHomesOnAirbnb));
+    connect(homes_action_, &QAction::triggered, this, &FlightGrid::request_homes);
+    connect(homes_, &QPushButton::clicked, this, &FlightGrid::request_homes);
     if (offer_plan_return) {
         menu_->addSeparator();
         plan_return_ = menu_->addAction(grid_bar::text(ui::strings::kPlanReturnMenu));
@@ -222,6 +231,12 @@ void FlightGrid::set_busy_query(std::function<bool()> is_busy)
     is_busy_ = std::move(is_busy);
 }
 
+void FlightGrid::set_homes_query(std::function<std::optional<ui::HomesStay>(const FlightResult&)> stay_for)
+{
+    stay_for_ = std::move(stay_for);
+    refresh_homes();
+}
+
 void FlightGrid::set_actions(GridActions actions)
 {
     actions_ = std::move(actions);
@@ -257,11 +272,37 @@ void FlightGrid::request_plan_return()
     }
 }
 
+std::optional<ui::HomesStay> FlightGrid::selected_stay() const
+{
+    const FlightResultPtr fare = selected();
+    if (!fare || !stay_for_) {
+        return std::nullopt;
+    }
+    return stay_for_(*fare);
+}
+
+void FlightGrid::request_homes()
+{
+    if (const std::optional<ui::HomesStay> stay = selected_stay()) {
+        Q_EMIT homes_requested(*stay);
+    }
+}
+
+void FlightGrid::refresh_homes()
+{
+    const bool enabled = selected_stay().has_value();
+    if (homes_->isEnabled() != enabled) {
+        homes_->setEnabled(enabled);
+    }
+}
+
 QMenu* FlightGrid::prepare_context_menu()
 {
     const ui::FlightMenuState state = model_->state().context_menu(is_busy_ && is_busy_());
     open_->setEnabled(state.open_enabled);
     copy_->setEnabled(state.copy_enabled);
+    homes_action_->setEnabled(selected_stay().has_value());
+    refresh_homes();
     if (plan_return_ != nullptr) {
         const QString text = grid_bar::text(state.plan_return_text);
         if (plan_return_->text() != text) {
@@ -313,6 +354,7 @@ void FlightGrid::on_current_row_changed(const QModelIndex& current)
 {
     if (!syncing_ && current.isValid()) {
         model_->set_current_row(current.row());
+        refresh_homes();
     }
 }
 
@@ -380,9 +422,12 @@ void FlightGrid::sync_current_row()
     const ScrollRequest request = model_->take_scroll_request();
     const bool keep_horizontal = model_->take_keep_horizontal_scroll();
     const std::optional<std::size_t> row = model_->state().current_row();
-    const QScopedValueRollback guard{syncing_, true};
-    table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
-                             section(FlightColumn::date), keep_horizontal);
+    {
+        const QScopedValueRollback guard{syncing_, true};
+        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
+                                 section(FlightColumn::date), keep_horizontal);
+    }
+    refresh_homes();
 }
 
 } // namespace wizz::app

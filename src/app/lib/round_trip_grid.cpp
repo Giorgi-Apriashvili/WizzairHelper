@@ -1,8 +1,10 @@
 #include "round_trip_grid.hpp"
 
 #include "elided_label.hpp"
+#include "grid_bar_button.hpp"
 #include "grid_table_view.hpp"
 #include "grid_top_bar.hpp"
+#include "ui_style.hpp"
 
 #include "wizz/ui/strings.hpp"
 
@@ -65,10 +67,14 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     same_home_ = make_filter_box(ui::strings::kSameHomeCheckbox, this);
     same_away_ = make_filter_box(ui::strings::kSameAwayCheckbox, this);
     summary_ = grid_bar::make_summary_label(this);
+    homes_ = new GridBarButton(style::glyph::kHome, grid_bar::text(ui::strings::kHomesOnAirbnb),
+                               grid_bar::text(ui::strings::kHomesToolTip), this);
+    homes_->setObjectName(QStringLiteral("homesButton"));
     QHBoxLayout* bar = grid_bar::make_row();
     grid_bar::add(bar, same_home_, grid_bar::kCheckBoxMargin);
     grid_bar::add(bar, same_away_, grid_bar::kCheckBoxMargin);
     grid_bar::add(bar, summary_, grid_bar::kSummaryMargin, 1);
+    grid_bar::add(bar, homes_, grid_bar::kActionMargin);
 
     // Grid.
     table_ = new GridTableView(this);
@@ -78,7 +84,7 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     }
     table_->setColumnHidden(section(TripColumn::idx), true);
     table_->set_fill_column(section(TripColumn::booking_notes), kNotesMinimumWidth);
-    setTabOrder({table_, same_home_, same_away_});  // the grid before its filters (01 §6.3)
+    setTabOrder({table_, same_home_, same_away_, homes_});  // the grid before its bar (01 §6.3)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -86,7 +92,8 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     layout->addLayout(bar);
     layout->addWidget(table_, 1);
 
-    // Context menu (01 §9.4): always enabled.
+    // Context menu (01 §9.4): the three booking items are always enabled; "Homes on Airbnb"
+    // (D-72) follows the current trip.
     menu_ = new QMenu(this);
     connect(menu_->addAction(grid_bar::text(ui::strings::kOpenOnWizzair)), &QAction::triggered, this,
             &RoundTripGrid::open_selected);
@@ -94,6 +101,10 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
             &RoundTripGrid::open_outbound);
     connect(menu_->addAction(grid_bar::text(ui::strings::kOpenReturnOnly)), &QAction::triggered, this,
             &RoundTripGrid::open_return);
+    menu_->addSeparator();
+    homes_action_ = menu_->addAction(grid_bar::text(ui::strings::kHomesOnAirbnb));
+    connect(homes_action_, &QAction::triggered, this, &RoundTripGrid::request_homes);
+    connect(homes_, &QPushButton::clicked, this, &RoundTripGrid::request_homes);
 
     connect(same_home_, &QCheckBox::toggled, this, [this](bool checked) {
         if (model_->set_require_same_home(checked)) {
@@ -109,13 +120,16 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     connect(table_, &GridTableView::data_cell_pressed, this, &RoundTripGrid::on_cell_pressed);
     connect(table_, &GridTableView::data_cell_double_clicked, this, [this](int) { open_selected(); });
     connect(table_, &GridTableView::enter_pressed, this, &RoundTripGrid::open_selected);
-    connect(table_, &GridTableView::context_menu_requested, this, [this](QPoint pos) { menu_->popup(pos); });
+    connect(table_, &GridTableView::context_menu_requested, this,
+            [this](QPoint pos) { prepare_context_menu()->popup(pos); });
     connect(table_->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
             [this](const QModelIndex& current, const QModelIndex&) {
                 if (!syncing_ && current.isValid()) {
                     model_->set_current_row(current.row());
+                    refresh_homes();
                 }
             });
+    refresh_homes();
 }
 
 RoundTripGrid::~RoundTripGrid() = default;
@@ -188,6 +202,34 @@ void RoundTripGrid::open_return()
     }
 }
 
+std::optional<ui::HomesStay> RoundTripGrid::selected_stay() const
+{
+    const RoundTrip* trip = selected();
+    return trip != nullptr ? ui::stay_for_trip(*trip) : std::nullopt;
+}
+
+void RoundTripGrid::request_homes()
+{
+    if (const std::optional<ui::HomesStay> stay = selected_stay()) {
+        Q_EMIT homes_requested(*stay);
+    }
+}
+
+QMenu* RoundTripGrid::prepare_context_menu()
+{
+    homes_action_->setEnabled(selected_stay().has_value());
+    refresh_homes();
+    return menu_;
+}
+
+void RoundTripGrid::refresh_homes()
+{
+    const bool enabled = selected_stay().has_value();
+    if (homes_->isEnabled() != enabled) {
+        homes_->setEnabled(enabled);
+    }
+}
+
 void RoundTripGrid::open_urls(const std::vector<std::string>& urls)
 {
     for (const std::string& url : urls) {  // two one-way bookings open as two browser tabs
@@ -227,9 +269,12 @@ void RoundTripGrid::sync_current_row()
 {
     const ScrollRequest request = model_->take_scroll_request();
     const std::optional<std::size_t> row = model_->state().current_row();
-    const QScopedValueRollback guard{syncing_, true};
-    table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
-                             section(TripColumn::total));
+    {
+        const QScopedValueRollback guard{syncing_, true};
+        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
+                                 section(TripColumn::total));
+    }
+    refresh_homes();
 }
 
 } // namespace wizz::app
