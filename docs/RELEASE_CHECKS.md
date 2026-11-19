@@ -16,6 +16,16 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 | [2.1.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.1.0) | 2026-11-17 | `935cf43` | Smooth text: natural ClearType rendering, Segoe UI Variable a touch heavier on Windows 11 (DECISIONS D-58). |
 | [2.2.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.2.0) | 2026-11-18 | `be62626` | The Settings window: manual update check, automatic checks once a day / week / month, three choices for what happens with an update, reminders for a put-off update (DECISIONS D-59..D-63); the first work starts after Windows' open animation (D-65). |
 | [2.3.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.0) | 2026-11-18 | `edfd6af` | Fares reused per route and day and kept on disk (`fares.json`, at most 6 h), the "Reuse fares fetched within" setting, exchange rates fetched at start, the reused-fares Log line (DECISIONS D-66..D-70). |
+| [2.3.1](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.1) | 2026-11-19 | `1ded54e` | Fix: a retired Wizz Air API version answering HTTP 503 made every search fail "Wizz Air is busy"; the address is now looked up again on such a page and after 24 hours (DECISIONS D-71). |
+
+v2.3.1 verification: CI run 44497505123 on the fix `4ea6d1a` and the tag's run 44499954681 on `1ded54e` passed on all
+three legs and published the release. Locally the fix passed 1714 / 1714 tests in Release (all end-to-end runs), Debug and
+with clang-cl 22.1.8; each new branch of D-71 was broken on purpose and a test failed every time. The cause was confirmed
+with two live requests the owner approved (the homepage advertised 29.26.0, CloudFront answered the saved 29.25.0 with an
+HTML 503). `tools/release_check.ps1 -Tag v2.3.1`: three assets (installer 10,190,638 bytes, ZIP 11,758,048 bytes,
+`SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints `WizzairHelper 2.3.1`, and
+`releases/latest` is v2.3.1. Not verified: the fix against the live site (it needs a version Wizz Air has just retired;
+the tests replay CloudFront's page), a real update to 2.3.1 run by the installed app.
 
 v2.3.0 verification: CI run 44394123991 on the merge `fe1ca23` and the tag's run 44398047292 on `edfd6af` passed on all
 three legs and published the release. Locally the merged code passed 1700 / 1700 tests in Release (all 24 end-to-end runs,
