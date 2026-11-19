@@ -1936,6 +1936,308 @@ TEST(WizzClient, P_34_The_cached_file_is_deleted_only_while_it_holds_the_stale_u
     EXPECT_EQ(read_file(padded_directory.file("api-url.txt")), std::string{kApiUrl});
 }
 
+// D-71: Wizz Air retires old API versions, and CloudFront answers a retired one with a
+// "Service Unavailable" page (HTTP 503), not a 404. The address is looked up again on
+// such an answer, and after 24 hours in any case.
+
+const std::string kCloudFrontUnavailable =
+    R"(<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN""http://www.w3.org/TR/html4/strict.dtd">)"
+    "<HTML><HEAD><TITLE>Service Unavailable</TITLE></HEAD><BODY><h2>Service Unavailable</h2>"
+    "<hr><p>HTTP Error 503. The service is unavailable.</p></BODY></HTML>";
+
+/// A saved api-url.txt holding `url`, written `age` before kNow.
+void save_api_url(const ScratchDirectory& directory, std::string_view url, Duration age)
+{
+    write_file(directory.file("api-url.txt"), url);
+    set_last_write_utc(directory.file("api-url.txt"), kNow - age);
+}
+
+TEST(WizzClientApiAddress, D_71_A_retired_version_answering_503_is_looked_up_again_and_used_at_once)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kStaleApiUrl, 2h);  // still fresh, but not checked for 2 hours
+    Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+                  if (r.url.contains("/29.22.0/")) {
+                      return html_response(kCloudFrontUnavailable, 503);
+                  }
+                  return std::nullopt;
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    const TimetableResult result = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+
+    EXPECT_EQ(result.fares.size(), 11u);
+    EXPECT_EQ(h.request_lines(), (Strings{"POST "s + std::string{kStaleTimetableUrl}, "GET "s + std::string{kHomepage},
+                                          "POST "s + std::string{kTimetableUrl}}));
+    EXPECT_TRUE(h.delays().empty());  // the new address is tried at once: no retry, no back-off
+    EXPECT_EQ(h.messages(), (Strings{kLookingUp}));
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_The_same_version_after_a_503_means_Wizz_Air_is_busy_and_is_checked_once_per_call)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kApiUrl, 2h);
+    const fs::file_time_type saved_at = fs::last_write_time(directory.file("api-url.txt"));
+    Harness h(timetable_script([](int call) {
+                  return call <= 2 ? html_response(kCloudFrontUnavailable, 503)
+                                   : json_response(read_fixture("timetable_v2_bud_ltn.json"));
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    const TimetableResult result = h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+
+    EXPECT_EQ(result.fares.size(), 11u);
+    EXPECT_EQ(h.timetable_calls(), 3u);
+    EXPECT_EQ(h.homepage_hits(), 1u);  // the first 503 of the call only
+    const Strings messages = h.messages();
+    EXPECT_EQ(std::ranges::count(messages, kLookingUp), 1);
+    EXPECT_EQ(std::ranges::count(messages, "Wizz Air is busy (HTTP 503) — retry 1 of 3"s), 1);
+    EXPECT_EQ(std::ranges::count(messages, "Wizz Air is busy (HTTP 503) — retry 2 of 3"s), 1);
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+    // Confirmed current, so the file is written again and its 24 hours start over.
+    EXPECT_NE(fs::last_write_time(directory.file("api-url.txt")), saved_at);
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_Two_calls_that_meet_a_retired_version_look_it_up_once)
+{
+    // The incident with several routes searched at once: both calls get the 503 page,
+    // one looks the address up, the other uses what it found, and neither waits to retry.
+    const ScratchDirectory directory;
+    save_api_url(directory, kStaleApiUrl, 2h);
+    auto arrived = std::make_shared<std::atomic<int>>(0);
+    Harness h(with_default([arrived](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+                  if (r.url.contains("/29.22.0/")) {
+                      // Both calls have their 503 page before either looks up (60 s is only the cap).
+                      arrived->fetch_add(1);
+                      const auto give_up = std::chrono::steady_clock::now() + 60s;
+                      while (arrived->load() < 2 && std::chrono::steady_clock::now() < give_up) {
+                          std::this_thread::sleep_for(1ms);
+                      }
+                      return html_response(kCloudFrontUnavailable, 503);
+                  }
+                  return std::nullopt;
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+
+    std::exception_ptr first_error;
+    std::exception_ptr second_error;
+    {
+        std::jthread first{[&] {
+            try {
+                (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+            } catch (...) {
+                first_error = std::current_exception();
+            }
+        }};
+        std::jthread second{[&] {
+            try {
+                (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));
+            } catch (...) {
+                second_error = std::current_exception();
+            }
+        }};
+    }
+    ASSERT_FALSE(first_error);
+    ASSERT_FALSE(second_error);
+    EXPECT_EQ(arrived->load(), 2);
+    EXPECT_EQ(h.homepage_hits(), 1u);
+    EXPECT_EQ(h.timetable_calls(), 4u);  // each call: the 503 page, then the new address
+    EXPECT_TRUE(h.delays().empty());
+    EXPECT_EQ(std::ranges::count(h.messages(), kLookingUp), 1);
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_Cancelling_while_the_503_page_arrives_looks_nothing_up)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kStaleApiUrl, 2h);
+    std::stop_source cancel;
+    Harness h(with_default([&cancel](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+                  if (r.url.contains("/29.22.0/")) {
+                      cancel.request_stop();
+                      return html_response(kCloudFrontUnavailable, 503);
+                  }
+                  return std::nullopt;
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    EXPECT_TRUE(catch_exactly<OperationCancelled>(
+        [&] { (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)), cancel.get_token()); }));
+    EXPECT_EQ(h.homepage_hits(), 0u);
+    EXPECT_EQ(h.client().current_api_url(), std::string{kStaleApiUrl});
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kStaleApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_A_503_soon_after_the_address_was_found_or_checked_is_plain_busy)
+{
+    // CT_API_05 covers a 503 right after discovery; here the saved file's age decides.
+    for (const Duration age : {Duration{10min} - wizz::Ticks{1}, Duration{10min}}) {
+        const bool looked_up = age >= WizzApiClient::kVersionRecheckAfter;
+        const ScratchDirectory directory;
+        save_api_url(directory, kApiUrl, age);
+        Harness h(timetable_script([](int call) {
+                      return call == 1 ? html_response(kCloudFrontUnavailable, 503)
+                                       : json_response(read_fixture("timetable_v2_bud_ltn.json"));
+                  }),
+                  ClientSetup{.cache_dir = directory.path()});
+        EXPECT_EQ(h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))).fares.size(), 11u)
+            << age.count();
+        EXPECT_EQ(h.homepage_hits(), looked_up ? 1u : 0u) << age.count();
+        EXPECT_EQ(h.timetable_calls(), 2u) << age.count();
+    }
+}
+
+TEST(WizzClientApiAddress, D_71_A_json_503_is_busy_without_a_lookup)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kApiUrl, 2h);
+    Harness h(timetable_script([](int call) {
+                  return call == 1 ? json_response(R"({"message":"busy"})", 503)
+                                   : json_response(read_fixture("timetable_v2_bud_ltn.json"));
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    EXPECT_EQ(h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))).fares.size(), 11u);
+    EXPECT_EQ(h.homepage_hits(), 0u);
+}
+
+TEST(WizzClientApiAddress, D_71_A_saved_address_is_looked_up_again_after_24_hours)
+{
+    for (const Duration age : {Duration{24h}, Duration{24h} + wizz::Ticks{1}}) {
+        const bool looked_up = age > 24h;
+        const ScratchDirectory directory;
+        save_api_url(directory, kStaleApiUrl, age);  // an older version that still answers
+        Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
+        EXPECT_EQ(h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))).fares.size(), 11u)
+            << age.count();
+        EXPECT_EQ(h.homepage_hits(), looked_up ? 1u : 0u) << age.count();
+        EXPECT_EQ(h.client().current_api_url(), looked_up ? std::string{kApiUrl} : std::string{kStaleApiUrl})
+            << age.count();
+        EXPECT_EQ(read_file(directory.file("api-url.txt")), looked_up ? std::string{kApiUrl} : std::string{kStaleApiUrl})
+            << age.count();
+    }
+}
+
+TEST(WizzClientApiAddress, D_71_An_address_in_memory_is_looked_up_again_after_24_hours)
+{
+    Harness h(default_responder());
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+    (void)h.timetable(query);
+    EXPECT_EQ(h.homepage_hits(), 1u);
+    h.clock().advance(24h);  // the fares are stale by now, so the next call asks Wizz Air again
+    (void)h.timetable(query);
+    EXPECT_EQ(h.homepage_hits(), 1u);
+    h.clock().advance(1s);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));  // days not fetched yet
+    EXPECT_EQ(h.homepage_hits(), 2u);
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_When_the_site_cannot_be_read_an_older_address_is_kept_for_an_hour)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kApiUrl, 25h);  // too old, but still working
+    auto site_down = std::make_shared<std::atomic<bool>>(true);
+    Harness h(with_default([site_down](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+                  if (is_homepage(r) && site_down->load()) {
+                      return html_response("down", 500);
+                  }
+                  return std::nullopt;
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    const TimetableQuery query = tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20));
+
+    EXPECT_EQ(h.timetable(query).fares.size(), 11u);  // the older address still works
+    const std::size_t pages = h.client().options().discovery_pages.size();
+    EXPECT_EQ(h.homepage_hits(), pages);  // every discovery page was tried once
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+
+    h.clock().advance(WizzApiClient::kLookUpRetryAfter);  // fares stale, the address not yet
+    (void)h.timetable(query);
+    EXPECT_EQ(h.homepage_hits(), pages);
+
+    site_down->store(false);
+    h.clock().advance(1s);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));  // days not fetched yet
+    EXPECT_EQ(h.homepage_hits(), pages + 1);  // looked up again, and found
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_When_the_site_cannot_be_read_after_a_503_the_address_in_use_is_retried)
+{
+    const ScratchDirectory directory;
+    save_api_url(directory, kApiUrl, 2h);
+    auto pages_503 = std::make_shared<std::atomic<int>>(1);  // timetable answers still to be the 503 page
+    Harness h(with_default([pages_503](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+                  if (is_homepage(r)) {
+                      return html_response("down", 500);
+                  }
+                  if (is_timetable(r) && pages_503->fetch_sub(1) > 0) {
+                      return html_response(kCloudFrontUnavailable, 503);
+                  }
+                  return std::nullopt;
+              }),
+              ClientSetup{.cache_dir = directory.path()});
+    const std::size_t pages = h.client().options().discovery_pages.size();
+
+    EXPECT_EQ(h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))).fares.size(), 11u);
+    EXPECT_EQ(h.homepage_hits(), pages);  // one look-up, every page once
+    EXPECT_EQ(h.timetable_calls(), 2u);   // the normal busy retry
+    EXPECT_EQ(std::ranges::count(h.messages(), "Wizz Air is busy (HTTP 503) — retry 1 of 3"s), 1);
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+
+    // The failed look-up counts as a check: another 503 page within 10 minutes is plain busy...
+    h.clock().advance(Duration{10min} - wizz::Ticks{1});
+    pages_503->store(1);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 23)));  // days not fetched yet
+    EXPECT_EQ(h.homepage_hits(), pages);
+    EXPECT_EQ(h.timetable_calls(), 4u);
+    // ...and the address is kept for an hour after it, then looked up again.
+    h.clock().advance(WizzApiClient::kLookUpRetryAfter - (Duration{10min} - wizz::Ticks{1}));
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 24), day(2026, 11, 26)));
+    EXPECT_EQ(h.homepage_hits(), pages);
+    h.clock().advance(wizz::Ticks{1});
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 27), day(2026, 11, 29)));
+    EXPECT_EQ(h.homepage_hits(), 2 * pages);
+    EXPECT_EQ(h.client().current_api_url(), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_A_saved_address_written_in_the_future_counts_as_written_now)
+{
+    // Written by a machine whose clock ran ahead: its 24 hours start now, so it is used.
+    const ScratchDirectory directory;
+    save_api_url(directory, kApiUrl, -Duration{1h});
+    Harness h(default_responder(), ClientSetup{.cache_dir = directory.path()});
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    h.clock().advance(1min);
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));  // days not fetched yet
+    EXPECT_EQ(h.homepage_hits(), 0u);
+    EXPECT_EQ(h.timetable_calls(), 2u);
+    EXPECT_EQ(read_file(directory.file("api-url.txt")), std::string{kApiUrl});
+}
+
+TEST(WizzClientApiAddress, D_71_After_the_clock_is_set_back_the_address_is_looked_up_again)
+{
+    Harness h(default_responder());
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20)));
+    EXPECT_EQ(h.homepage_hits(), 1u);
+    h.clock().set_utc_now(kNow - 2h);  // e.g. Windows corrected a clock that ran fast
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 21), day(2026, 11, 25)));
+    EXPECT_EQ(h.homepage_hits(), 2u);  // a check time in the future counts as old
+    (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 26), day(2026, 11, 29)));
+    EXPECT_EQ(h.homepage_hits(), 2u);  // checked again in the corrected time
+}
+
+TEST(WizzClientApiAddress, D_71_Without_any_known_address_a_failed_lookup_still_fails)
+{
+    Harness h(with_default([](const RecordedRequest& r) -> std::optional<ScriptedResponse> {
+        return is_homepage(r) ? std::optional{html_response("down", 500)} : std::nullopt;
+    }));
+    EXPECT_TRUE(catch_exactly<WizzApiError>(
+        [&] { (void)h.timetable(tq("BUD", "LTN", day(2026, 11, 10), day(2026, 11, 20))); }));
+    EXPECT_EQ(h.timetable_calls(), 0u);
+}
+
 TEST(WizzClient, Cached_api_url_must_match_the_strict_pattern_and_is_not_rewritten)
 {
     // A valid value with a trailing newline is used as is and never rewritten (04 §7.1).

@@ -70,6 +70,9 @@ struct WizzClientOptions {
     std::vector<Duration> retry_delays{std::chrono::seconds{5}, std::chrono::seconds{15}, std::chrono::seconds{30}};
     /// `map.json` freshness (fresh while age ≤ max age; 04 §8).
     Duration map_max_age = std::chrono::hours{24};
+    /// How long a found API address is used before it is looked up again, from memory
+    /// or `api-url.txt` (fresh while age ≤ max age; D-71). Wizz Air retires old versions.
+    Duration api_url_max_age = std::chrono::hours{24};
     /// The initial reuse window of fetched fares (a day is reused while `now − fetched <
     /// window`; 04 §9.1, D-66); `set_timetable_reuse_window` changes it later.
     Duration timetable_cache_age = std::chrono::minutes{30};
@@ -127,6 +130,12 @@ public:
     static constexpr std::string_view kMapCacheFile = "map.json";
     /// The reused fares on disk (D-67).
     static constexpr std::string_view kTimetableCacheFile = "fares.json";
+    /// A non-JSON 503 makes the client look the API address up again, unless it was
+    /// found or checked less than this long ago (D-71): a retired API version answers 503.
+    static constexpr Duration kVersionRecheckAfter = std::chrono::minutes{10};
+    /// When looking the address up fails, a known older one is kept for this long
+    /// before the next attempt (D-71).
+    static constexpr Duration kLookUpRetryAfter = std::chrono::hours{1};
 
     /// The client shares `transport` (05 §1.4: tests give one fake to two clients)
     /// and builds its RequestGate from `options`. Throws std::invalid_argument for
@@ -136,13 +145,15 @@ public:
     WizzApiClient(const WizzApiClient&) = delete;
     WizzApiClient& operator=(const WizzApiClient&) = delete;
 
-    /// `GetApiUrlAsync` (04 §7.1): the in-memory URL; else, under the cancellable
-    /// discovery lock (double-checked), the trimmed `api-url.txt` if it matches the
-    /// strict pattern (D-15; never re-written); else discovery (04 §7.2), whose
-    /// result is written to `api-url.txt` verbatim, without a newline. Discovery
-    /// sends at most one request per page, each through the gate, announcing
-    /// "Looking up the current Wizz Air API version" before every page, and throws
-    /// WizzApiError (status nullopt) listing every page's problem when all fail.
+    /// `GetApiUrlAsync` (04 §7.1): the in-memory URL while it is fresh (D-71); else,
+    /// under the cancellable discovery lock (double-checked), the trimmed `api-url.txt`
+    /// if it matches the strict pattern (D-15; never re-written) and was written at most
+    /// `api_url_max_age` ago; else discovery (04 §7.2), whose result is written to
+    /// `api-url.txt` verbatim, without a newline. Discovery sends at most one request
+    /// per page, each through the gate, announcing "Looking up the current Wizz Air API
+    /// version" before every page. When every page fails it throws WizzApiError (status
+    /// nullopt) listing every page's problem — unless an older address is known (from
+    /// memory or `api-url.txt` of any age): that one is used for `kLookUpRetryAfter`.
     [[nodiscard]] std::string get_api_url(const NoticeSink& notices, std::stop_token stop);
 
     /// `GetAirportsAsync` (04 §8): memory, then a fresh `map.json` (≤ map_max_age;
@@ -204,6 +215,15 @@ private:
         Outcome outcome = Outcome::transient;
         std::string text;        ///< the body (Outcome::body) or the transient reason
         bool slow_down = false;  ///< transient 503 / plain 429: cool the gate down
+        bool check_version = false;  ///< a non-JSON 503: maybe a retired API version (D-71)
+    };
+    /// The API address in memory (04 §7.1 memUrl) and its age (D-71).
+    struct ApiAddress {
+        std::string url;
+        /// When discovery found it, when api-url.txt was written, or when a failed look-up
+        /// kept it; a time after now (the clock was set back) counts as old.
+        UtcInstant checked_at;
+        UtcInstant expires;  ///< looked up again after this
     };
 
     /// Reports a notice synchronously; an empty sink means "no notices" (04 §3.1).
@@ -215,6 +235,13 @@ private:
     // 04 §7
     [[nodiscard]] std::string discover(const NoticeSink& notices, std::stop_token stop);
     void invalidate_api_url(const std::string& stale);
+    /// After a non-JSON 503 from `used` (D-71): under the discovery lock, the address
+    /// another call moved to meanwhile; else `used` when it was found or checked less
+    /// than kVersionRecheckAfter ago; else discovery's answer (written to api-url.txt),
+    /// or `used` again when discovery fails (kept for kLookUpRetryAfter).
+    [[nodiscard]] std::string recheck_api_url(const std::string& used, const NoticeSink& notices,
+                                              std::stop_token stop);
+    void remember_api_url(std::string url, UtcInstant checked_at, UtcInstant expires);
 
     // 04 §8
     [[nodiscard]] AirportCatalogPtr try_parse_map(const std::optional<std::string>& json) const;
@@ -245,7 +272,7 @@ private:
     std::atomic<std::int64_t> request_count_{0};
 
     CancellableMutex discovery_lock_;                      ///< 04 §7.1 discoveryLock
-    std::atomic<std::shared_ptr<const std::string>> api_url_;  ///< 04 §7.1 memUrl
+    std::atomic<std::shared_ptr<const ApiAddress>> api_url_;  ///< 04 §7.1 memUrl, with its age (D-71)
 
     CancellableMutex map_lock_;                            ///< 04 §8 mapLock (taken before discovery_lock_)
     std::atomic<AirportCatalogPtr> catalog_;               ///< 04 §8 memCatalog

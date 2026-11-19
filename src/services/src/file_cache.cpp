@@ -92,6 +92,20 @@ std::optional<std::string> FileCache::try_read(std::string_view name, std::optio
     return decode_text(*bytes);
 }
 
+std::optional<UtcInstant> FileCache::written_at(std::string_view name) const
+{
+    const auto path = path_of(name);
+    if (!path) {
+        return std::nullopt;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (::GetFileAttributesExW(path->c_str(), GetFileExInfoStandard, &attributes) == FALSE ||
+        (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        return std::nullopt;
+    }
+    return to_utc_instant(attributes.ftLastWriteTime);
+}
+
 void FileCache::try_write(std::string_view name, std::string_view content) const
 {
     const auto path = path_of(name);

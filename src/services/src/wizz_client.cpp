@@ -1,5 +1,5 @@
-// WizzApiClient: construction, API base URL (04 §7.1, §7.2, §7.5) and the
-// route map (04 §8). Timetables: wizz_client_timetable.cpp; the SendApi state
+// WizzApiClient: construction, API base URL (04 §7.1, §7.2, §7.5, with its
+// age and the 503 re-check of D-71) and the route map (04 §8). Timetables: wizz_client_timetable.cpp; the SendApi state
 // machine: wizz_client_send.cpp.
 
 #include "wizz/services/wizz_client.hpp"
@@ -9,6 +9,7 @@
 #include "wizz/core/text.hpp"
 #include "wizz/services/wizz_protocol.hpp"
 
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 #include <utility>
@@ -68,41 +69,99 @@ std::chrono::milliseconds WizzApiClient::attempt_timeout() const
 
 std::optional<std::string> WizzApiClient::current_api_url() const
 {
-    if (const std::shared_ptr<const std::string> url = api_url_.load()) {
-        return *url;
+    if (const std::shared_ptr<const ApiAddress> address = api_url_.load()) {
+        return address->url;
     }
     return std::nullopt;
 }
 
+void WizzApiClient::remember_api_url(std::string url, UtcInstant checked_at, UtcInstant expires)
+{
+    api_url_.store(std::make_shared<const ApiAddress>(
+        ApiAddress{.url = std::move(url), .checked_at = checked_at, .expires = expires}));
+}
+
 // ---------------------------------------------------------------------------
-// 04 §7.1 GetApiUrl
+// 04 §7.1 GetApiUrl, with the address's age (D-71)
 // ---------------------------------------------------------------------------
 
 std::string WizzApiClient::get_api_url(const NoticeSink& notices, std::stop_token stop)
 {
-    if (const std::shared_ptr<const std::string> url = api_url_.load()) {
-        return *url;
+    const auto fresh = [this](const std::shared_ptr<const ApiAddress>& address) {
+        // A check time in the future means the clock was set back since: look it up again.
+        const UtcInstant now = options_.clock->utc_now();
+        return address && address->checked_at <= now && now <= address->expires;
+    };
+    if (const std::shared_ptr<const ApiAddress> address = api_url_.load(); fresh(address)) {
+        return address->url;
     }
     const CancellableLock discovery{discovery_lock_, stop};
-    if (const std::shared_ptr<const std::string> url = api_url_.load()) {
-        return *url;  // another caller finished discovery meanwhile (P-33)
+    if (const std::shared_ptr<const ApiAddress> address = api_url_.load(); fresh(address)) {
+        return address->url;  // another caller finished discovery meanwhile (P-33)
     }
 
-    if (const std::optional<std::string> cached =
-            options_.cache.try_read(kApiUrlCacheFile, std::nullopt, *options_.clock)) {
-        const std::string_view trimmed = text::trim(*cached);
-        if (protocol::is_valid_cached_api_url(trimmed)) {
-            auto url = std::make_shared<const std::string>(trimmed);
-            api_url_.store(url);  // not re-written to disk
-            return *url;
+    const UtcInstant now = options_.clock->utc_now();
+    std::optional<std::string> known = current_api_url();  // in memory but too old (D-71)
+    if (!known) {
+        if (const std::optional<std::string> cached = options_.cache.try_read(kApiUrlCacheFile, std::nullopt,
+                                                                              *options_.clock)) {
+            const std::string_view trimmed = text::trim(*cached);
+            if (protocol::is_valid_cached_api_url(trimmed)) {
+                // Written by discovery, so its write time is when it was found (a time in the
+                // future, as on another machine's clock, counts as now).
+                const UtcInstant written = std::min(options_.cache.written_at(kApiUrlCacheFile).value_or(now), now);
+                if (now - written <= options_.api_url_max_age) {
+                    remember_api_url(std::string{trimmed}, written, written + options_.api_url_max_age);
+                    return std::string{trimmed};  // not re-written to disk
+                }
+                known = std::string{trimmed};  // too old: look it up, but keep it as a fallback
+            }
+            // A value failing the strict pattern is ignored (not deleted); discovery overwrites it.
         }
-        // A value failing the strict pattern is ignored (not deleted); discovery overwrites it.
     }
 
-    auto url = std::make_shared<const std::string>(discover(notices, stop));
-    options_.cache.try_write(kApiUrlCacheFile, *url);  // exact text, no newline (CT-API-14)
-    api_url_.store(url);
-    return *url;
+    std::string url;
+    try {
+        url = discover(notices, stop);
+    } catch (const WizzApiError&) {
+        if (!known) {
+            throw;
+        }
+        // The site could not be read: an older address may still work. Try again later.
+        remember_api_url(*known, now, now + kLookUpRetryAfter);
+        return *known;
+    }
+    options_.cache.try_write(kApiUrlCacheFile, url);  // exact text, no newline (CT-API-14)
+    remember_api_url(url, now, now + options_.api_url_max_age);
+    return url;
+}
+
+// ---------------------------------------------------------------------------
+// D-71: a non-JSON 503 may mean the API version was retired
+// ---------------------------------------------------------------------------
+
+std::string WizzApiClient::recheck_api_url(const std::string& used, const NoticeSink& notices, std::stop_token stop)
+{
+    const CancellableLock discovery{discovery_lock_, stop};
+    const UtcInstant now = options_.clock->utc_now();
+    if (const std::shared_ptr<const ApiAddress> address = api_url_.load()) {
+        if (address->url != used) {
+            return address->url;  // another call moved on meanwhile
+        }
+        if (address->checked_at <= now && now - address->checked_at < kVersionRecheckAfter) {
+            return used;  // found or checked a moment ago: Wizz Air is really busy
+        }
+    }
+    std::string url;
+    try {
+        url = discover(notices, stop);
+    } catch (const WizzApiError&) {
+        remember_api_url(used, now, now + kLookUpRetryAfter);  // keep retrying the one we have
+        return used;
+    }
+    options_.cache.try_write(kApiUrlCacheFile, url);
+    remember_api_url(url, now, now + options_.api_url_max_age);
+    return url;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,8 +216,8 @@ std::string WizzApiClient::discover(const NoticeSink& notices, std::stop_token s
 
 void WizzApiClient::invalidate_api_url(const std::string& stale)
 {
-    std::shared_ptr<const std::string> current = api_url_.load();
-    if (current && *current == stale) {
+    std::shared_ptr<const ApiAddress> current = api_url_.load();
+    if (current && current->url == stale) {
         // Leaves a newer URL stored by another caller meanwhile untouched.
         (void)api_url_.compare_exchange_strong(current, nullptr);
     }

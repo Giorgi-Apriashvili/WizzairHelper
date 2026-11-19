@@ -126,6 +126,7 @@ TEST(FileCache, Disabled_cache_reads_nothing_and_writes_nothing)
     cache.try_delete("map.json");
     EXPECT_EQ(cache.try_read("map.json", std::nullopt, clock), std::nullopt);
     EXPECT_EQ(cache.try_read("map.json", 24h, clock), std::nullopt);
+    EXPECT_EQ(cache.written_at("map.json"), std::nullopt);
 }
 
 // --- reading and writing (04 §6) --------------------------------------------------------
@@ -275,6 +276,22 @@ TEST(FileCache, Future_write_time_is_fresh)
 
     EXPECT_EQ(cache.try_read("fx.json", 12h, clock), "[]");
     EXPECT_EQ(cache.try_read("fx.json", wizz::Duration::zero(), clock), "[]");
+}
+
+TEST(FileCache, Written_at_is_the_exact_last_write_time_D_71)
+{
+    const TempDirectory temp;
+    const wizz::FileCache cache{temp.path()};
+    cache.try_write("api-url.txt", "https://be.wizzair.com/29.26.0/Api");
+
+    set_last_write_utc(temp.path() / "api-url.txt", kNow - 24h - wizz::Ticks{1});
+    EXPECT_EQ(cache.written_at("api-url.txt"), kNow - 24h - wizz::Ticks{1});
+    set_last_write_utc(temp.path() / "api-url.txt", kNow + 365 * 24h);  // a future time is reported as is
+    EXPECT_EQ(cache.written_at("api-url.txt"), kNow + 365 * 24h);
+
+    EXPECT_EQ(cache.written_at("missing.txt"), std::nullopt);
+    fs::create_directory(temp.path() / "folder");
+    EXPECT_EQ(cache.written_at("folder"), std::nullopt) << "a directory is not a cache file";
 }
 
 TEST(FileCache, Ninety_day_geocode_ttl_boundary)

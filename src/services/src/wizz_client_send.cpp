@@ -1,7 +1,7 @@
 // WizzApiClient::send_api, the transport state machine (04 §11): one gate turn
 // and one attempt per loop pass, the ordered classification table (§11.3),
-// stale-version re-discovery once per call, and the back-off schedule with its
-// countdown notices (§11.4).
+// stale-version re-discovery once per call (a 404 page, and a 503 page per D-71),
+// and the back-off schedule with its countdown notices (§11.4).
 
 #include "wizz/services/wizz_client.hpp"
 
@@ -116,6 +116,7 @@ std::string WizzApiClient::send_api(std::string_view method, std::string_view re
 {
     const std::size_t max_retries = options_.retry_delays.size();
     bool rediscovered = false;
+    bool version_rechecked = false;
     std::size_t retries = 0;
     for (;;) {
         throw_if_cancelled(stop);  // top of the loop: a pre-cancelled call sends nothing (CT-API-13)
@@ -132,6 +133,14 @@ std::string WizzApiClient::send_api(std::string_view method, std::string_view re
             invalidate_api_url(api_url);
             notify(notices, std::string{kStaleVersionNotice});
             continue;  // does not consume a retry
+        }
+        if (result.check_version && !version_rechecked) {
+            // First non-JSON 503 of this call: maybe the API version was retired (D-71).
+            // A new address is tried at once; the same one means Wizz Air is really busy.
+            version_rechecked = true;
+            if (recheck_api_url(api_url, notices, stop) != api_url) {
+                continue;  // does not consume a retry; the lookup announced itself
+            }
         }
 
         if (retries >= max_retries) {
@@ -229,7 +238,9 @@ WizzApiClient::AttemptResult WizzApiClient::attempt(const std::string& api_url, 
         return transient(std::string{kRateLimited}, true);                          // row 5b
     }
     if (code >= 500 || code == 408) {
-        return transient(std::format("Wizz Air is busy (HTTP {})", code), code == 503);  // row 6
+        AttemptResult busy = transient(std::format("Wizz Air is busy (HTTP {})", code), code == 503);  // row 6
+        busy.check_version = code == 503 && !is_json;  // a retired API version answers this way (D-71)
+        return busy;
     }
     if (!is_json) {
         throw WizzBlockedError(                                                      // row 7

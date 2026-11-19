@@ -44,6 +44,10 @@ public:
     /// Deletes `<directory>/<name>`; a missing file and errors are ignored.
     void try_delete(std::string_view name) const;
 
+    /// The last write time of `<directory>/<name>` as UTC, or nullopt when the cache is
+    /// disabled or the file is missing or a directory. Never throws.
+    [[nodiscard]] std::optional<UtcInstant> written_at(std::string_view name) const;
+
 private:
     [[nodiscard]] std::optional<std::filesystem::path> path_of(std::string_view name) const;
 
