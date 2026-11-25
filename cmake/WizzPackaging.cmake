@@ -106,6 +106,11 @@ function(wizz_add_release_package target)
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
     set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)       # part of Windows 10 and 11
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP OFF)
+    # The redistributable folder is looked up again at every configure: find_path keeps a
+    # cached result even after a Visual Studio update deleted that folder (or put a newer one
+    # beside it), which would leave the package without the runtime, or with one older than
+    # the compiler that built the app. Found afresh it is the newest one installed.
+    unset(MSVC_REDIST_DIR CACHE)
     include(InstallRequiredSystemLibraries)
     if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
         message(WARNING "InstallRequiredSystemLibraries found no MSVC runtime; the package needs the VC++ redistributable")
