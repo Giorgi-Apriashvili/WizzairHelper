@@ -100,9 +100,11 @@ the configure step after adding files.
 - `autotest.*` (label `autotest`): the real `WizzairHelper.exe` in its hidden self-test mode on
   replayed scenarios, checked by `tests/gui/check_autotest.py`. They open real windows one at a
   time and need an interactive desktop session. A name's suffixes are its variants: `.scale150` /
-  `.scale200` (QT_SCALE_FACTOR), `.dark` (the dark look) and `.minimum` (the 980 x 600 window), e.g.
+  `.scale200` (QT_SCALE_FACTOR), `.dark` (the dark look), `.themedark` / `.themelight` (that Theme
+  choice saved in the run's settings.json, DECISIONS D-75) and `.minimum` (the 980 x 600 window), e.g.
   `autotest.named_destination.dark.scale200`. Every run also checks that the app showed the look it
-  was asked for: High Contrast, else `WIZZ_COLOR_SCHEME`, else the Windows app mode. `ctest --preset debug -L autotest` runs only these,
+  was asked for: High Contrast, else `WIZZ_COLOR_SCHEME`, else a Dark or Light Theme setting, else the
+  Windows app mode. `ctest --preset debug -L autotest` runs only these,
   `-LE autotest` everything else.
 
 ## Release artefacts
@@ -214,7 +216,8 @@ Example (an isolated profile and a replayed network):
 
 The checker runs a named scenario and validates everything; `--scale 1.5` / `--scale 2` run it at
 150 % / 200 % (`QT_SCALE_FACTOR`), `--window 980x600` starts the window at that size (through the
-isolated profile's settings.json), `--color-scheme light|dark`, `--high-contrast`,
+isolated profile's settings.json), `--theme auto|dark|light` saves that Theme choice there
+(DECISIONS D-75), `--color-scheme light|dark`, `--high-contrast`,
 `--fonts windows10` and `--text-rendering hinted|natural|natural-heavier` set the look's switches
 below, and `--exe` can point at a packaged exe:
 
@@ -232,7 +235,8 @@ after the first, which must ask Wizz Air only for each route's new last day, tak
 
 ### The look's diagnostic switches
 
-The app follows Windows: light or dark from the app mode, High Contrast with the system's colours
+The app follows Windows: light or dark from the app mode (while the Settings window's Theme switch
+is on Auto; Dark or Light keep that look, D-75), High Contrast with the system's colours
 and the plain native style, and it changes along while it runs (DECISIONS D-53..D-56). Its text is
 drawn natural and slightly heavier (D-58). For tests, screenshots and diagnosis these environment
 variables override what Windows says and how text is drawn, like `QT_SCALE_FACTOR`; a normal
@@ -240,7 +244,7 @@ installation never needs them:
 
 | Variable | Effect |
 |---|---|
-| `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows) |
+| `WIZZ_COLOR_SCHEME=light` / `dark` | Forces the colour scheme (the title bar follows), also over the Theme switch of the Settings window (DECISIONS D-75) |
 | `WIZZ_HIGH_CONTRAST=1` / `0` | Says that High Contrast is on / off instead of asking Windows |
 | `WIZZ_FONTS=windows10` | Leaves out the Windows 11 fonts (Segoe UI Variable, Cascadia Mono, Segoe Fluent Icons), as on a Windows 10 without Windows Terminal |
 | `WIZZ_TEXT_RENDERING=hinted` / `natural` | Draws all text, popups and dialogs included, another way than the default, `natural-heavier` (ClearType without hinting, Segoe UI Variable and Cascadia Mono 50 units heavier on their weight axis; D-58): `hinted` as 2.0.0 did (Qt's default hinting, at 100 % DirectWrite GDI-classic ClearType: glyphs snapped to whole pixels), for comparisons and bug reports: 2.0.0's text, and at 100 % its layout too (at 150 % and 200 % lines are measured as laid out, so the window's lower part can sit 2 px lower than in 2.0.0); `natural` without the extra weight. Read when a font is built, so set it before the app starts; unknown values mean the default. `diagnostics.json` reports the rendering, the UI font's hinting and its weight axis (`environment.textRendering`, `fontHinting`, `fontWeightAxis`) and the face and weight axis of the UI, semibold, caption and monospace fonts (`environment.fonts`) |

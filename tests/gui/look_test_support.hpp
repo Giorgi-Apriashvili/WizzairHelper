@@ -9,14 +9,16 @@
 //
 // WIZZ_TEXT_RENDERING=natural|hinted runs it with that text rendering (D-58).
 //
-// LookGuard is for the tests that change the look (scheme, High Contrast probe,
-// Windows 10 fonts, text rendering): it clears the switches for the test (the
-// default rendering, natural-heavier) and puts the suite's look back afterwards,
-// also after a failed ASSERT.
+// LookGuard is for the tests that change the look (scheme, Theme choice, High
+// Contrast probe, Windows 10 fonts, text rendering): it clears the switches for the
+// test (the default rendering, natural-heavier) and sets the Theme choice to Auto,
+// and puts the suite's look back afterwards, also after a failed ASSERT.
 
 #include "ui_style.hpp"
 
 #include <QByteArray>
+#include <QGuiApplication>
+#include <QSettings>
 #include <QtGlobal>
 
 #include <array>
@@ -40,10 +42,27 @@ inline void apply_suite_look()
     static_cast<void>(::wizz::app::style::apply_application_look());
 }
 
+/// Whether Windows' app mode is dark, as the app sees it under Auto: on the windows platform the
+/// registry value Qt reads (AppsUseLightTheme, so a Qt request left in place cannot fake it);
+/// elsewhere (the minimal platform reports no scheme) light.
+[[nodiscard]] inline bool windows_app_mode_dark()
+{
+    if (QGuiApplication::platformName() != QStringLiteral("windows")) {
+        return false;
+    }
+    const QSettings personalize{
+        QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        QSettings::NativeFormat};
+    return personalize.value(QStringLiteral("AppsUseLightTheme"), 1).toInt() == 0;
+}
+
 class LookGuard {
 public:
     LookGuard()
     {
+        // Auto first, while the suite's switches still pin the look: the look does not change here.
+        previous_choice_ = ::wizz::app::style::theme_choice();
+        static_cast<void>(::wizz::app::style::set_theme_choice(::wizz::ui::ThemeChoice::automatic));
         for (std::size_t i = 0; i < kSwitches.size(); ++i) {
             if (qEnvironmentVariableIsSet(kSwitches[i])) {
                 saved_[i] = qgetenv(kSwitches[i]);
@@ -62,6 +81,7 @@ public:
             }
         }
         ::wizz::app::style::set_high_contrast_probe(std::move(previous_probe_));
+        static_cast<void>(::wizz::app::style::set_theme_choice(previous_choice_));
         static_cast<void>(::wizz::app::style::apply_application_look());
     }
     LookGuard(const LookGuard&) = delete;
@@ -70,6 +90,7 @@ public:
 private:
     std::array<std::optional<QByteArray>, kSwitches.size()> saved_;
     ::wizz::app::style::HighContrastProbe previous_probe_;
+    ::wizz::ui::ThemeChoice previous_choice_ = ::wizz::ui::ThemeChoice::automatic;
 };
 
 } // namespace wizz::test::look

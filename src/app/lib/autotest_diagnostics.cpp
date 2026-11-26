@@ -9,6 +9,7 @@
 #include "ui_style.hpp"
 
 #include "wizz/core/json.hpp"
+#include "wizz/ui/settings.hpp"
 
 #include <QApplication>
 #include <QFontInfo>
@@ -298,6 +299,7 @@ EnvironmentDiagnostics describe_environment(const Locale& locale)
         environment.look = "high_contrast";
         break;
     }
+    environment.theme_choice = std::string{ui::json_name(style::theme_choice())};
     environment.window_colour = to_utf8(QApplication::palette().color(QPalette::Window).name());
     environment.font_family = to_utf8(QFontInfo(QApplication::font()).family());
     environment.text_rendering = style::text_rendering_name(style::text_rendering());
@@ -410,6 +412,7 @@ std::string to_json(const AutoTestDiagnostics& diagnostics)
     writer.key("locale").string(environment.locale);
     writer.key("style").string(environment.style);
     writer.key("look").string(environment.look);
+    writer.key("themeChoice").string(environment.theme_choice);
     writer.key("windowColour").string(environment.window_colour);
     writer.key("fontFamily").string(environment.font_family);
     writer.key("textRendering").string(environment.text_rendering);

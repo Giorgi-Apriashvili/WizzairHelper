@@ -16,7 +16,9 @@ WizzairHelper is an independent project. It is not affiliated with, endorsed by 
 Wizz Air or Airbnb; its icon is original artwork, not an airline logo.
 
 It follows Windows' light or dark app mode, also when you switch it while the app runs, and
-Windows' High Contrast themes.
+Windows' High Contrast themes. To keep it light or dark whatever Windows uses, pick **Dark** or
+**Light** with the **Theme** switch at the bottom of the Settings window (**Auto**, the default,
+follows Windows); a Windows contrast theme still wins.
 
 Native C++23 / Qt 6 Widgets / libcurl, built with CMake and vcpkg (MSVC x64).
 

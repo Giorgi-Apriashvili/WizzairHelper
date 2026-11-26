@@ -19,6 +19,7 @@
 #include "qt_strings.hpp"
 #include "search_button.hpp"
 #include "section_card.hpp"
+#include "segmented_switch.hpp"
 #include "settings_button.hpp"
 #include "settings_dialog.hpp"
 #include "ui_style.hpp"
@@ -35,6 +36,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QStyleFactory>
+#include <QStyleHints>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -1027,6 +1029,158 @@ TEST(SettingsWindow, D_73_Searches_shows_the_saved_homes_distance_and_saves_a_ch
     EXPECT_EQ(open_settings(rig.window()).homes_radius(), HomesRadius::twenty_five_km);
 }
 
+TEST(SettingsWindow, D_75_The_Theme_switch_shows_the_saved_look_applies_a_choice_everywhere_and_saves_it)
+{
+    using wizz::ui::ThemeChoice;
+    const wizz::test::look::LookGuard guard;  // no WIZZ_COLOR_SCHEME: the choice decides
+    WindowRigOptions setup;
+    setup.settings.theme = ThemeChoice::dark;
+    setup.settings.from = "Wien";
+    WindowRig rig{std::move(setup)};
+    EXPECT_EQ(style::theme_choice(), ThemeChoice::dark) << "settings.json's look, before the window shows";
+    EXPECT_EQ(style::appearance(), style::Appearance::dark);
+    rig.start();
+    EXPECT_EQ(rig.window().palette().color(QPalette::Window), style::dark_theme().window);
+    SettingsDialog& dialog = open_settings(rig.window());
+
+    wizz::app::SegmentedSwitch& theme = *dialog.theme_switch();
+    ASSERT_EQ(theme.count(), 3);
+    EXPECT_EQ(theme.segment(0)->text(), "Auto");
+    EXPECT_EQ(theme.segment(1)->text(), "Dark");
+    EXPECT_EQ(theme.segment(2)->text(), "Light");
+    EXPECT_EQ(theme.current(), 1);
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+    EXPECT_TRUE(theme.isEnabled()) << "in every run";
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig))) << "opening saves nothing";
+
+    // Beside Close, at the left of its row, as tall as Close and centred on it: the row keeps its height.
+    const QRect close = rect_in(*dialog.close_button(), dialog);
+    const QRect row = rect_in(theme, dialog);
+    const QRect label = rect_in(*dialog.theme_label(), dialog);
+    EXPECT_EQ(row.height(), close.height());
+    EXPECT_EQ(row.center().y(), close.center().y());
+    EXPECT_EQ(label.center().y(), close.center().y());
+    EXPECT_EQ(label.left(), rect_in(*dialog.searches_card(), dialog).left()) << "under the cards' left edge";
+    EXPECT_LT(label.right(), row.left());
+    EXPECT_LT(row.right(), close.left());
+    EXPECT_GT(row.top(), rect_in(*dialog.searches_card(), dialog).bottom());
+
+    // A click applies the look to every window at once, this one included, and saves it.
+    std::vector<ThemeChoice> reported;
+    QObject::connect(&dialog, &SettingsDialog::theme_changed, [&reported](ThemeChoice choice) {
+        reported.push_back(choice);
+    });
+    theme.segment(2)->click();
+    EXPECT_EQ(reported, std::vector<ThemeChoice>{ThemeChoice::light});
+    EXPECT_EQ(style::theme_choice(), ThemeChoice::light);
+    EXPECT_EQ(style::appearance(), style::Appearance::light);
+    gui::settle();
+    EXPECT_EQ(rig.window().palette().color(QPalette::Window), style::light_theme().window);
+    EXPECT_EQ(dialog.palette().color(QPalette::Window), style::light_theme().window);
+    EXPECT_EQ(saved(rig).theme, ThemeChoice::light);
+    EXPECT_EQ(saved(rig).from, "Wien") << "the other settings are saved as they are";
+    EXPECT_EQ(rig.window().current_settings().theme, ThemeChoice::light);
+    EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{});
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        EXPECT_EQ(QGuiApplication::styleHints()->colorScheme(), Qt::ColorScheme::Light);  // the title bars follow
+    }
+
+    // Auto: Windows decides again.
+    theme.segment(0)->click();
+    EXPECT_EQ(saved(rig).theme, ThemeChoice::automatic);
+    EXPECT_EQ(style::requested_color_scheme(), std::nullopt) << "nothing asked of Qt any more";
+    EXPECT_EQ(style::appearance(), wizz::test::look::windows_app_mode_dark() ? style::Appearance::dark
+                                                                             : style::Appearance::light);
+
+    // Showing a value reports and applies nothing.
+    dialog.show_theme(ThemeChoice::dark);
+    EXPECT_EQ(reported, (std::vector<ThemeChoice>{ThemeChoice::light, ThemeChoice::automatic}));
+    EXPECT_EQ(style::theme_choice(), ThemeChoice::automatic);
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+
+    // Opened again, the window shows what was kept; closing the app saves it too.
+    dialog.close();
+    ASSERT_TRUE(gui::wait_until([&] { return rig.window().settings_dialog() == nullptr; }));
+    EXPECT_EQ(open_settings(rig.window()).theme(), ThemeChoice::automatic);
+    rig.window().settings_dialog()->theme_switch()->segment(1)->click();
+    rig.window().close();
+    EXPECT_EQ(saved(rig).theme, ThemeChoice::dark);
+}
+
+TEST(SettingsWindow, D_75_The_Theme_switch_works_with_the_keyboard_from_its_selected_segment)
+{
+    using wizz::ui::ThemeChoice;
+    const wizz::test::look::LookGuard guard;
+    WindowRigOptions setup;
+    setup.settings.theme = ThemeChoice::light;
+    WindowRig rig{std::move(setup)};
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    wizz::app::SegmentedSwitch& theme = *dialog.theme_switch();
+    ASSERT_EQ(dialog.theme(), ThemeChoice::light);
+
+    // Tab reaches the selected segment, Light, the last one, also before any segment had the focus
+    // (a Windows radio group; Qt alone would stop on Auto first); Shift+Tab from Close too.
+    dialog.homes_box()->setFocus(Qt::TabFocusReason);
+    EXPECT_EQ(press_tab(dialog, 2), (std::vector<QWidget*>{theme.segment(2), dialog.close_button()}));
+    EXPECT_EQ(press_tab(dialog, 2, true), (std::vector<QWidget*>{theme.segment(2), dialog.homes_box()}));
+
+    // The arrows move to the next segment and select it, which applies and saves it at once.
+    theme.segment(2)->setFocus(Qt::TabFocusReason);
+    gui::send_key(theme.segment(2), QEvent::KeyPress, Qt::Key_Left);
+    EXPECT_EQ(dialog.focusWidget(), theme.segment(1));
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+    EXPECT_EQ(style::appearance(), style::Appearance::dark);
+    EXPECT_EQ(saved(rig).theme, ThemeChoice::dark);
+    gui::send_key(theme.segment(1), QEvent::KeyPress, Qt::Key_Left);
+    EXPECT_EQ(dialog.focusWidget(), theme.segment(0));
+    EXPECT_EQ(dialog.theme(), ThemeChoice::automatic);
+    gui::send_key(theme.segment(0), QEvent::KeyPress, Qt::Key_Left);
+    EXPECT_EQ(dialog.focusWidget(), theme.segment(0)) << "the first stays";
+    gui::send_key(theme.segment(0), QEvent::KeyPress, Qt::Key_Right);
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+    // One Tab stop: the segment selected now.
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.close_button()}));
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{theme.segment(1)}));
+    // Space on the selected segment keeps it.
+    gui::send_key(theme.segment(1), QEvent::KeyPress, Qt::Key_Space);
+    gui::send_key(theme.segment(1), QEvent::KeyRelease, Qt::Key_Space);
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+    // The focus on a segment that is not selected (a right-click, a press dragged off): one Tab
+    // or Shift+Tab still leaves the switch, and then its stop is the selected segment again.
+    theme.segment(0)->setFocus(Qt::MouseFocusReason);
+    EXPECT_EQ(dialog.theme(), ThemeChoice::dark);
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.close_button()}));
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{theme.segment(1)}));
+    theme.segment(2)->setFocus(Qt::MouseFocusReason);
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{dialog.homes_box()}));
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{theme.segment(1)}));
+}
+
+TEST(SettingsWindow, D_75_A_theme_chosen_in_autotest_applies_but_writes_nothing)
+{
+    using wizz::ui::ThemeChoice;
+    const wizz::test::look::LookGuard guard;
+    QTemporaryDir out;
+    WindowRigOptions setup;
+    setup.scenario = "same_area";
+    setup.autotest = wizz::ui::AutoTestOptions{};
+    setup.autotest->output_dir = std::filesystem::path{out.path().toStdWString()};
+    setup.autotest->to = "BUD";  // a search of 0 requests
+    setup.autotest->keep_open = true;
+    WindowRig rig{std::move(setup)};
+    rig.window().autotest_runner()->set_screenshotter(
+        [](const QWidget&, const std::filesystem::path&) -> std::expected<void, std::string> { return {}; });
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    dialog.theme_switch()->segment(1)->click();
+    EXPECT_EQ(style::appearance(), style::Appearance::dark) << "the look changes";
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig))) << "settings.json does not";
+    dialog.close_button()->click();
+    rig.window().close();
+    EXPECT_FALSE(std::filesystem::exists(settings_path(rig)));
+}
+
 TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
 {
     UpdateRig rig;
@@ -1037,13 +1191,14 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     QRadioButton* notify = dialog.when_found_button(WhenFound::notify_only);
     EXPECT_EQ(dialog.focusWidget(), dialog.check_now_button()) << "focus starts on the first control";
     // Real Tab presses: an exclusive radio group is one stop, its selected choice (D-63); the
-    // reuse window and the homes distance of the "Searches" card come before Close (D-68,
-    // D-73: changed deliberately).
-    EXPECT_EQ(press_tab(dialog, 7),
+    // reuse window and the homes distance of the "Searches" card (D-68, D-73) and the selected
+    // segment of the Theme switch (D-75) come before Close (changed deliberately).
+    QWidget* theme = dialog.theme_switch()->segment(0);  // Auto
+    EXPECT_EQ(press_tab(dialog, 8),
               (std::vector<QWidget*>{dialog.check_automatically_box(), dialog.frequency_box(), install, dialog.reuse_box(),
-                                     dialog.homes_box(), dialog.close_button(), dialog.check_now_button()}));
-    EXPECT_EQ(press_tab(dialog, 4, true),
-              (std::vector<QWidget*>{dialog.close_button(), dialog.homes_box(), dialog.reuse_box(), install}));
+                                     dialog.homes_box(), theme, dialog.close_button(), dialog.check_now_button()}));
+    EXPECT_EQ(press_tab(dialog, 5, true),
+              (std::vector<QWidget*>{dialog.close_button(), theme, dialog.homes_box(), dialog.reuse_box(), install}));
     // The arrow keys move among the choices and select each one, which applies it at once.
     gui::send_key(install, QEvent::KeyPress, Qt::Key_Down);
     EXPECT_EQ(dialog.focusWidget(), ask);
@@ -1072,9 +1227,17 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     EXPECT_EQ(dialog.homes_box()->accessibleName(), "Homes on Airbnb within this distance of the city centre");
     EXPECT_EQ(dialog.homes_label()->text(), "Homes on Airbnb within");
     EXPECT_EQ(dialog.homes_suffix()->text(), "of the city centre");
+    EXPECT_EQ(dialog.theme_label()->text(), "Theme");
+    EXPECT_EQ(dialog.theme_switch()->accessibleName(), "Theme");
+    EXPECT_EQ(dialog.theme_switch()->accessibleDescription(),
+              "Auto follows the light or dark mode set in Windows. A Windows contrast theme overrides all three.");
+    EXPECT_EQ(dialog.theme_switch()->toolTip(), dialog.theme_switch()->accessibleDescription());
     for (QWidget* control : std::initializer_list<QWidget*>{dialog.check_now_button(), dialog.check_automatically_box(),
                                                              dialog.frequency_box(), install, ask, notify,
                                                              dialog.reuse_box(), dialog.homes_box(),
+                                                             dialog.theme_switch()->segment(0),
+                                                             dialog.theme_switch()->segment(1),
+                                                             dialog.theme_switch()->segment(2),
                                                              dialog.close_button()}) {
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(control);
         ASSERT_NE(accessible, nullptr);
@@ -1082,7 +1245,7 @@ TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
     }
     for (const QLabel* label : {dialog.version_label(), dialog.status_label(), dialog.when_found_caption(),
                                 dialog.note_label(), dialog.reuse_label(), dialog.reuse_hint(), dialog.homes_label(),
-                                dialog.homes_suffix()}) {
+                                dialog.homes_suffix(), dialog.theme_label()}) {
         EXPECT_EQ(label->textFormat(), Qt::PlainText) << "plain text (D-58)";
     }
 
@@ -1210,6 +1373,9 @@ TEST(SettingsWindow, Follows_the_look_in_light_dark_and_high_contrast)
         const QImage window = dialog.grab().toImage();
         EXPECT_EQ(window.pixelColor(2, window.height() / 2), theme.window) << look << ": behind the card";
         EXPECT_EQ(wizz::app::layout_problems(dialog), std::vector<std::string>{}) << look;
+        // The Theme switch beside Close is as tall as Close and centred on it in every look (D-75).
+        EXPECT_EQ(dialog.theme_switch()->height(), dialog.close_button()->height()) << look;
+        EXPECT_EQ(dialog.theme_switch()->geometry().center().y(), dialog.close_button()->geometry().center().y()) << look;
     };
     ASSERT_EQ(dialog.status().kind, UpdateStatusKind::up_to_date);
     expect_look("light");

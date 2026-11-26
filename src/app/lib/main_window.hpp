@@ -228,6 +228,9 @@ private:
     /// The Settings window changed how far "Homes on Airbnb" reaches (D-73): keep it for the
     /// next use and save settings.json (not in autotest).
     void apply_homes_radius(ui::HomesRadius radius);
+    /// The Settings window's Theme switch chose another look (D-75): keep it, show it in every
+    /// window at once and save settings.json (not in autotest).
+    void apply_theme(ui::ThemeChoice choice);
 
     std::shared_ptr<const AppServices> services_;
     ui::AppSettings settings_;

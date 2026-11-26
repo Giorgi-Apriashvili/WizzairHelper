@@ -39,7 +39,12 @@ constexpr qreal kFormPointSize = 10.0;
 struct State {
     Theme theme = light_theme();
     std::optional<Appearance> appearance;  ///< none until apply_application_look()
-    bool forced_scheme = false;            ///< setColorScheme() was called for WIZZ_COLOR_SCHEME
+    /// The user's Theme choice (D-75).
+    ui::ThemeChoice chosen = ui::ThemeChoice::automatic;
+    /// The scheme setColorScheme() last asked Qt for (WIZZ_COLOR_SCHEME or the Theme choice);
+    /// none = no request, or unsetColorScheme() since.
+    std::optional<Qt::ColorScheme> requested;
+    int requests = 0;                      ///< setColorScheme() and unsetColorScheme() calls (tests)
     bool following = false;                ///< connected to Windows' change signals
     bool refresh_pending = false;
     HighContrastProbe probe;
@@ -184,22 +189,24 @@ void install(Appearance look)
     QToolTip::setPalette(palette);
 }
 
-/// The scheme Windows reports, without a WIZZ_COLOR_SCHEME request of ours in it.
-[[nodiscard]] Qt::ColorScheme system_scheme(QStyleHints& hints, std::optional<Qt::ColorScheme> forced)
+/// Asks Qt for `scheme`, so the title bars follow, or with none for Windows' own scheme again;
+/// each only when it differs from the last request. Qt answers a request with a theme change
+/// (ThemeChange, colorSchemeChanged), which schedules another refresh; and under a Windows
+/// contrast theme Qt reports no scheme at all (QWindowsTheme::effectiveColorScheme), so
+/// comparing with hints.colorScheme() would ask again on every refresh, without end.
+void request_scheme(QStyleHints& hints, std::optional<Qt::ColorScheme> scheme)
 {
     State& s = state();
-    if (forced) {
-        if (!s.forced_scheme || hints.colorScheme() != *forced) {
-            hints.setColorScheme(*forced);  // the title bar follows
-            s.forced_scheme = true;
-        }
-        return *forced;
+    if (s.requested == scheme) {
+        return;
     }
-    if (s.forced_scheme) {
-        hints.unsetColorScheme();  // the override went away (tests): follow Windows again
-        s.forced_scheme = false;
+    s.requested = scheme;
+    ++s.requests;
+    if (scheme) {
+        hints.setColorScheme(*scheme);
+    } else {
+        hints.unsetColorScheme();  // follow Windows again (the choice went back to Auto, tests)
     }
-    return hints.colorScheme();
 }
 
 void follow_windows()
@@ -433,12 +440,27 @@ std::optional<bool> parse_switch(QByteArrayView value)
     return std::nullopt;
 }
 
-Appearance choose_appearance(bool high_contrast, std::optional<Qt::ColorScheme> forced, Qt::ColorScheme system) noexcept
+Appearance choose_appearance(bool high_contrast, std::optional<Qt::ColorScheme> forced, ui::ThemeChoice chosen,
+                             Qt::ColorScheme system) noexcept
 {
     if (high_contrast) {
         return Appearance::high_contrast;
     }
-    return forced.value_or(system) == Qt::ColorScheme::Dark ? Appearance::dark : Appearance::light;
+    const Qt::ColorScheme scheme = forced.value_or(scheme_of(chosen).value_or(system));
+    return scheme == Qt::ColorScheme::Dark ? Appearance::dark : Appearance::light;
+}
+
+std::optional<Qt::ColorScheme> scheme_of(ui::ThemeChoice choice) noexcept
+{
+    switch (choice) {
+    case ui::ThemeChoice::dark:
+        return Qt::ColorScheme::Dark;
+    case ui::ThemeChoice::light:
+        return Qt::ColorScheme::Light;
+    case ui::ThemeChoice::automatic:
+        break;
+    }
+    return std::nullopt;
 }
 
 HighContrastProbe set_high_contrast_probe(HighContrastProbe probe)
@@ -455,6 +477,31 @@ bool high_contrast_active()
 Appearance appearance()
 {
     return state().appearance.value_or(Appearance::light);
+}
+
+ui::ThemeChoice theme_choice()
+{
+    return state().chosen;
+}
+
+bool set_theme_choice(ui::ThemeChoice choice)
+{
+    State& s = state();
+    s.chosen = choice;
+    if (!s.appearance) {
+        return false;  // apply_application_look() installs the look with it
+    }
+    return refresh_appearance();
+}
+
+int color_scheme_requests() noexcept
+{
+    return state().requests;
+}
+
+std::optional<Qt::ColorScheme> requested_color_scheme() noexcept
+{
+    return state().requested;
 }
 
 ThemeNotifier* theme_notifier()
@@ -508,8 +555,10 @@ bool refresh_appearance()
     QStyleHints* hints = QGuiApplication::styleHints();
     const std::optional<Qt::ColorScheme> forced = parse_color_scheme(qgetenv("WIZZ_COLOR_SCHEME"));
     const bool contrast = high_contrast_active();
-    const Qt::ColorScheme system = system_scheme(*hints, forced);
-    const Appearance look = choose_appearance(contrast, forced, system);
+    // Asked for under High Contrast too: Qt ignores it there and applies it once High
+    // Contrast is off. Without a request, colorScheme() is Windows' app mode.
+    request_scheme(*hints, forced ? forced : scheme_of(s.chosen));
+    const Appearance look = choose_appearance(contrast, forced, s.chosen, hints->colorScheme());
     if (s.appearance == look) {
         bool same = true;
         if (look == Appearance::high_contrast) {

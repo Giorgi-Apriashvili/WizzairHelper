@@ -3,6 +3,7 @@
 #include "modern_style.hpp"
 #include "qt_strings.hpp"
 #include "section_card.hpp"
+#include "segmented_switch.hpp"
 #include "ui_style.hpp"
 
 #include "wizz/ui/settings.hpp"
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <initializer_list>
 #include <utility>
 
@@ -269,6 +271,22 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     outer->addSpacing(kButtonsGap);
     auto* buttons = new QHBoxLayout;
     buttons->setContentsMargins(0, 0, 0, 0);
+    buttons->setSpacing(kColumnGap);
+    // The Theme switch (D-75) at the left of Close's row: as tall as Close, so the row keeps its height.
+    theme_label_ = plain_label(this, false);
+    theme_label_->setObjectName(QStringLiteral("themeLabel"));
+    theme_label_->setText(to_qstring(search_strings::kTheme));
+    QStringList theme_labels;
+    for (const ui::ThemeChoice choice : ui::kThemeChoices) {
+        theme_labels.append(to_qstring(search_strings::theme_choice_label(choice)));
+    }
+    theme_ = new SegmentedSwitch(theme_labels, this);
+    theme_->setObjectName(QStringLiteral("theme"));
+    theme_->setAccessibleName(to_qstring(search_strings::kTheme));
+    theme_->setAccessibleDescription(to_qstring(search_strings::kThemeToolTip));
+    theme_->setToolTip(to_qstring(search_strings::kThemeToolTip));
+    buttons->addWidget(theme_label_, 0, Qt::AlignVCenter);
+    buttons->addWidget(theme_, 0, Qt::AlignVCenter);
     buttons->addStretch(1);
     close_ = new QPushButton(to_qstring(strings::kClose), this);
     close_->setObjectName(QStringLiteral("close"));
@@ -287,7 +305,12 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     }
     QWidget::setTabOrder(previous, reuse_);
     QWidget::setTabOrder(reuse_, homes_);
-    QWidget::setTabOrder(homes_, close_);
+    previous = homes_;
+    for (int i = 0; i < theme_->count(); ++i) {
+        QWidget::setTabOrder(previous, theme_->segment(i));
+        previous = theme_->segment(i);
+    }
+    QWidget::setTabOrder(previous, close_);
 
     connect(check_now_, &QPushButton::clicked, this, &SettingsDialog::check_now_requested);
     connect(update_action_, &QPushButton::clicked, this, &SettingsDialog::update_action_requested);
@@ -312,6 +335,11 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
             Q_EMIT homes_radius_changed(this->homes_radius());
         }
     });
+    connect(theme_, &SegmentedSwitch::current_changed, this, [this] {
+        if (!showing_) {
+            Q_EMIT theme_changed(this->theme());
+        }
+    });
     style::on_theme_change(this, [this] {
         apply_status_colour();
         QMetaObject::invokeMethod(this, [this] { fit_size(); }, Qt::QueuedConnection);  // High Contrast's metrics
@@ -320,6 +348,7 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     show_options(options);
     show_fare_reuse(fare_reuse);
     show_homes_radius(ui::AppSettings{}.homes_within);
+    show_theme(ui::AppSettings{}.theme);
     show_status(status);
 
     // Focus starts on the first control that can take it.
@@ -388,6 +417,22 @@ ui::HomesRadius SettingsDialog::homes_radius() const
 {
     const QVariant radius = homes_->currentData();
     return radius.isValid() ? static_cast<ui::HomesRadius>(radius.toInt()) : ui::AppSettings{}.homes_within;
+}
+
+void SettingsDialog::show_theme(ui::ThemeChoice choice)
+{
+    const bool was_showing = std::exchange(showing_, true);  // no theme_changed for what is shown
+    const auto shown = std::ranges::find(ui::kThemeChoices, choice);
+    theme_->set_current(shown == ui::kThemeChoices.end() ? 0 : static_cast<int>(shown - ui::kThemeChoices.begin()));
+    showing_ = was_showing;
+}
+
+ui::ThemeChoice SettingsDialog::theme() const
+{
+    const int index = theme_->current();
+    return index >= 0 && index < static_cast<int>(ui::kThemeChoices.size())
+               ? ui::kThemeChoices[static_cast<std::size_t>(index)]
+               : ui::AppSettings{}.theme;
 }
 
 void SettingsDialog::report_options()

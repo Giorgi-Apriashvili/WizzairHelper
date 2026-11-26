@@ -16,7 +16,8 @@
 // -hover-settings.png, -window-with-settings.png (the window open over the main window),
 // -settings-<state>.png (with the title bar: never, latest, checking, available,
 // downloading, ready, failed, failed-never, failed-ready, portable, autotest; the update's
-// button under Check now where one is offered, D-74) and -update-bar-<choice>.png (the bar of
+// button under Check now where one is offered, D-74), -settings-focus-check-box, -choice and
+// -theme, -settings-theme-hover (the Theme switch, D-75) and -update-bar-<choice>.png (the bar of
 // each install choice), for light, dark and High Contrast ("contrast"); every window it
 // renders has its layout checked.
 
@@ -37,6 +38,7 @@
 #include "place_chooser_dialog.hpp"
 #include "round_trip_grid.hpp"
 #include "search_button.hpp"
+#include "segmented_switch.hpp"
 #include "settings_button.hpp"
 #include "settings_dialog.hpp"
 #include "ui_style.hpp"
@@ -638,6 +640,7 @@ void render_settings(const QString& look)
         const std::pair<QString, QWidget*> focused[] = {
             {QStringLiteral("settings-focus-check-box"), dialog.check_automatically_box()},
             {QStringLiteral("settings-focus-choice"), dialog.when_found_button(wizz::update::WhenFound::install_on_close)},
+            {QStringLiteral("settings-focus-theme"), dialog.theme_switch()->segment(0)},  // D-75
         };
         for (const auto& [what, widget] : focused) {
             dialog.setAttribute(Qt::WA_KeyboardFocusChange);
@@ -648,6 +651,15 @@ void render_settings(const QString& look)
             pump();
             save(capture_top_level(dialog), name(what));
         }
+        // The Theme switch (D-75) with Dark shown and the mouse over Light.
+        dialog.show_theme(wizz::ui::ThemeChoice::dark);
+        dialog.close_button()->setFocus(Qt::OtherFocusReason);
+        QWidget* light = dialog.theme_switch()->segment(2);
+        light->setAttribute(Qt::WA_UnderMouse);
+        light->update();
+        pump();
+        save(capture_top_level(dialog), name(QStringLiteral("settings-theme-hover")));
+        light->setAttribute(Qt::WA_UnderMouse, false);
         dialog.close();
     }
 

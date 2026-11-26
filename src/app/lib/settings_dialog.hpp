@@ -1,7 +1,7 @@
 #pragma once
-// The Settings window (DECISIONS D-62, D-63, D-68, D-73, D-74): a fixed, window-modal dialog owned by
-// the main window (no minimise / maximise, no taskbar button), titled "Settings", with two
-// cards, "Updates" and "Searches":
+// The Settings window (DECISIONS D-62, D-63, D-68, D-73, D-74, D-75): a fixed, window-modal dialog
+// owned by the main window (no minimise / maximise, no taskbar button), titled "Settings", with two
+// cards, "Updates" and "Searches", and the Theme switch beside Close:
 //
 //   ┌ (⟳) UPDATES ─────────────────────────────────────────────────┐
 //   │ WizzairHelper 2.1.0 · last checked today at 15:53  [Check now] │
@@ -22,17 +22,17 @@
 //   │ Searches ask Wizz Air only for days not fetched within this …  │
 //   │ Homes on Airbnb within  [5 km v]  of the city centre           │
 //   └────────────────────────────────────────────────────────────────┘
-//                                                           [ Close ]
+//   Theme  ( Auto | Dark | Light )                          [ Close ]
 //
-// It renders four values: the options (update::UpdateOptions, from settings.json), the
+// It renders five values: the options (update::UpdateOptions, from settings.json), the
 // status (ui::UpdateStatusView, from the update controller, or ui::updates_off_view() in a
 // run without updates), the reuse window of fetched fares (settings.json's
-// ReuseFaresWithin, D-68) and how far "Homes on Airbnb" reaches (HomesWithin, D-73). It
-// reports what the user does and changes nothing itself: options_changed() after every
-// change of the check box, the drop-down or the choice, fare_reuse_changed() and
-// homes_radius_changed() after a change of theirs (they apply at once; the main window
-// saves settings.json), check_now_requested() for Check now, update_action_requested() for
-// the update's button. show_status() follows the controller while the window is open, so a
+// ReuseFaresWithin, D-68), how far "Homes on Airbnb" reaches (HomesWithin, D-73) and the
+// look (Theme, D-75). It reports what the user does and changes nothing itself:
+// options_changed() after every change of the check box, the drop-down or the choice,
+// fare_reuse_changed(), homes_radius_changed() and theme_changed() after a change of theirs
+// (they apply at once; the main window saves settings.json), check_now_requested() for Check
+// now, update_action_requested() for the update's button. show_status() follows the controller while the window is open, so a
 // check or download shows live; Check now is disabled and reads "Checking…" while it runs.
 //
 //   * The update's button (D-74) shows the update bar's action — "Restart and update",
@@ -50,14 +50,18 @@
 //     status (a longer text grows it).
 //   * The drop-down is enabled only while automatic checks are on; the three choices are
 //     disabled for a portable copy, with the note under them; everything of "Updates" is
-//     disabled in a run without updates (--autotest, --replay). The reuse window and the
-//     homes distance are always enabled.
+//     disabled in a run without updates (--autotest, --replay). The reuse window, the
+//     homes distance and the Theme switch are always enabled.
+//   * The Theme switch (D-75, SegmentedSwitch) sits at the left of Close's row, which it
+//     does not make taller: "Auto" follows Windows' light or dark mode, "Dark" and "Light"
+//     keep that look. A choice applies to every window at once, this one included.
 //   * Close is the default (primary) button; Enter clicks the focused push button (Check
 //     now, the update's button or Close), else Close; Esc and the title bar's close box
 //     close too.
 //   * Tab order: Check now, the update's button, the check box, the drop-down, the selected choice (the arrow
 //     keys move among the three and select — and so apply — each one, as an exclusive
-//     radio group does), the reuse window, the homes distance, Close. Focus starts on the
+//     radio group does), the reuse window, the homes distance, the selected Theme segment
+//     (the arrow keys move and select there too), Close. Focus starts on the
 //     first of Check now, the check box and the reuse window that is enabled (the reuse
 //     window in a run without updates) — never on the update's button, so an Enter right
 //     after opening cannot restart the app. When
@@ -74,6 +78,7 @@
 #include "wizz/core/fare_days.hpp"
 #include "wizz/services/update_options.hpp"
 #include "wizz/ui/homes_stay.hpp"
+#include "wizz/ui/theme_choice.hpp"
 #include "wizz/ui/update_model.hpp"
 
 #include <QDialog>
@@ -90,6 +95,7 @@ namespace wizz::app {
 
 class GlyphLabel;
 class SectionCard;
+class SegmentedSwitch;
 
 class SettingsDialog final : public QDialog {
     Q_OBJECT
@@ -125,6 +131,11 @@ public:
     void show_homes_radius(ui::HomesRadius radius);
     /// The homes distance the drop-down shows.
     [[nodiscard]] ui::HomesRadius homes_radius() const;
+    /// Shows `choice` on the Theme switch without reporting it (Auto until the main window shows
+    /// its own).
+    void show_theme(ui::ThemeChoice choice);
+    /// The look the Theme switch shows.
+    [[nodiscard]] ui::ThemeChoice theme() const;
     [[nodiscard]] const ui::UpdateStatusView& status() const noexcept { return status_; }
 
     // --- Parts (tests, screenshots) -----------------------------------------------------
@@ -147,6 +158,9 @@ public:
     [[nodiscard]] QLabel* homes_label() const noexcept { return homes_label_; }
     [[nodiscard]] QComboBox* homes_box() const noexcept { return homes_; }
     [[nodiscard]] QLabel* homes_suffix() const noexcept { return homes_suffix_; }
+    [[nodiscard]] QLabel* theme_label() const noexcept { return theme_label_; }
+    /// "Auto | Dark | Light" beside Close (D-75).
+    [[nodiscard]] SegmentedSwitch* theme_switch() const noexcept { return theme_; }
     [[nodiscard]] QPushButton* close_button() const noexcept { return close_; }
     /// The status line's colour for `kind` in the current look.
     [[nodiscard]] static QColor status_colour(ui::UpdateStatusKind kind);
@@ -162,6 +176,8 @@ Q_SIGNALS:
     void fare_reuse_changed(wizz::fare_days::ReuseWindow window);
     /// The user chose another distance for "Homes on Airbnb".
     void homes_radius_changed(wizz::ui::HomesRadius radius);
+    /// The user chose another look with the Theme switch.
+    void theme_changed(wizz::ui::ThemeChoice choice);
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -199,6 +215,8 @@ private:
     QLabel* homes_label_ = nullptr;
     QComboBox* homes_ = nullptr;
     QLabel* homes_suffix_ = nullptr;
+    QLabel* theme_label_ = nullptr;
+    SegmentedSwitch* theme_ = nullptr;
     QPushButton* close_ = nullptr;
     bool showing_ = false;
     bool fitting_ = false;

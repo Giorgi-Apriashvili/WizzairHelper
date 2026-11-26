@@ -33,13 +33,18 @@
 // DECISIONS D-73), how far around the city centre "Homes on Airbnb" searches,
 // follows the same rules (missing: 5 km).
 //
-// Save writes the seventeen properties in table order, indented by two spaces,
+// The eighteenth, `Theme` ("Auto", "Dark", "Light"; DECISIONS D-75), the look
+// chosen with the Settings window's switch, follows them too (missing: Auto,
+// which follows Windows as before 2.6).
+//
+// Save writes the eighteen properties in table order, indented by two spaces,
 // into a complete temporary file in the target directory and then replaces the
 // target (last complete write wins); I/O errors are swallowed.
 
 #include "wizz/core/fare_days.hpp"
 #include "wizz/services/update_options.hpp"
 #include "wizz/ui/homes_stay.hpp"
+#include "wizz/ui/theme_choice.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -53,11 +58,13 @@ namespace wizz::ui {
 [[nodiscard]] std::string_view json_name(update::WhenFound when_found) noexcept;
 [[nodiscard]] std::string_view json_name(fare_days::ReuseWindow window) noexcept;
 [[nodiscard]] std::string_view json_name(HomesRadius radius) noexcept;
+[[nodiscard]] std::string_view json_name(ThemeChoice choice) noexcept;
 /// The value a settings.json string names, ASCII case ignored; nullopt for any other text.
 [[nodiscard]] std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept;
 [[nodiscard]] std::optional<update::WhenFound> parse_when_found(std::string_view text) noexcept;
 [[nodiscard]] std::optional<fare_days::ReuseWindow> parse_reuse_window(std::string_view text) noexcept;
 [[nodiscard]] std::optional<HomesRadius> parse_homes_radius(std::string_view text) noexcept;
+[[nodiscard]] std::optional<ThemeChoice> parse_theme_choice(std::string_view text) noexcept;
 
 struct AppSettings {
     std::string from{"Budapest"};
@@ -79,6 +86,8 @@ struct AppSettings {
     fare_days::ReuseWindow fare_reuse = fare_days::ReuseWindow::thirty_minutes;
     /// HomesWithin (D-73): how far around the city centre "Homes on Airbnb" searches.
     HomesRadius homes_within = HomesRadius::five_km;
+    /// Theme (D-75): Auto (follow Windows), Dark or Light.
+    ThemeChoice theme = ThemeChoice::automatic;
 
     friend bool operator==(const AppSettings&, const AppSettings&) = default;
 
@@ -90,8 +99,8 @@ struct AppSettings {
 
     /// The settings.json text: an object with From, To, FromRadiusKm, ToRadiusKm, Adults,
     /// DiscountClub, Currency, MinNights, MaxNights, WindowWidth, WindowHeight, Maximized,
-    /// then CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound, ReuseFaresWithin, HomesWithin, in that
-    /// order, indented two spaces (CRLF line breaks, JsonSerializer escaping).
+    /// then CheckForUpdates, UpdateCheckFrequency, WhenUpdateFound, ReuseFaresWithin, HomesWithin, Theme, in
+    /// that order, indented two spaces (CRLF line breaks, JsonSerializer escaping).
     [[nodiscard]] std::string to_json() const;
     /// Writes `to_json()` to `path`: creates the directory, writes `<name>.tmp` next to
     /// it, then replaces the target atomically. Returns false on any error (the caller

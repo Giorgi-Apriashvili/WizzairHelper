@@ -259,6 +259,19 @@ std::string_view homes_radius_label(HomesRadius radius) noexcept
     return "5 km";
 }
 
+std::string_view theme_choice_label(ThemeChoice choice) noexcept
+{
+    switch (choice) {
+    case ThemeChoice::automatic:
+        return "Auto";
+    case ThemeChoice::dark:
+        return "Dark";
+    case ThemeChoice::light:
+        return "Light";
+    }
+    return "Auto";
+}
+
 std::string homes_stay_text(std::string_view check_in, std::string_view check_out, int adults)
 {
     return std::format("{} – {}, {} {}", check_in, check_out, adults, adults == 1 ? "adult" : "adults");

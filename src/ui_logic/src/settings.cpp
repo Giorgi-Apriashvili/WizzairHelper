@@ -53,7 +53,7 @@ struct WrongType {};
     return value.as_bool();
 }
 
-/// An enumeration (D-60, D-68): a non-string (null included) is a wrong type
+/// An enumeration (D-60, D-68, D-73, D-75): a non-string (null included) is a wrong type
 /// like anywhere else; a string naming no value gives that property's default only.
 template <class Enum>
 [[nodiscard]] Enum read_enum(const json::Value& value, std::optional<Enum> (*parse)(std::string_view) noexcept,
@@ -119,6 +119,8 @@ void apply_member(AppSettings& settings, const json::Member& member)
         settings.fare_reuse = read_enum(value, &parse_reuse_window, AppSettings{}.fare_reuse);
     } else if (name == "HomesWithin") {
         settings.homes_within = read_enum(value, &parse_homes_radius, AppSettings{}.homes_within);
+    } else if (name == "Theme") {
+        settings.theme = read_enum(value, &parse_theme_choice, AppSettings{}.theme);
     }
     // unknown properties are ignored
 }
@@ -194,6 +196,19 @@ std::string_view json_name(HomesRadius radius) noexcept
     return "FiveKm";
 }
 
+std::string_view json_name(ThemeChoice choice) noexcept
+{
+    switch (choice) {
+    case ThemeChoice::automatic:
+        return "Auto";
+    case ThemeChoice::dark:
+        return "Dark";
+    case ThemeChoice::light:
+        return "Light";
+    }
+    return "Auto";
+}
+
 std::optional<update::CheckFrequency> parse_check_frequency(std::string_view text) noexcept
 {
     for (const update::CheckFrequency frequency : kFrequencies) {
@@ -229,6 +244,16 @@ std::optional<HomesRadius> parse_homes_radius(std::string_view text) noexcept
     for (const HomesRadius radius : kHomesRadii) {
         if (equals_ascii_ignoring_case(text, json_name(radius))) {
             return radius;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<ThemeChoice> parse_theme_choice(std::string_view text) noexcept
+{
+    for (const ThemeChoice choice : kThemeChoices) {
+        if (equals_ascii_ignoring_case(text, json_name(choice))) {
+            return choice;
         }
     }
     return std::nullopt;
@@ -292,6 +317,7 @@ std::string AppSettings::to_json() const
         .key("WhenUpdateFound").string(json_name(updates.when_found))
         .key("ReuseFaresWithin").string(json_name(fare_reuse))
         .key("HomesWithin").string(json_name(homes_within))
+        .key("Theme").string(json_name(theme))
         .end_object();
     return writer.take();
 }

@@ -82,7 +82,8 @@ constexpr std::string_view kExample = R"({
 })";
 
 /// The same settings as this version writes them: the update options follow the twelve (D-60),
-/// then the reuse window of fetched fares (D-68) and the distance of Homes on Airbnb (D-73).
+/// then the reuse window of fetched fares (D-68), the distance of Homes on Airbnb (D-73) and the
+/// Theme choice (D-75).
 constexpr std::string_view kExampleWithUpdates = R"({
   "From": "Budapest",
   "To": "London",
@@ -100,7 +101,8 @@ constexpr std::string_view kExampleWithUpdates = R"({
   "UpdateCheckFrequency": "Daily",
   "WhenUpdateFound": "InstallOnClose",
   "ReuseFaresWithin": "ThirtyMinutes",
-  "HomesWithin": "FiveKm"
+  "HomesWithin": "FiveKm",
+  "Theme": "Auto"
 })";
 
 /// The same settings as 2.2 wrote them: the twelve and the update options.
@@ -219,6 +221,9 @@ TEST(Settings, Defaults)
     EXPECT_EQ(settings.updates.when_found, WhenFound::install_on_close);
     // Fares are reused for 30 minutes, as before 2.3 (D-68).
     EXPECT_EQ(settings.fare_reuse, ReuseWindow::thirty_minutes);
+    EXPECT_EQ(settings.homes_within, HomesRadius::five_km);
+    // The look follows Windows, as before 2.6 (D-75).
+    EXPECT_EQ(settings.theme, ThemeChoice::automatic);
 }
 
 TEST(Settings, Reads_the_example_of_01_13)
@@ -246,11 +251,11 @@ TEST(Settings, Update_options_are_written_after_the_twelve_with_their_json_names
     };
     const Case cases[] = {
         {{.check_automatically = true, .check_frequency = CheckFrequency::daily, .when_found = WhenFound::install_on_close},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Daily\",\r\n  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\",\r\n  \"Theme\": \"Auto\"\r\n}"},
         {{.check_automatically = false, .check_frequency = CheckFrequency::weekly, .when_found = WhenFound::download_then_ask},
-         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
+         "  \"CheckForUpdates\": false,\r\n  \"UpdateCheckFrequency\": \"Weekly\",\r\n  \"WhenUpdateFound\": \"DownloadThenAsk\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\",\r\n  \"Theme\": \"Auto\"\r\n}"},
         {{.check_automatically = true, .check_frequency = CheckFrequency::monthly, .when_found = WhenFound::notify_only},
-         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"},
+         "  \"CheckForUpdates\": true,\r\n  \"UpdateCheckFrequency\": \"Monthly\",\r\n  \"WhenUpdateFound\": \"NotifyOnly\",\r\n  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"FiveKm\",\r\n  \"Theme\": \"Auto\"\r\n}"},
     };
     for (const Case& c : cases) {
         AppSettings settings;
@@ -407,7 +412,7 @@ TEST(Settings, The_reuse_window_is_written_after_the_update_options_with_its_jso
         settings.fare_reuse = window;
         const std::string text = settings.to_json();
         EXPECT_TRUE(text.ends_with("  \"WhenUpdateFound\": \"InstallOnClose\",\r\n  \"ReuseFaresWithin\": \"" +
-                                   std::string{name} + "\",\r\n  \"HomesWithin\": \"FiveKm\"\r\n}"))
+                                   std::string{name} + "\",\r\n  \"HomesWithin\": \"FiveKm\",\r\n  \"Theme\": \"Auto\"\r\n}"))
             << text;
         EXPECT_EQ(AppSettings::parse(text), settings);
         EXPECT_EQ(json_name(window), name);
@@ -468,7 +473,7 @@ TEST(Settings, A_file_with_the_reuse_window_read_by_the_rules_of_2_1_keeps_its_t
 
 // --- HomesWithin (D-73) ----------------------------------------------------------------
 
-TEST(Settings, D_73_Homes_within_is_written_last_with_its_json_name_and_round_trips)
+TEST(Settings, D_73_Homes_within_is_written_after_the_reuse_window_with_its_json_name_and_round_trips)
 {
     const std::pair<HomesRadius, std::string_view> cases[] = {
         {HomesRadius::two_km, "TwoKm"},
@@ -481,7 +486,7 @@ TEST(Settings, D_73_Homes_within_is_written_last_with_its_json_name_and_round_tr
         settings.homes_within = radius;
         const std::string text = settings.to_json();
         EXPECT_TRUE(text.ends_with("  \"ReuseFaresWithin\": \"ThirtyMinutes\",\r\n  \"HomesWithin\": \"" +
-                                   std::string{name} + "\"\r\n}"))
+                                   std::string{name} + "\",\r\n  \"Theme\": \"Auto\"\r\n}"))
             << text;
         EXPECT_EQ(AppSettings::parse(text), settings);
         EXPECT_EQ(json_name(radius), name);
@@ -530,6 +535,77 @@ TEST(Settings, D_73_A_file_with_the_homes_distance_read_by_the_rules_of_2_1_keep
     settings.from = "Wien";
     settings.max_nights = 7;
     settings.homes_within = HomesRadius::twenty_five_km;
+    const std::optional<Settings21> old = read_like_2_1(settings.to_json());
+    ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
+    EXPECT_EQ(old->from, "Wien");
+    EXPECT_EQ(old->max_nights, 7);
+}
+
+// --- Theme (D-75) ----------------------------------------------------------------------
+
+TEST(Settings, D_75_Theme_is_written_last_with_its_json_name_and_round_trips)
+{
+    const std::pair<ThemeChoice, std::string_view> cases[] = {
+        {ThemeChoice::automatic, "Auto"},
+        {ThemeChoice::dark, "Dark"},
+        {ThemeChoice::light, "Light"},
+    };
+    for (const auto& [choice, name] : cases) {
+        AppSettings settings;
+        settings.theme = choice;
+        const std::string text = settings.to_json();
+        EXPECT_TRUE(text.ends_with("  \"HomesWithin\": \"FiveKm\",\r\n  \"Theme\": \"" + std::string{name} +
+                                   "\"\r\n}"))
+            << text;
+        EXPECT_EQ(AppSettings::parse(text), settings);
+        EXPECT_EQ(json_name(choice), name);
+        EXPECT_EQ(parse_theme_choice(name), choice);
+    }
+    EXPECT_EQ(AppSettings::parse(R"({"MaxNights": 12})").theme, ThemeChoice::automatic) << "missing: Auto";
+    // A file of 2.5 (no Theme) keeps following Windows.
+    EXPECT_EQ(AppSettings::parse(R"({"HomesWithin": "TenKm"})").theme, ThemeChoice::automatic);
+}
+
+TEST(Settings, D_75_Theme_values_ignore_ascii_case_but_the_name_does_not)
+{
+    EXPECT_EQ(AppSettings::parse(R"({"Theme": "dark"})").theme, ThemeChoice::dark);
+    EXPECT_EQ(AppSettings::parse(R"({"Theme": "LIGHT"})").theme, ThemeChoice::light);
+    EXPECT_EQ(parse_theme_choice("aUTO"), ThemeChoice::automatic);
+    EXPECT_EQ(AppSettings::parse(R"({"theme": "Dark"})"), AppSettings{}) << "an unknown property";
+}
+
+TEST(Settings, D_75_An_unknown_theme_gives_that_property_its_default_only)
+{
+    for (const std::string_view unknown : {"System", "", " Dark", "Dark ", "Automatic", "HighContrast"}) {
+        const std::string text = R"({"MaxNights": 12, "HomesWithin": "TwoKm", "Theme": ")" + std::string{unknown} +
+                                 R"("})";
+        const AppSettings settings = AppSettings::parse(text);
+        EXPECT_EQ(settings.max_nights, 12) << text;
+        EXPECT_EQ(settings.homes_within, HomesRadius::two_km) << text;
+        EXPECT_EQ(settings.theme, ThemeChoice::automatic) << text;
+    }
+    EXPECT_EQ(parse_theme_choice("System"), std::nullopt);
+}
+
+TEST(Settings, D_75_A_wrong_type_for_the_theme_gives_all_defaults)
+{
+    for (const std::string_view bad : {
+             R"({"MaxNights": 12, "Theme": 1})",
+             R"({"MaxNights": 12, "Theme": null})",
+             R"({"MaxNights": 12, "Theme": true})",
+             R"({"MaxNights": 12, "Theme": ["Dark"]})",
+             R"({"MaxNights": 12, "Theme": {"Value": "Dark"}})",
+         }) {
+        EXPECT_EQ(AppSettings::parse(bad), AppSettings{}) << bad;
+    }
+}
+
+TEST(Settings, D_75_A_file_with_the_theme_read_by_the_rules_of_2_1_keeps_its_twelve_values)
+{
+    AppSettings settings;
+    settings.from = "Wien";
+    settings.max_nights = 7;
+    settings.theme = ThemeChoice::dark;
     const std::optional<Settings21> old = read_like_2_1(settings.to_json());
     ASSERT_TRUE(old.has_value()) << "2.1 would fall back to all defaults";
     EXPECT_EQ(old->from, "Wien");

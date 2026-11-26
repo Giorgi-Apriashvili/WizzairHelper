@@ -15,6 +15,7 @@
 #include "wizz/core/fare_days.hpp"
 #include "wizz/core/time.hpp"
 #include "wizz/ui/homes_stay.hpp"
+#include "wizz/ui/theme_choice.hpp"
 
 #include <array>
 #include <cstddef>
@@ -324,6 +325,18 @@ inline constexpr std::string_view kHomesWithinSuffix = "of the city centre";
 inline constexpr std::string_view kHomesWithinName = "Homes on Airbnb within this distance of the city centre";
 /// "2 km", "5 km", "10 km", "25 km".
 [[nodiscard]] std::string_view homes_radius_label(HomesRadius radius) noexcept;
+
+// ---------------------------------------------------------------------------
+// Settings window: the look (DECISIONS D-75)
+// ---------------------------------------------------------------------------
+
+/// The label left of the switch beside Close, also the switch's accessible name.
+inline constexpr std::string_view kTheme = "Theme";
+/// The switch's tooltip and accessible description (plain text).
+inline constexpr std::string_view kThemeToolTip =
+    "Auto follows the light or dark mode set in Windows. A Windows contrast theme overrides all three.";
+/// "Auto", "Dark", "Light": the switch's segments (ui::kThemeChoices).
+[[nodiscard]] std::string_view theme_choice_label(ThemeChoice choice) noexcept;
 
 // ---------------------------------------------------------------------------
 // Homes on Airbnb (DECISIONS D-72)

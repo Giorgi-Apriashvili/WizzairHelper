@@ -184,8 +184,8 @@ display scaling. Windows caches icons: if an old one shows, sign out and in befo
 
 **The look where only Windows can switch it** (DECISIONS D-53..D-57). The tests switch light,
 dark and High Contrast through the app's own switches, in-process and end to end, but nobody
-toggles Windows itself in CI. For a release that changes the look, start the installed app and,
-while it shows results:
+toggles Windows itself in CI. For a release that changes the look, start the installed app with
+its Theme switch on Auto (Settings, beside Close; DECISIONS D-75) and, while it shows results:
 
 - switch *Settings > Personalization > Colors > Choose your app mode* between Light and Dark: the
   window, its title bar, the grids, the open calendar and a tooltip follow at once, without a

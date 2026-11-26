@@ -11,10 +11,13 @@
 //      user's contrast theme is what the app shows (D-55);
 //   2. else WIZZ_COLOR_SCHEME=light|dark when it is set: a test and diagnostic
 //      override, like QT_SCALE_FACTOR (the title bar follows);
-//   3. else the Windows app mode (QStyleHints::colorScheme), followed while the app
-//      runs.
+//   3. else the user's Theme choice when it is Dark or Light (the Settings window's
+//      switch, settings.json `Theme`, set_theme_choice(); D-75; the title bar follows);
+//   4. else (Auto) the Windows app mode (QStyleHints::colorScheme), followed while the
+//      app runs.
 // QStyleHints::colorSchemeChanged, QAccessibilityHints::contrastPreferenceChanged and
-// the main window's QEvent::ThemeChange schedule a re-evaluation (refresh_appearance).
+// the main window's QEvent::ThemeChange schedule a re-evaluation (refresh_appearance);
+// set_theme_choice() re-evaluates at once.
 //
 // Fonts, with their Windows 10 fallbacks (QFont::setFamilies picks the first
 // installed family):
@@ -36,6 +39,8 @@
 //                                  its layout) or without the extra weight (natural), for
 //                                  comparisons and bug reports. Read when a font is built: set it
 //                                  before the app starts.
+
+#include "wizz/ui/theme_choice.hpp"
 
 #include <QByteArrayView>
 #include <QColor>
@@ -123,9 +128,12 @@ struct Theme {
 [[nodiscard]] std::optional<Qt::ColorScheme> parse_color_scheme(QByteArrayView value);
 /// An on/off switch value: 1/on/true/yes or 0/off/false/no (trimmed, any case); else none.
 [[nodiscard]] std::optional<bool> parse_switch(QByteArrayView value);
-/// High Contrast wins, then the forced scheme, then the system's (Unknown = light).
+/// High Contrast wins, then the forced scheme (WIZZ_COLOR_SCHEME), then the user's choice
+/// (Dark or Light), then the system's (Auto; Unknown = light).
 [[nodiscard]] Appearance choose_appearance(bool high_contrast, std::optional<Qt::ColorScheme> forced,
-                                           Qt::ColorScheme system) noexcept;
+                                           ui::ThemeChoice chosen, Qt::ColorScheme system) noexcept;
+/// The scheme a Theme choice asks Qt for: Dark, Light, or none for Auto (Windows' own).
+[[nodiscard]] std::optional<Qt::ColorScheme> scheme_of(ui::ThemeChoice choice) noexcept;
 
 /// Tells whether Windows High Contrast is on. The default asks WIZZ_HIGH_CONTRAST, then
 /// SystemParametersInfoW(SPI_GETHIGHCONTRAST); tests inject their own.
@@ -136,6 +144,20 @@ HighContrastProbe set_high_contrast_probe(HighContrastProbe probe);
 
 /// The look in use.
 [[nodiscard]] Appearance appearance();
+
+/// The user's Theme choice (D-75): Auto until set. The main window sets it from settings.json
+/// before it builds its widgets, and again when the Settings window's switch changes it.
+[[nodiscard]] ui::ThemeChoice theme_choice();
+/// Keeps `choice` and, once apply_application_look() has installed a look, evaluates the look
+/// again at once (refresh_appearance()); returns whether the look changed. Before that it is
+/// only kept, and apply_application_look() takes it.
+bool set_theme_choice(ui::ThemeChoice choice);
+/// How often the look asked Qt for a colour scheme, or for Windows' own again (tests: once per
+/// change of what is asked for, never on an evaluation that asks for the same).
+[[nodiscard]] int color_scheme_requests() noexcept;
+/// The scheme the look last asked Qt for (WIZZ_COLOR_SCHEME or a Dark or Light choice); none when
+/// it asked for nothing or for Windows' own again (tests).
+[[nodiscard]] std::optional<Qt::ColorScheme> requested_color_scheme() noexcept;
 
 /// Emits changed() after a new look was installed (theme, style, palette, tooltip
 /// palette). Widgets that keep token colours in their own palettes, models that cache
@@ -168,7 +190,7 @@ void set_text_tone(QWidget& widget, TextTone tone);
 /// choose_appearance(), and starts following Windows' changes. Call once after the
 /// QApplication exists. Returns whether Fusion was available.
 bool apply_application_look();
-/// Evaluates the look again (Windows' app mode and contrast, the environment) and installs
+/// Evaluates the look again (Windows' app mode and contrast, the environment, the Theme choice) and installs
 /// it when it differs from the one in use; then theme_notifier() emits and every widget
 /// repaints. Returns whether the look changed. Also what a test calls after changing
 /// WIZZ_COLOR_SCHEME or the high-contrast probe.

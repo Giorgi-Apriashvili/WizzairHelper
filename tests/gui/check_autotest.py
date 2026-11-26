@@ -15,13 +15,15 @@ by their wall-clock length unless other processes held the CPUs during them
 site or user paths). `--scale 1.5` / `--scale 2` run the window at 150 % / 200 % through
 QT_SCALE_FACTOR (01 §15, 05 §5). `--window 980x600` starts the window at that size (the whole
 window in logical pixels, like 01 §4.1) through the profile's settings.json, which the app then
-must leave unchanged. `--color-scheme light|dark`, `--high-contrast`, `--fonts windows10` and
-`--text-rendering natural-heavier|natural|hinted` set the look's diagnostic switches WIZZ_COLOR_SCHEME,
-WIZZ_HIGH_CONTRAST, WIZZ_FONTS and WIZZ_TEXT_RENDERING (DECISIONS D-56, D-58); without them the run
-inherits the caller's environment. Every run checks that the app shows the look it was asked for
-(DECISIONS D-53..D-56): High Contrast when Windows (or WIZZ_HIGH_CONTRAST) says so, else
-WIZZ_COLOR_SCHEME, else the Windows app mode (AppsUseLightTheme) - in diagnostics.json (the look, its
-palette's window colour, ModernStyle) and in the first screenshot, whose most common colour must be
+must leave unchanged. `--theme auto|dark|light` saves that Theme choice (DECISIONS D-75) in the
+profile's settings.json the same way. `--color-scheme light|dark`, `--high-contrast`, `--fonts windows10`
+and `--text-rendering natural-heavier|natural|hinted` set the look's diagnostic switches
+WIZZ_COLOR_SCHEME, WIZZ_HIGH_CONTRAST, WIZZ_FONTS and WIZZ_TEXT_RENDERING (DECISIONS D-56, D-58);
+without them the run inherits the caller's environment. Every run checks that the app shows the look
+it was asked for (DECISIONS D-53..D-56, D-75): High Contrast when Windows (or WIZZ_HIGH_CONTRAST) says
+so, else WIZZ_COLOR_SCHEME, else the profile's Theme when it is Dark or Light, else the Windows app mode
+(AppsUseLightTheme) - in diagnostics.json (the look, the Theme choice, its palette's window colour,
+ModernStyle) and in the first screenshot, whose most common colour must be
 the look's window or surface colour - and draws its text as D-58 says: natural, the UI, semibold,
 caption and monospace fonts 50 units heavier on their weight axis where their face has one, unless
 WIZZ_TEXT_RENDERING asks for another rendering.
@@ -289,9 +291,11 @@ class Checker:
                         'startup: %s began %r ms after the window was shown, expected %r..%r ms (windowAnimates %r)' %
                         (what, after, delay, delay + slack, animates))
 
-    def look(self, expected):
-        """D-53..D-56: the run shows `expected` ('light', 'dark' or 'high_contrast')."""
+    def look(self, expected, theme='auto'):
+        """D-53..D-56: the run shows `expected` ('light', 'dark' or 'high_contrast'), with the Theme
+        choice `theme` of its settings.json in use (D-75: 'auto', 'dark' or 'light')."""
         self.diag_equal('environment.look', expected)
+        self.diag_equal('environment.themeChoice', theme.capitalize())
         if expected not in LOOK_COLOURS:
             self.expect(self.diag('environment.style') in ('windowsvista', 'windows'),
                         'High Contrast: the plain native style, got %r' % self.diag('environment.style'))
@@ -981,9 +985,10 @@ def parse_switch(value):
     return True if text in ('1', 'on', 'true', 'yes') else False if text in ('0', 'off', 'false', 'no') else None
 
 
-def expected_look(env):
-    """The look D-55 / D-56 promise for a run with `env`: High Contrast wins, then WIZZ_COLOR_SCHEME,
-    then the Windows app mode (the registry value Qt reads)."""
+def expected_look(env, theme='auto'):
+    """The look D-55 / D-56 / D-75 promise for a run with `env` and the profile's Theme `theme`
+    ('auto', 'dark' or 'light'): High Contrast wins, then WIZZ_COLOR_SCHEME, then a Dark or Light
+    Theme, then the Windows app mode (the registry value Qt reads)."""
     contrast = parse_switch(env.get('WIZZ_HIGH_CONTRAST'))
     if contrast is None:
         info = HIGHCONTRASTW(cbSize=ctypes.sizeof(HIGHCONTRASTW))
@@ -996,6 +1001,8 @@ def expected_look(env):
     scheme = (env.get('WIZZ_COLOR_SCHEME') or '').strip().lower()
     if scheme in ('light', 'dark'):
         return scheme
+    if theme in ('light', 'dark'):
+        return theme
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                             r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
@@ -1185,6 +1192,8 @@ def main():
     parser.add_argument('--max-gap-ms', type=float, default=100.0,
                         help='limit for the longest gap of the 40 ms progress timer (05 §5: 100 ms)')
     parser.add_argument('--window', help='start size of the whole window in logical pixels, e.g. 980x600')
+    parser.add_argument('--theme', choices=['auto', 'dark', 'light'],
+                        help="the Theme choice saved in the profile's settings.json (D-75)")
     parser.add_argument('--color-scheme', choices=['light', 'dark'], help='WIZZ_COLOR_SCHEME for the run')
     parser.add_argument('--high-contrast', action='store_true', help='WIZZ_HIGH_CONTRAST=1 for the run')
     parser.add_argument('--fonts', choices=['windows10'], help='WIZZ_FONTS for the run')
@@ -1225,12 +1234,17 @@ def main():
     replay = prepare(replay_root, work_dir) if prepare else os.path.join(replay_root, args.scenario)
     settings_path = os.path.join(data_root, 'settings.json')
     settings_text = None
+    saved = {}
     if window:
         # settings.json holds the window size in device pixels (01 §13); the autotest run loads it
         # like a normal start and must not write it back.
         ratio = float(args.scale or 1)
+        saved.update({'WindowWidth': round(window[0] * ratio), 'WindowHeight': round(window[1] * ratio)})
+    if args.theme:
+        saved['Theme'] = args.theme.capitalize()  # "Auto", "Dark", "Light" (D-75)
+    if saved:
         os.makedirs(data_root)
-        settings_text = json.dumps({'WindowWidth': round(window[0] * ratio), 'WindowHeight': round(window[1] * ratio)})
+        settings_text = json.dumps(saved)
         with open(settings_path, 'w', encoding='utf-8') as f:
             f.write(settings_text)
     first_summary = None
@@ -1287,7 +1301,7 @@ def main():
     checker.fares_after_first = fares_after_first
     check(checker)
     checker.diagnostics_common(args.max_gap_ms, args.scale)
-    checker.look(expected_look(env))
+    checker.look(expected_look(env, args.theme or 'auto'), args.theme or 'auto')
     checker.text_rendering(expected_text_rendering(env))
     if window is None and not args.scale and not checker.window_at_default_size():
         # A screen smaller than the default window (GitHub's runners: 1024 x 768) gives a smaller
@@ -1311,7 +1325,7 @@ def main():
         # the frame margins convert inexactly and the window comes out 1-4 % smaller (D-52), so
         # the exact size is checked at the real scale only.
         work = diagnostics.get('display', {}).get('screenAvailable') or [0, 0, 0, 0]  # logical pixels
-        if not args.scale and work[2] >= window[0] and work[3] >= window[1]:
+        if window and not args.scale and work[2] >= window[0] and work[3] >= window[1]:
             checker.diag_equal('display.outerDeviceSize', [window[0], window[1]])
     checker.expect(not os.path.exists(os.path.join(data_root, 'errors.log')), 'errors.log written: the app crashed')
     timer = diagnostics.get('timer', {})

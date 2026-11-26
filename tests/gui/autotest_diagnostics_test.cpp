@@ -161,6 +161,7 @@ TEST(AutoTestDiagnostics, Display_layout_and_environment_of_the_main_window)
     // The look in use (the suite runs the app's light look): what a dark run checks.
     EXPECT_EQ(environment.style, "modern/fusion");
     EXPECT_EQ(environment.look, wizz::app::style::theme().dark ? "dark" : "light");
+    EXPECT_EQ(environment.theme_choice, "Auto") << "settings.json's Theme (D-75), the default";
     EXPECT_EQ(environment.window_colour, wizz::app::style::theme().window.name().toStdString());
     EXPECT_FALSE(environment.font_family.empty());
 }
@@ -181,10 +182,19 @@ TEST(AutoTestDiagnostics, The_environment_names_a_dark_and_a_high_contrast_look)
     EXPECT_EQ(environment.look, "high_contrast");
     EXPECT_TRUE(environment.style == "windowsvista" || environment.style == "windows") << environment.style;
 
+    // The Theme choice (D-75) is named whatever wins over it.
+    static_cast<void>(wizz::app::style::set_theme_choice(wizz::ui::ThemeChoice::light));
+    environment = wizz::app::describe_environment(*wizz::Locale::en_us());
+    EXPECT_EQ(environment.theme_choice, "Light");
+    EXPECT_EQ(environment.look, "high_contrast");
+
     AutoTestDiagnostics diagnostics;
     diagnostics.environment = environment;
     const std::string json = wizz::app::to_json(diagnostics);
     EXPECT_TRUE(json.contains("\"look\": \"high_contrast\"")) << json;
+    EXPECT_TRUE(json.contains("\"themeChoice\": \"Light\"")) << json;
+    EXPECT_LT(json.find("\"look\""), json.find("\"themeChoice\"")) << "after the look";
+    EXPECT_LT(json.find("\"themeChoice\""), json.find("\"windowColour\"")) << json;
     EXPECT_TRUE(json.contains("\"windowColour\": \"#")) << json;
 }
 

@@ -220,6 +220,20 @@ TEST(Strings, D_73_Settings_window_homes_texts)
     EXPECT_EQ(homes_radius_label(HomesRadius::twenty_five_km), "25 km");
 }
 
+TEST(Strings, D_75_Settings_window_theme_texts)
+{
+    using wizz::ui::ThemeChoice;
+    EXPECT_EQ(kTheme, "Theme");
+    EXPECT_EQ(kThemeToolTip,
+              "Auto follows the light or dark mode set in Windows. A Windows contrast theme overrides all three.");
+    EXPECT_EQ(theme_choice_label(ThemeChoice::automatic), "Auto");
+    EXPECT_EQ(theme_choice_label(ThemeChoice::dark), "Dark");
+    EXPECT_EQ(theme_choice_label(ThemeChoice::light), "Light");
+    // The switch's order, left to right: the owner's "auto | dark | light".
+    EXPECT_EQ(wizz::ui::kThemeChoices,
+              (std::array<ThemeChoice, 3>{ThemeChoice::automatic, ThemeChoice::dark, ThemeChoice::light}));
+}
+
 TEST(Strings, D_72_Homes_on_Airbnb_texts)
 {
     EXPECT_EQ(kHomesOnAirbnb, "Homes on Airbnb");

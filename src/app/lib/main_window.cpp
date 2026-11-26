@@ -120,6 +120,9 @@ MainWindow::MainWindow(std::shared_ptr<const AppServices> services, ui::AppSetti
       clock_(elapsed_timer_clock())
 {
     setWindowTitle(main_window_title());
+    // settings.json's look (D-75), installed before any widget is built: a saved Dark or Light
+    // never shows the other look first.
+    style::set_theme_choice(settings_.theme);
     // settings.json's reuse window of fetched fares, from the first search on (D-68).
     services_->wizz->set_timetable_reuse_window(fare_days::duration_of(settings_.fare_reuse));
     build();
@@ -419,11 +422,13 @@ SettingsDialog* MainWindow::open_settings()
                             : ui::updates_off_view(update::parse_version(WIZZ_VERSION_STRING).value_or(update::Version{}));
     auto* dialog = new SettingsDialog(settings_.updates, status, settings_.fare_reuse, this);
     dialog->show_homes_radius(settings_.homes_within);
+    dialog->show_theme(settings_.theme);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     settings_dialog_ = dialog;
     connect(dialog, &SettingsDialog::options_changed, this, &MainWindow::apply_update_options);
     connect(dialog, &SettingsDialog::fare_reuse_changed, this, &MainWindow::apply_fare_reuse);
     connect(dialog, &SettingsDialog::homes_radius_changed, this, &MainWindow::apply_homes_radius);
+    connect(dialog, &SettingsDialog::theme_changed, this, &MainWindow::apply_theme);
     if (updates_ != nullptr) {
         UpdateController* const updates = updates_;
         connect(dialog, &SettingsDialog::check_now_requested, updates, &UpdateController::check_now);
@@ -460,6 +465,15 @@ void MainWindow::apply_fare_reuse(fare_days::ReuseWindow window)
 void MainWindow::apply_homes_radius(ui::HomesRadius radius)
 {
     settings_.homes_within = radius;  // the next "Homes on Airbnb" takes it (D-73)
+    if (!is_autotest()) {
+        (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
+    }
+}
+
+void MainWindow::apply_theme(ui::ThemeChoice choice)
+{
+    settings_.theme = choice;
+    style::set_theme_choice(choice);  // every window repaints in the look now (D-75)
     if (!is_autotest()) {
         (void)current_settings().save(services_->settings_path());  // I/O errors are ignored (01 §13)
     }

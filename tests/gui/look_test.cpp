@@ -149,17 +149,47 @@ TEST(Look, Override_values_parse)
     EXPECT_EQ(style::parse_switch("maybe"), std::nullopt);
 }
 
-TEST(Look, High_contrast_wins_then_the_override_then_Windows)
+TEST(Look, High_contrast_wins_then_the_override_then_the_theme_choice_then_Windows)
 {
     using style::Appearance;
     using Scheme = Qt::ColorScheme;
-    EXPECT_EQ(style::choose_appearance(true, Scheme::Dark, Scheme::Dark), Appearance::high_contrast);
-    EXPECT_EQ(style::choose_appearance(true, std::nullopt, Scheme::Light), Appearance::high_contrast);
-    EXPECT_EQ(style::choose_appearance(false, Scheme::Dark, Scheme::Light), Appearance::dark);
-    EXPECT_EQ(style::choose_appearance(false, Scheme::Light, Scheme::Dark), Appearance::light);
-    EXPECT_EQ(style::choose_appearance(false, std::nullopt, Scheme::Dark), Appearance::dark);
-    EXPECT_EQ(style::choose_appearance(false, std::nullopt, Scheme::Light), Appearance::light);
-    EXPECT_EQ(style::choose_appearance(false, std::nullopt, Scheme::Unknown), Appearance::light);
+    using wizz::ui::ThemeChoice;
+    constexpr ThemeChoice kAuto = ThemeChoice::automatic;
+    EXPECT_EQ(style::choose_appearance(true, Scheme::Dark, kAuto, Scheme::Dark), Appearance::high_contrast);
+    EXPECT_EQ(style::choose_appearance(true, std::nullopt, kAuto, Scheme::Light), Appearance::high_contrast);
+    EXPECT_EQ(style::choose_appearance(false, Scheme::Dark, kAuto, Scheme::Light), Appearance::dark);
+    EXPECT_EQ(style::choose_appearance(false, Scheme::Light, kAuto, Scheme::Dark), Appearance::light);
+    EXPECT_EQ(style::choose_appearance(false, std::nullopt, kAuto, Scheme::Dark), Appearance::dark);
+    EXPECT_EQ(style::choose_appearance(false, std::nullopt, kAuto, Scheme::Light), Appearance::light);
+    EXPECT_EQ(style::choose_appearance(false, std::nullopt, kAuto, Scheme::Unknown), Appearance::light);
+    // D-75: High Contrast and WIZZ_COLOR_SCHEME win over the Theme choice; Dark and Light win over
+    // Windows.
+    for (const ThemeChoice chosen : {ThemeChoice::dark, ThemeChoice::light}) {
+        EXPECT_EQ(style::choose_appearance(true, std::nullopt, chosen, Scheme::Light), Appearance::high_contrast);
+        EXPECT_EQ(style::choose_appearance(false, Scheme::Dark, chosen, Scheme::Light), Appearance::dark);
+        EXPECT_EQ(style::choose_appearance(false, Scheme::Light, chosen, Scheme::Dark), Appearance::light);
+    }
+    for (const Scheme system : {Scheme::Dark, Scheme::Light, Scheme::Unknown}) {
+        EXPECT_EQ(style::choose_appearance(false, std::nullopt, ThemeChoice::dark, system), Appearance::dark);
+        EXPECT_EQ(style::choose_appearance(false, std::nullopt, ThemeChoice::light, system), Appearance::light);
+    }
+    EXPECT_EQ(style::scheme_of(ThemeChoice::automatic), std::nullopt);
+    EXPECT_EQ(style::scheme_of(ThemeChoice::dark), Scheme::Dark);
+    EXPECT_EQ(style::scheme_of(ThemeChoice::light), Scheme::Light);
+}
+
+TEST(Look, D_75_LookGuard_starts_a_test_on_Auto_and_gives_the_choice_back)
+{
+    // The suite pins the look with WIZZ_COLOR_SCHEME, so the choice changes no look here.
+    ASSERT_EQ(style::theme_choice(), wizz::ui::ThemeChoice::automatic);
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::dark));
+    {
+        LookGuard guard;
+        EXPECT_EQ(style::theme_choice(), wizz::ui::ThemeChoice::automatic) << "a test starts on Auto";
+        static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::light));
+    }
+    EXPECT_EQ(style::theme_choice(), wizz::ui::ThemeChoice::dark) << "the choice before the test";
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::automatic));
 }
 
 TEST(Look, The_high_contrast_probe_is_injectable_and_the_variable_overrides_Windows)
@@ -207,6 +237,97 @@ TEST(Look, WIZZ_COLOR_SCHEME_switches_a_running_window_in_place)
     qputenv("WIZZ_COLOR_SCHEME", "light");
     EXPECT_TRUE(style::refresh_appearance());
     expect_window_follows(rig, style::light_theme());
+}
+
+TEST(Look, D_75_The_theme_choice_switches_a_running_window_in_place)
+{
+    LookGuard guard;
+    WindowRig rig;  // the window sets the choice of its settings: Auto
+    ASSERT_EQ(style::theme_choice(), wizz::ui::ThemeChoice::automatic);
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::light));
+    ASSERT_EQ(style::appearance(), style::Appearance::light);
+    rig.start();
+    section11_search(rig);
+    ASSERT_NE(cheapest_background(rig), QColor{}) << "the search found no cheapest row";
+    expect_window_follows(rig, style::light_theme());
+
+    int notified = 0;
+    const QObject counting;  // the connection ends with the test
+    QObject::connect(style::theme_notifier(), &style::ThemeNotifier::changed, &counting, [&notified] { ++notified; });
+    EXPECT_TRUE(style::set_theme_choice(wizz::ui::ThemeChoice::dark)) << "applied at once, not from the event loop";
+    EXPECT_EQ(notified, 1);
+    EXPECT_EQ(style::appearance(), style::Appearance::dark);
+    EXPECT_EQ(style::theme_choice(), wizz::ui::ThemeChoice::dark);
+    expect_window_follows(rig, style::dark_theme());
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        EXPECT_EQ(QGuiApplication::styleHints()->colorScheme(), Qt::ColorScheme::Dark);  // the title bar follows
+    }
+    EXPECT_FALSE(style::set_theme_choice(wizz::ui::ThemeChoice::dark)) << "the same choice changes nothing";
+    EXPECT_EQ(notified, 1);
+
+    // WIZZ_COLOR_SCHEME and High Contrast win over the choice; it is back when they go.
+    qputenv("WIZZ_COLOR_SCHEME", "light");
+    EXPECT_TRUE(style::refresh_appearance());
+    expect_window_follows(rig, style::light_theme());
+    qunsetenv("WIZZ_COLOR_SCHEME");
+    EXPECT_TRUE(style::refresh_appearance());
+    EXPECT_EQ(style::appearance(), style::Appearance::dark);
+    style::set_high_contrast_probe([] { return true; });
+    EXPECT_TRUE(style::refresh_appearance());
+    EXPECT_EQ(style::appearance(), style::Appearance::high_contrast);
+    EXPECT_FALSE(style::set_theme_choice(wizz::ui::ThemeChoice::light)) << "High Contrast stays";
+    EXPECT_EQ(style::appearance(), style::Appearance::high_contrast);
+    style::set_high_contrast_probe([] { return false; });
+    EXPECT_TRUE(style::refresh_appearance());
+    EXPECT_EQ(style::appearance(), style::Appearance::light) << "the choice made meanwhile";
+    expect_window_follows(rig, style::light_theme());
+
+    // Auto follows Windows again, from either choice: the request is withdrawn, and the look is
+    // Windows' app mode (on the windows platform as the registry says, where Qt reads it, so a
+    // request left in place shows after one of the two whatever Windows uses; the minimal platform
+    // reports none: light).
+    for (const wizz::ui::ThemeChoice before : {wizz::ui::ThemeChoice::dark, wizz::ui::ThemeChoice::light}) {
+        static_cast<void>(style::set_theme_choice(before));
+        static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::automatic));
+        const char* from = before == wizz::ui::ThemeChoice::dark ? "from Dark" : "from Light";
+        EXPECT_EQ(style::requested_color_scheme(), std::nullopt) << from;
+        EXPECT_EQ(style::appearance(), wizz::test::look::windows_app_mode_dark() ? style::Appearance::dark
+                                                                                 : style::Appearance::light)
+            << from;
+    }
+}
+
+TEST(Look, D_75_Asks_Qt_for_a_scheme_once_per_change_not_at_every_evaluation)
+{
+    // Qt answers every request with a theme change, which schedules another evaluation, and
+    // under a Windows contrast theme it reports no scheme at all (as the minimal platform always
+    // does): a request repeated whenever Qt's scheme differs from the one asked for never ends.
+    LookGuard guard;
+    WindowRig rig;
+    rig.start();
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::dark));
+    gui::settle();
+    const int asked = style::color_scheme_requests();
+    style::set_high_contrast_probe([] { return true; });
+    for (int i = 0; i < 3; ++i) {
+        static_cast<void>(style::refresh_appearance());
+        gui::settle();
+    }
+    style::set_high_contrast_probe([] { return false; });
+    static_cast<void>(style::refresh_appearance());
+    style::schedule_appearance_refresh();
+    gui::settle();
+    EXPECT_EQ(style::color_scheme_requests(), asked) << "Dark was asked for already";
+    EXPECT_EQ(style::requested_color_scheme(), Qt::ColorScheme::Dark);
+    EXPECT_EQ(style::appearance(), style::Appearance::dark);
+
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::light));
+    EXPECT_EQ(style::color_scheme_requests(), asked + 1);
+    static_cast<void>(style::set_theme_choice(wizz::ui::ThemeChoice::automatic));
+    EXPECT_EQ(style::color_scheme_requests(), asked + 2) << "Windows' own scheme again";
+    static_cast<void>(style::refresh_appearance());
+    gui::settle();
+    EXPECT_EQ(style::color_scheme_requests(), asked + 2);
 }
 
 TEST(Look, A_change_reported_by_Windows_is_applied_from_the_event_loop)

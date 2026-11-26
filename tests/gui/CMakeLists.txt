@@ -92,8 +92,10 @@ set_tests_properties(app.version app.version.powershell app.version.resource PRO
 # window), one at a time. A run is "scenario[:variant]...", named
 # autotest.<scenario>[.<variant>]...: scale150 / scale200 run at 150 % / 200 %
 # (QT_SCALE_FACTOR), dark forces the dark look (WIZZ_COLOR_SCHEME=dark; the other runs
-# follow the Windows app mode, and the checker verifies the look either way), minimum
-# starts the window at the 980 x 600 minimum.
+# follow the Windows app mode, and the checker verifies the look either way), themedark /
+# themelight save that Theme choice in the profile's settings.json (D-75: it decides the look
+# unless WIZZ_COLOR_SCHEME or High Contrast does), minimum starts the window at the 980 x 600
+# minimum.
 # The crash_* runs fail at start-up on purpose (a bad --fixed-now before the QApplication,
 # a bad replay.json after it): DPI-aware crash box, errors.log record in the --data-root
 # profile with the right timestamp (01 §3.2, D-30).
@@ -108,7 +110,8 @@ if(Python3_Interpreter_FOUND)
         heavy_cached:scale150 heavy_cached:scale200
         named_destination:minimum
         named_destination:dark cancel_retrying:dark heavy_cached:dark
-        named_destination:dark:scale200 named_destination:dark:minimum)
+        named_destination:dark:scale200 named_destination:dark:minimum
+        named_destination:themedark named_destination:dark:themelight)
     foreach(run IN LISTS _wizz_autotest_runs)
         string(REPLACE ":" ";" _variants "${run}")
         list(POP_FRONT _variants scenario)
@@ -118,6 +121,8 @@ if(Python3_Interpreter_FOUND)
             string(APPEND _name ".${_variant}")
             if(_variant STREQUAL "dark")
                 list(APPEND _variant_args --color-scheme dark)
+            elseif(_variant MATCHES "^theme(dark|light)$")
+                list(APPEND _variant_args --theme ${CMAKE_MATCH_1})
             elseif(_variant STREQUAL "minimum")
                 list(APPEND _variant_args --window 980x600)
             elseif(_variant MATCHES "^scale([1-9][0-9]*)$")

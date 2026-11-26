@@ -28,9 +28,11 @@
 //   layout      layout_problems() of the window (clipping, overlap, cut text) and
 //               whether Cancel is fully visible;
 //   environment OS, Qt version, locale, widget style, and the look in use (D-53..D-56):
-//               light, dark or high_contrast, the window colour of its palette and
-//               the family the UI font resolved to, so a run can tell that the look it
-//               asked for (WIZZ_COLOR_SCHEME, the Windows app mode) is the one it got.
+//               light, dark or high_contrast, the Theme choice it was chosen with
+//               (settings.json, D-75), the window colour of its palette and the family
+//               the UI font resolved to, so a run can tell that the look it asked for
+//               (WIZZ_COLOR_SCHEME, the Theme setting, the Windows app mode) is the one
+//               it got.
 //
 // Key order is fixed (as listed). UI thread only (the collectors read widgets).
 
@@ -136,6 +138,7 @@ struct EnvironmentDiagnostics {
     std::string locale;                       ///< the app's culture (07 §1)
     std::string style;                        ///< the widget style's name ("modern/fusion" for ModernStyle)
     std::string look;                         ///< "light", "dark" or "high_contrast" (style::appearance())
+    std::string theme_choice;                 ///< "Auto", "Dark" or "Light" (style::theme_choice(), D-75)
     std::string window_colour;                ///< the palette's Window colour, "#rrggbb"
     std::string font_family;                  ///< the family the UI font resolved to
     std::string text_rendering;               ///< the text rendering (style::text_rendering(), D-58)
