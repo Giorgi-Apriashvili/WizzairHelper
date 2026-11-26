@@ -58,9 +58,9 @@
 //   * Close is the default (primary) button; Enter clicks the focused push button (Check
 //     now, the update's button or Close), else Close; Esc and the title bar's close box
 //     close too.
-//   * Tab order: Check now, the update's button, the check box, the drop-down, the selected choice (the arrow
-//     keys move among the three and select — and so apply — each one, as an exclusive
-//     radio group does), the reuse window, the homes distance, the selected Theme segment
+//   * Tab order: Check now, the update's button, the check box, the drop-down, the selected choice (also
+//     when it is not the first; the arrow keys move among the three and select — and so apply —
+//     each one, as an exclusive radio group does; RadioTabStop), the reuse window, the homes distance, the selected Theme segment
 //     (the arrow keys move and select there too), Close. Focus starts on the
 //     first of Check now, the check box and the reuse window that is enabled (the reuse
 //     window in a run without updates) — never on the update's button, so an Enter right

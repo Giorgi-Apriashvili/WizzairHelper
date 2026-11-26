@@ -2,6 +2,7 @@
 
 #include "modern_style.hpp"
 #include "qt_strings.hpp"
+#include "radio_tab_stop.hpp"
 #include "section_card.hpp"
 #include "segmented_switch.hpp"
 #include "ui_style.hpp"
@@ -29,6 +30,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <utility>
+#include <vector>
 
 namespace wizz::app {
 
@@ -189,11 +191,15 @@ SettingsDialog::SettingsDialog(const update::UpdateOptions& options, const ui::U
     choices->setSpacing(kChoiceGap);
     when_found_ = new QButtonGroup(this);
     when_found_->setExclusive(true);
+    std::vector<QAbstractButton*> choice_buttons;
     for (const update::WhenFound choice : kChoices) {
         auto* button = new QRadioButton(to_qstring(strings::when_found_label(choice)), when_found_group_);
         when_found_->addButton(button, static_cast<int>(choice));
         choices->addWidget(button);
+        choice_buttons.push_back(button);
     }
+    // Tab stops on the selected choice also when it is not the first (D-63, fixed with D-75).
+    new RadioTabStop(std::move(choice_buttons), when_found_group_);
     body->addWidget(when_found_group_);
 
     // Why the choices are disabled (a portable copy).

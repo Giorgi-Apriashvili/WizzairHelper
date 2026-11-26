@@ -1,9 +1,10 @@
 #include "segmented_switch.hpp"
 
 #include "modern_style.hpp"
+#include "radio_tab_stop.hpp"
 #include "ui_style.hpp"
 
-#include <QFocusEvent>
+#include <QAbstractButton>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QPainter>
@@ -57,18 +58,6 @@ public:
 protected:
     /// The whole segment takes the mouse (a radio button only its circle and label).
     [[nodiscard]] bool hitButton(const QPoint& pos) const override { return rect().contains(pos); }
-
-    void focusInEvent(QFocusEvent* event) override
-    {
-        QRadioButton::focusInEvent(event);
-        owner_->keep_tab_stop_on_current();
-    }
-
-    void focusOutEvent(QFocusEvent* event) override
-    {
-        QRadioButton::focusOutEvent(event);
-        owner_->keep_tab_stop_on_current();  // back to the selected segment
-    }
 
     void paintEvent(QPaintEvent* /*event*/) override
     {
@@ -146,7 +135,6 @@ SegmentedSwitch::SegmentedSwitch(const QStringList& labels, QWidget* parent) : Q
                 each->update();  // the dividers beside the selection move with it
             }
             if (checked) {
-                keep_tab_stop_on_current();
                 Q_EMIT current_changed(index);
             }
         });
@@ -154,7 +142,7 @@ SegmentedSwitch::SegmentedSwitch(const QStringList& labels, QWidget* parent) : Q
     if (!segments_.empty()) {
         segments_.front()->setChecked(true);
     }
-    keep_tab_stop_on_current();
+    new RadioTabStop(std::vector<QAbstractButton*>(segments_.begin(), segments_.end()), this);
 }
 
 QRadioButton* SegmentedSwitch::segment(int index) const
@@ -202,19 +190,6 @@ QColor SegmentedSwitch::label_colour(int index) const
         return t.selection_text;
     }
     return button->underMouse() || button->isDown() ? t.text : t.text_secondary;  // like a tab's label
-}
-
-void SegmentedSwitch::keep_tab_stop_on_current()
-{
-    // Qt gives the Tab stop of a radio group to the button that last had the focus, and to every
-    // button until one had it; a Windows radio group's stop is its selected button. While a segment
-    // has the focus it is the stop, as in Qt, so Tab and Shift+Tab leave the switch at once also from
-    // a segment the focus reached without selecting it (a right-click, a press dragged off).
-    const auto focused = std::ranges::find_if(segments_, [](const Segment* each) { return each->hasFocus(); });
-    for (Segment* each : segments_) {
-        const bool stop = focused != segments_.end() ? each == *focused : each->isChecked();
-        each->setFocusPolicy(stop ? Qt::StrongFocus : Qt::ClickFocus);
-    }
 }
 
 } // namespace wizz::app

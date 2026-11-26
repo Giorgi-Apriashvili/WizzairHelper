@@ -1181,6 +1181,35 @@ TEST(SettingsWindow, D_75_A_theme_chosen_in_autotest_applies_but_writes_nothing)
     EXPECT_FALSE(std::filesystem::exists(settings_path(rig)));
 }
 
+TEST(SettingsWindow, D_75_Tab_reaches_the_selected_install_choice_also_when_it_is_not_the_first)
+{
+    // Fixed with D-75: Qt alone stopped on the first choice until one of them had the focus, so with
+    // "ask me" or "only tell me" saved, Tab landed on the unselected "install when I close" (and
+    // Space there chose it). Now the stop is the selected choice, as in a Windows radio group.
+    UpdateRig rig{rig_options(options(WhenFound::download_then_ask))};
+    rig.start();
+    SettingsDialog& dialog = open_settings(rig.window());
+    QRadioButton* install = dialog.when_found_button(WhenFound::install_on_close);
+    QRadioButton* ask = dialog.when_found_button(WhenFound::download_then_ask);
+    QRadioButton* notify = dialog.when_found_button(WhenFound::notify_only);
+    dialog.frequency_box()->setFocus(Qt::TabFocusReason);
+    EXPECT_EQ(press_tab(dialog, 2), (std::vector<QWidget*>{ask, dialog.reuse_box()})) << "one stop, the selected one";
+    EXPECT_EQ(press_tab(dialog, 2, true), (std::vector<QWidget*>{ask, dialog.frequency_box()}));
+    // The arrows move and select from there, which applies and saves the choice.
+    ask->setFocus(Qt::TabFocusReason);
+    gui::send_key(ask, QEvent::KeyPress, Qt::Key_Up);
+    EXPECT_EQ(dialog.focusWidget(), install);
+    EXPECT_EQ(saved(rig.window_rig).updates.when_found, WhenFound::install_on_close);
+    // Shown again with another choice (a new window), the stop follows it.
+    dialog.show_options(options(WhenFound::notify_only));
+    dialog.reuse_box()->setFocus(Qt::TabFocusReason);
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{notify}));
+    // The focus on a choice that is not selected (a right-click): one Tab still leaves the group.
+    ask->setFocus(Qt::MouseFocusReason);
+    EXPECT_EQ(press_tab(dialog, 1), (std::vector<QWidget*>{dialog.reuse_box()}));
+    EXPECT_EQ(press_tab(dialog, 1, true), (std::vector<QWidget*>{notify}));
+}
+
 TEST(SettingsWindow, Tab_order_starting_focus_and_names_for_screen_readers)
 {
     UpdateRig rig;

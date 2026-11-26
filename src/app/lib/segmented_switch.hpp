@@ -7,12 +7,10 @@
 //   ╰──────┴─▀▀▀▀─┴───────╯   colour, a 3 px accent pill along its bottom (like a selected tab)
 //
 // Each segment is a QRadioButton painted as part of the row, so the row behaves like the
-// window's other radio group and like a Windows radio group: one Tab stop, the selected segment
-// (also before any segment had the focus; Qt alone would stop on the first one until then), or
-// while a segment has the focus that one (a right-click or a press dragged off focuses without
-// selecting), so Tab leaves the switch at once; the arrow keys move to the next segment and select
-// it; Space or a click selects; a screen reader hears "Dark, radio button, checked". The segments
-// are auto-exclusive siblings in the switch.
+// window's other radio group and like a Windows radio group: one Tab stop, the selected segment,
+// or while a segment has the focus that one (RadioTabStop, radio_tab_stop.hpp); the arrow keys
+// move to the next segment and select it; Space or a click selects; a screen reader hears "Dark,
+// radio button, checked". The segments are auto-exclusive siblings in the switch.
 //
 // Look (D-53): rounded like the inputs and buttons (ModernStyle::kRadius), the secondary button's
 // fill inside the input frame, a 1 px divider between two unselected segments, the button's hover
@@ -68,9 +66,6 @@ Q_SIGNALS:
 private:
     class Segment;
     friend class Segment;
-
-    /// Only one segment takes the focus with Tab: the focused one, else the selected one.
-    void keep_tab_stop_on_current();
 
     std::vector<Segment*> segments_;
 };

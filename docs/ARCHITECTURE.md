@@ -70,6 +70,7 @@ The app draws its own look instead of the WinForms one of 01; these files hold i
 | `src/app/lib/settings_button.hpp/.cpp` | The gear `Settings` button in the corner of the result tabs, as tall as the tab bar (D-63) |
 | `src/app/lib/settings_dialog.hpp/.cpp` | The Settings window: the "Updates" card over `ui::UpdateStatusView` and `update::UpdateOptions` (D-62, D-63) with the update's button under Check now (D-74), the "Searches" card with the reuse window of fetched fares (D-68) and the homes distance (D-73), and the Theme switch beside Close (D-75) |
 | `src/app/lib/segmented_switch.hpp/.cpp` | `SegmentedSwitch`: joined radio-button segments painted from the theme, one Tab stop on the selected one (the Theme switch, D-75) |
+| `src/app/lib/radio_tab_stop.hpp/.cpp` | `RadioTabStop`: keeps an exclusive radio group's one Tab stop on its selected button (or the focused one), as Windows does — the Theme switch and the install choices (D-75) |
 | `src/app/lib/trailing_row_layout.hpp/.cpp` | The card row that keeps a search button at its right end and moves it under the row when it does not fit |
 | `src/app/lib/panel_progress_bar.hpp/.cpp` | The busy panel's self-painted bar, still while idle (D-34) |
 
