@@ -264,6 +264,11 @@ inline constexpr std::string_view kNoteCheckOnSite = "price not shown by Wizz �
 /// "Fare (local)" of a fare without a price (U+2014).
 inline constexpr std::string_view kNoLocalFare = "—";
 inline constexpr std::string_view kCopyDetails = "Copy details";
+/// The context menus' second copy item (DECISIONS D-76): the selected rows as a tab-separated table.
+inline constexpr std::string_view kCopyAsTable = "Copy as table";
+/// "Copy details" of a round trip (D-76), after both legs' details: "Round trip, {n} night(s): {total}",
+/// or "Round trip, {n} night(s): price: check on site" without a total.
+[[nodiscard]] std::string round_trip_copy_line(int nights, std::string_view total);
 inline constexpr std::string_view kPlanReturnMenu = "Search return flights from this destination";
 inline constexpr std::string_view kPlanReturnMenuBusy =
     "Search return flights from this destination (finish or cancel the current search first)";
@@ -347,7 +352,7 @@ inline constexpr std::string_view kHomesOnAirbnb = "Homes on Airbnb";
 /// The button's tooltip (plain text).
 inline constexpr std::string_view kHomesToolTip =
     "Open Airbnb in your browser with the homes around the city centre of the selected row's destination, for its "
-    "stay dates";
+    "stay dates (with several rows selected, the row you clicked last)";
 /// "{in} – {out}, {n} adult(s)" with the dates already formatted.
 [[nodiscard]] std::string homes_stay_text(std::string_view check_in, std::string_view check_out, int adults);
 /// "Homes on Airbnb: looking up the centre of {place}…"

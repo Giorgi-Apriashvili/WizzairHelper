@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QMenu>
 #include <QScopedValueRollback>
 #include <QVBoxLayout>
@@ -92,8 +93,8 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     layout->addLayout(bar);
     layout->addWidget(table_, 1);
 
-    // Context menu (01 §9.4): the three booking items are always enabled; "Homes on Airbnb"
-    // (D-72) follows the current trip.
+    // Context menu (01 §9.4): the three booking items are always enabled; the two copy items
+    // (D-76) copy the selected trips; "Homes on Airbnb" (D-72) follows the current trip.
     menu_ = new QMenu(this);
     connect(menu_->addAction(grid_bar::text(ui::strings::kOpenOnWizzair)), &QAction::triggered, this,
             &RoundTripGrid::open_selected);
@@ -101,6 +102,14 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
             &RoundTripGrid::open_outbound);
     connect(menu_->addAction(grid_bar::text(ui::strings::kOpenReturnOnly)), &QAction::triggered, this,
             &RoundTripGrid::open_return);
+    menu_->addSeparator();
+    copy_action_ = menu_->addAction(grid_bar::text(ui::strings::kCopyDetails));
+    copy_action_->setShortcut(QKeySequence::Copy);  // shown in the menu; the table handles Ctrl+C itself
+    copy_action_->setShortcutContext(Qt::WidgetShortcut);
+    connect(copy_action_, &QAction::triggered, this, &RoundTripGrid::copy_selected);
+    copy_table_action_ = menu_->addAction(grid_bar::text(ui::strings::kCopyAsTable));
+    connect(copy_table_action_, &QAction::triggered, this, &RoundTripGrid::copy_table);
+    clipboard_ = new ClipboardCopy(actions_, this);
     menu_->addSeparator();
     homes_action_ = menu_->addAction(grid_bar::text(ui::strings::kHomesOnAirbnb));
     connect(homes_action_, &QAction::triggered, this, &RoundTripGrid::request_homes);
@@ -120,6 +129,9 @@ RoundTripGrid::RoundTripGrid(std::shared_ptr<const Locale> locale, QWidget* pare
     connect(table_, &GridTableView::data_cell_pressed, this, &RoundTripGrid::on_cell_pressed);
     connect(table_, &GridTableView::data_cell_double_clicked, this, [this](int) { open_selected(); });
     connect(table_, &GridTableView::enter_pressed, this, &RoundTripGrid::open_selected);
+    connect(table_, &GridTableView::copy_requested, this, &RoundTripGrid::copy_selected);
+    connect(table_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this] { on_selection_changed(); });
     connect(table_, &GridTableView::context_menu_requested, this,
             [this](QPoint pos) { prepare_context_menu()->popup(pos); });
     connect(table_->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
@@ -223,6 +235,9 @@ void RoundTripGrid::request_homes()
 
 QMenu* RoundTripGrid::prepare_context_menu()
 {
+    const bool rows = model_->state().row_count() > 0;  // the copy items need a trip (D-76)
+    copy_action_->setEnabled(rows);
+    copy_table_action_->setEnabled(rows);
     homes_action_->setEnabled(selected_stay().has_value());
     refresh_homes();
     return menu_;
@@ -233,6 +248,30 @@ void RoundTripGrid::refresh_homes()
     const bool enabled = selected_stay().has_value();
     if (homes_->isEnabled() != enabled) {
         homes_->setEnabled(enabled);
+    }
+}
+
+void RoundTripGrid::copy_selected()
+{
+    if (const std::optional<std::string> text = model_->state().copy_selected_text()) {
+        clipboard_->copy(QString::fromStdString(*text));
+    }
+}
+
+void RoundTripGrid::copy_table()
+{
+    if (const std::optional<std::string> text = model_->state().copy_table_text()) {
+        clipboard_->copy(QString::fromStdString(*text));
+    }
+}
+
+void RoundTripGrid::on_selection_changed()
+{
+    if (!syncing_) {
+        const std::vector<std::size_t> rows = table_->selected_rows();
+        const QModelIndex current = table_->selectionModel()->currentIndex();  // already the new one
+        model_->select_rows(rows, current.isValid() ? std::optional<std::size_t>{static_cast<std::size_t>(current.row())}
+                                                    : std::nullopt);  // the user's selection, kept across sorting (D-76)
     }
 }
 
@@ -277,7 +316,8 @@ void RoundTripGrid::sync_current_row()
     const std::optional<std::size_t> row = model_->state().current_row();
     {
         const QScopedValueRollback guard{syncing_, true};
-        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
+        const std::vector<std::size_t> selected = model_->state().selected_rows();
+        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, selected, request,
                                  section(TripColumn::total));
     }
     refresh_homes();

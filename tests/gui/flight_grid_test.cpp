@@ -105,10 +105,10 @@ TEST(FlightGridWidget, Columns_headers_widths_and_flags)
     EXPECT_EQ(table.horizontalHeader()->font(), app::style::bold_form_font());
     EXPECT_FALSE(table.showGrid()) << "rows are separated by the delegate's line";
 
-    // Read-only, full-row single selection, no row headers, no border, fixed columns order.
+    // Read-only, full-row selection of several rows (D-76), no row headers, no border, fixed columns order.
     EXPECT_EQ(table.editTriggers(), QAbstractItemView::NoEditTriggers);
     EXPECT_EQ(table.selectionBehavior(), QAbstractItemView::SelectRows);
-    EXPECT_EQ(table.selectionMode(), QAbstractItemView::SingleSelection);
+    EXPECT_EQ(table.selectionMode(), QAbstractItemView::ExtendedSelection);  // D-76
     EXPECT_FALSE(table.verticalHeader()->isVisible());
     EXPECT_EQ(table.frameShape(), QFrame::NoFrame);
     EXPECT_FALSE(table.horizontalHeader()->sectionsMovable());
@@ -470,8 +470,8 @@ TEST(FlightGridWidget, Row_separators_and_the_row_bar_show_selection_and_keyboar
         EXPECT_EQ(image.pixelColor(x, middle(1)), theme.text_muted) << "the selected row without focus, x " << x;
     }
 
-    // The current row loses its selection while the grid keeps the focus (Ctrl+Space in
-    // single selection does that): the bar still shows where the keyboard is.
+    // The current row loses its selection while the grid keeps the focus (Ctrl+Space or
+    // Ctrl+click do that): the bar still shows where the keyboard is.
     table->setFocus(Qt::TabFocusReason);
     table->selectionModel()->clearSelection();
     ASSERT_EQ(table->currentIndex().row(), 1);

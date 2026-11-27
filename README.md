@@ -10,7 +10,10 @@ the way back and pairs both legs into the cheapest round trips for your stay. Fa
 the search runs, prices are converted to one currency, and double-clicking a fare opens it on
 wizzair.com. **Homes on Airbnb** (a button above each results table, also in the right-click menu)
 opens Airbnb's own search in your browser for the homes around the destination city's centre, for
-the stay dates of the selected row.
+the stay dates of the selected row (with several selected, the one you clicked last). Select
+several results with Ctrl+click, Shift+click or Ctrl+A and copy them from the right-click menu:
+**Copy details** (also Ctrl+C) gives each one's date, route, price and booking link, **Copy as
+table** a tab-separated table that pastes into Excel or Google Sheets.
 
 WizzairHelper is an independent project. It is not affiliated with, endorsed by or connected to
 Wizz Air or Airbnb; its icon is original artwork, not an airline logo.
@@ -78,10 +81,11 @@ fares were.
 **Homes on Airbnb** asks Photon / Nominatim (cached like any place) where the destination city's
 centre is, then opens `airbnb.com` in your default browser on the area within **Settings >
 Searches > Homes on Airbnb within** of it (5 km unless you change it), for the selected row's stay
-dates and adults. The app itself never contacts Airbnb, and Airbnb shows its own current prices.
-Islands and regions without one city (Santorini, Gran Canaria, Malta) open Airbnb's search for
-the name instead. An outbound row stays the minimum nights of "stay N to M nights" from its date,
-a return row as many nights before it, and a round trip from the outbound to the return.
+dates and adults (with several rows selected, the one you clicked last). The app itself never
+contacts Airbnb, and Airbnb shows its own current prices. Islands and regions without one city
+(Santorini, Gran Canaria, Malta) open Airbnb's search for the name instead. An outbound row stays
+the minimum nights of "stay N to M nights" from its date, a return row as many nights before it,
+and a round trip from the outbound to the return.
 
 Fares come from wizzair.com's unofficial website API; geocoding uses Photon / Nominatim
 (data © OpenStreetMap contributors); exchange rates come from Frankfurter / currency-api.

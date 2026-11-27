@@ -13,12 +13,17 @@
 //   * double-click / Enter open the booking URL, right-click makes the row
 //     current and opens the context menu, header clicks sort (01 §8.4, §8.8,
 //     §8.9); Copy details with the clipboard retry and its busy box;
+//   * several selected rows (DECISIONS D-76): the view's selection goes to the
+//     model, which keeps it across sorting, streaming and reloads, and comes back
+//     from it after every change; Copy details (also Ctrl+C) and Copy as table copy
+//     the selected rows; Open, Search return and Homes act on the current row;
 //   * "Homes on Airbnb" (D-72): a button at the right end of the top bar and a
 //     menu item, enabled while the current row has a stay, raise homes_requested;
 //   * the self-test accessors of 01 §8.10.
 //
 // UI thread only.
 
+#include "clipboard_copy.hpp"
 #include "flight_table_model.hpp"
 #include "grid_actions.hpp"
 
@@ -109,9 +114,11 @@ public:
 
     /// `OpenSelected()`: opens `Selected.BookingUrl`; a failure shows the browser Warning box.
     void open_selected();
-    /// `CopySelected()`: the "Copy details" text on the clipboard, retried about 10 × 100 ms,
-    /// then the Information box "The clipboard is busy …".
+    /// `CopySelected()`: the "Copy details" text of the selected rows (D-76) on the clipboard,
+    /// retried about 10 × 100 ms, then the Information box "The clipboard is busy …".
     void copy_selected();
+    /// "Copy as table" (D-76): the selected rows as a tab-separated table, the same way.
+    void copy_table();
     /// "Search return flights from this destination": raises plan_return_requested(Selected).
     void request_plan_return();
     /// The stay of the current row ("Homes on Airbnb"), or nullopt.
@@ -147,8 +154,8 @@ private:
     void on_header_clicked(int section);
     void on_cell_pressed(int row, Qt::MouseButton button);
     void on_current_row_changed(const QModelIndex& current);
+    void on_selection_changed();
     void show_context_menu(QPoint global_pos);
-    void try_copy();
     /// UpdateHeaders, the combo, the summary label, then the current row and scroll.
     void after_change();
     void update_headers();
@@ -165,14 +172,13 @@ private:
     QMenu* menu_ = nullptr;
     QAction* open_ = nullptr;
     QAction* copy_ = nullptr;
+    QAction* copy_table_ = nullptr;
     QAction* homes_action_ = nullptr;
     QAction* plan_return_ = nullptr;
     std::function<std::optional<ui::HomesStay>(const FlightResult&)> stay_for_;
-    QTimer clipboard_retry_;
-    QString pending_copy_;
-    int copy_attempts_left_ = 0;
     std::function<bool()> is_busy_;
     GridActions actions_;
+    ClipboardCopy* clipboard_ = nullptr;
     bool syncing_ = false;  ///< model-driven view changes are not user navigation
 };
 

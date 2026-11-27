@@ -21,11 +21,14 @@
 #include "ui_logic/ui_samples.hpp"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QFontMetricsF>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QScrollBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -34,6 +37,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -185,7 +189,7 @@ TEST(RoundTripGridWidget, Columns_headers_widths_and_formats)
     EXPECT_EQ(table.columnWidth(col(TripColumn::return_price)), 100);
     EXPECT_EQ(table.horizontalHeader()->font(), wizz::app::style::bold_form_font());
     EXPECT_EQ(table.selectionBehavior(), QAbstractItemView::SelectRows);
-    EXPECT_EQ(table.selectionMode(), QAbstractItemView::SingleSelection);
+    EXPECT_EQ(table.selectionMode(), QAbstractItemView::ExtendedSelection);  // D-76
     EXPECT_EQ(table.editTriggers(), QAbstractItemView::NoEditTriggers);
     EXPECT_FALSE(table.verticalHeader()->isVisible());
 
@@ -427,15 +431,19 @@ TEST(RoundTripGridWidget, CT_RT_01_Open_one_combined_booking_or_both_one_way_boo
               "https://www.wizzair.com/en-gb/booking/select-flight/BUD/LTN/2026-11-10/2026-11-13/1/0/0/null");
     EXPECT_EQ(text_at(f.grid, 3, TripColumn::booking_notes), "one booking");
 
-    // The menu: the three booking items always enabled; outbound only and return only;
-    // then, after a separator, Homes on Airbnb (D-72).
+    // The menu: the three booking items always enabled; outbound only and return only; then,
+    // after a separator, the two copy items (D-76), and after another, Homes on Airbnb (D-72).
     const QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
-    ASSERT_EQ(actions.size(), 5);
+    ASSERT_EQ(actions.size(), 8);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Open outbound only"));
     EXPECT_EQ(actions[2]->text(), QStringLiteral("Open return only"));
     EXPECT_TRUE(actions[3]->isSeparator());
-    EXPECT_EQ(actions[4]->text(), QStringLiteral("Homes on Airbnb"));
+    EXPECT_EQ(actions[4]->text(), QStringLiteral("Copy details"));
+    EXPECT_EQ(actions[4]->shortcut(), QKeySequence(QKeySequence::Copy));
+    EXPECT_EQ(actions[5]->text(), QStringLiteral("Copy as table"));
+    EXPECT_TRUE(actions[6]->isSeparator());
+    EXPECT_EQ(actions[7]->text(), QStringLiteral("Homes on Airbnb"));
     for (const QAction* action : actions) {
         EXPECT_TRUE(action->isEnabled());
     }
@@ -454,7 +462,9 @@ TEST(RoundTripGridWidget, CT_RT_01_Open_one_combined_booking_or_both_one_way_boo
         EXPECT_TRUE(empty[i]->isEnabled());
         empty[i]->trigger();
     }
-    EXPECT_FALSE(empty[4]->isEnabled());
+    EXPECT_FALSE(empty[4]->isEnabled()) << "no trip to copy";
+    EXPECT_FALSE(empty[5]->isEnabled());
+    EXPECT_FALSE(empty[7]->isEnabled());
     EXPECT_FALSE(f.grid.homes_button()->isEnabled());
     f.grid.open_selected();
     EXPECT_EQ(f.recorder.opened.size(), 6u);
@@ -479,7 +489,7 @@ TEST(RoundTripGridWidget, D_72_Homes_on_Airbnb_requests_the_current_trips_stay)
     EXPECT_EQ(requested[0], *wizz::ui::stay_for_trip(*f.grid.selected(), wizz::Date::min_value()));
 
     click(*f.grid.table(), cell_center(*f.grid.table(), 3, col(TripColumn::outbound)));
-    f.grid.prepare_context_menu()->actions()[4]->trigger();
+    f.grid.prepare_context_menu()->actions()[7]->trigger();
     ASSERT_EQ(requested.size(), 2u);
     EXPECT_EQ(requested[1].destination, trips[3].outbound->to_airport);
     EXPECT_EQ(requested[1].check_in, trips[3].outbound->date());
@@ -537,6 +547,61 @@ TEST(RoundTripGridWidget, Browser_failure_shows_one_warning_per_url)
               "Could not open the browser:\nboom\n\n" + trips[0].outbound->booking_url);
     EXPECT_EQ(f.recorder.messages[1].second.toStdString(),
               "Could not open the browser:\nboom\n\n" + trips[0].inbound->booking_url);
+}
+
+// ---------------------------------------------------------------------------
+// Several selected trips (DECISIONS D-76)
+// ---------------------------------------------------------------------------
+
+TEST(RoundTripGridWidget, D_76_Several_trips_are_selected_copied_and_kept_through_a_sort)
+{
+    TripFixture f;
+    f.grid.resize(1400, 480);
+    f.grid.show();
+    f.grid.set_trips(rt01_trips(), "EUR", "");
+    settle();
+    app::GridTableView& table = *f.grid.table();
+    const auto click_with = [&table](int row, Qt::KeyboardModifiers modifiers) {
+        const QPoint pos = cell_center(table, row, col(TripColumn::outbound));
+        const QPointF global = table.viewport()->mapToGlobal(QPointF(pos));
+        QMouseEvent press{QEvent::MouseButtonPress, QPointF(pos), global, Qt::LeftButton, Qt::LeftButton, modifiers};
+        QApplication::sendEvent(table.viewport(), &press);
+        QMouseEvent release{QEvent::MouseButtonRelease, QPointF(pos), global, Qt::LeftButton, Qt::NoButton, modifiers};
+        QApplication::sendEvent(table.viewport(), &release);
+    };
+    click_with(2, Qt::NoModifier);
+    click_with(0, Qt::ControlModifier);
+    ASSERT_EQ(table.selected_rows(), (std::vector<std::size_t>{0, 2}));
+    const ui::RoundTripGridModel& state = f.grid.model()->state();
+    const RoundTrip& first = state.trips()[state.row(0).idx];
+    const RoundTrip& third = state.trips()[state.row(2).idx];
+
+    // Copy details (also Ctrl+C) and Copy as table, in display order.
+    f.grid.prepare_context_menu()->actions()[4]->trigger();
+    ASSERT_EQ(f.recorder.clipboard.size(), 1u);
+    EXPECT_EQ(f.recorder.clipboard[0].toStdString(), ui::round_trip_copy_text(first, "EUR", *Locale::en_us()) +
+                                                         "\r\n\r\n" +
+                                                         ui::round_trip_copy_text(third, "EUR", *Locale::en_us()));
+    table.setFocus(Qt::OtherFocusReason);
+    send_key(&table, QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    ASSERT_EQ(f.recorder.clipboard.size(), 2u);
+    EXPECT_EQ(f.recorder.clipboard[1], f.recorder.clipboard[0]);
+    f.grid.prepare_context_menu()->actions()[5]->trigger();
+    ASSERT_EQ(f.recorder.clipboard.size(), 3u);
+    EXPECT_TRUE(f.recorder.clipboard[2].startsWith(QStringLiteral("Total (EUR)\tNights\t")));
+
+    // A header sort keeps the two trips; a recompute selects row 0 alone (01 §9.3).
+    click_header(f.grid, TripColumn::out_date);
+    std::vector<const RoundTrip*> kept;
+    for (const std::size_t row : table.selected_rows()) {
+        kept.push_back(&state.trips()[state.row(row).idx]);
+    }
+    EXPECT_EQ(kept.size(), 2u);
+    EXPECT_TRUE(std::ranges::contains(kept, &first));
+    EXPECT_TRUE(std::ranges::contains(kept, &third));
+    f.grid.set_trips(rt01_trips(), "EUR", "");
+    settle();
+    EXPECT_EQ(table.selected_rows(), std::vector<std::size_t>{0});
 }
 
 } // namespace

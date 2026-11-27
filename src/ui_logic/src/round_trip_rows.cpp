@@ -178,6 +178,21 @@ int compare_trip_rows(const TripRow& a, const TripRow& b, TripColumn column, con
 // RoundTripGridModel
 // ---------------------------------------------------------------------------
 
+std::string round_trip_copy_text(const RoundTrip& trip, std::string_view currency, const Locale& locale)
+{
+    std::string text = copy_details_text(*trip.outbound, locale);
+    text += "\r\n";
+    text += copy_details_text(*trip.inbound, locale);
+    text += "\r\n";
+    text += strings::round_trip_copy_line(
+        trip.nights, trip.total ? currency_format::format(*trip.total, currency, locale.number_symbols()) : std::string{});
+    if (trip.combined_booking_url) {
+        text += "\r\n";
+        text += *trip.combined_booking_url;
+    }
+    return text;
+}
+
 RoundTripGridModel::RoundTripGridModel(std::shared_ptr<const Locale> locale) : locale_(std::move(locale))
 {
     if (!locale_) {
@@ -204,7 +219,84 @@ void RoundTripGridModel::set_trips(std::vector<RoundTrip> trips, std::string_vie
         current_ = order_.front();  // row 0 current, at the Total column
         scroll_ = ScrollRequest::top;
     }
+    selection_chosen_ = false;  // the selection resets to row 0 with every recompute (01 §9.3, D-76)
+    selected_.clear();
     summary_ = std::string{summary};
+}
+
+void RoundTripGridModel::select_rows(std::span<const std::size_t> display_rows,
+                                     std::optional<std::size_t> current_display_row)
+{
+    selected_.clear();
+    selection_chosen_ =
+        !(display_rows.size() == 1 && current_display_row && display_rows.front() == *current_display_row);
+    if (!selection_chosen_) {
+        return;  // exactly the current row: it follows the current row
+    }
+    for (const std::size_t row : display_rows) {
+        if (row < order_.size()) {
+            selected_.insert(order_[row]);
+        }
+    }
+}
+
+std::vector<std::size_t> RoundTripGridModel::selected_rows() const
+{
+    std::vector<std::size_t> rows;
+    if (selection_chosen_ && !selected_.empty()) {
+        for (std::size_t position = 0; position < order_.size(); ++position) {
+            if (selected_.contains(order_[position])) {
+                rows.push_back(position);
+            }
+        }
+    }
+    if (rows.empty()) {
+        if (const std::optional<std::size_t> current = current_row()) {
+            rows.push_back(*current);
+        }
+    }
+    return rows;
+}
+
+std::optional<std::string> RoundTripGridModel::copy_selected_text() const
+{
+    const std::vector<std::size_t> rows = selected_rows();
+    if (rows.empty()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> blocks;
+    blocks.reserve(rows.size());
+    for (const std::size_t row : rows) {
+        blocks.push_back(round_trip_copy_text(trips_[order_[row]], currency_, *locale_));
+    }
+    return join_copied_rows(blocks);
+}
+
+std::optional<std::string> RoundTripGridModel::copy_table_text() const
+{
+    const std::vector<std::size_t> rows = selected_rows();
+    if (rows.empty()) {
+        return std::nullopt;
+    }
+    const auto line = [](const auto& cell) {
+        std::string text;
+        for (const TripColumn column : kTripColumns) {
+            if (column == TripColumn::idx) {
+                continue;  // hidden
+            }
+            if (!text.empty() || column != TripColumn::total) {
+                text += '\t';
+            }
+            text += table_cell_text(cell(column));
+        }
+        return text;
+    };
+    std::string table = line([this](TripColumn column) { return header(column); });
+    for (const std::size_t row : rows) {
+        table += "\r\n";
+        table += line([this, row](TripColumn column) { return cell_text(row, column); });
+    }
+    return table;
 }
 
 bool RoundTripGridModel::set_require_same_home(bool value) noexcept

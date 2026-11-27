@@ -132,6 +132,11 @@ void RoundTripTableModel::mouse_down(int row, ui::MouseButton button)
     }
 }
 
+void RoundTripTableModel::select_rows(std::span<const std::size_t> rows, std::optional<std::size_t> current)
+{
+    grid_.select_rows(rows, current);  // not a data change: nothing to notify
+}
+
 void RoundTripTableModel::set_current_row(int row)
 {
     if (row >= 0) {

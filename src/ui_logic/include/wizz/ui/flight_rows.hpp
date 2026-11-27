@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -101,6 +102,11 @@ inline constexpr std::array<FlightColumn, kFlightColumnCount> kFlightColumns{
 [[nodiscard]] std::string copy_details_text(const FlightResult& flight, const Locale& locale);
 /// The third context-menu item's text (UI-9).
 [[nodiscard]] std::string_view plan_return_menu_text(bool busy) noexcept;
+/// One cell of "Copy as table" (DECISIONS D-76): the text with tabs and line breaks turned into spaces,
+/// so a spreadsheet keeps it in one cell.
+[[nodiscard]] std::string table_cell_text(std::string_view text);
+/// The "Copy details" blocks of several rows (D-76), a blank line between two: "{a}\r\n\r\n{b}".
+[[nodiscard]] std::string join_copied_rows(std::span<const std::string> blocks);
 
 /// One grid row, computed once when it is added (`AddRow`).
 struct FlightRow {
@@ -159,7 +165,7 @@ enum class MouseButton { left, right, middle };
 /// The context menu when it opens (01 §8.9).
 struct FlightMenuState {
     bool open_enabled = false;        ///< "Open on wizzair.com"
-    bool copy_enabled = false;        ///< "Copy details"
+    bool copy_enabled = false;        ///< "Copy details" and "Copy as table" (D-76)
     bool plan_return_visible = false; ///< outbound grid only
     bool plan_return_enabled = false;
     std::string plan_return_text;
@@ -205,6 +211,14 @@ public:
     void set_current_row(std::size_t display_row);
     /// Key-up of Up, Down, PageUp, PageDown, Home or End: pick = Selected ?? pick.
     void navigation_key_up();
+    /// The user changed the grid's selection (DECISIONS D-76: Ctrl+click, Shift+click, Shift+arrows,
+    /// Ctrl+A, a plain click or arrow key): `display_rows` are now the selected rows and
+    /// `current_display_row` the view's current row. Exactly the current row (a plain click or arrow
+    /// key) keeps following the current row, as the single selection of 01 §8.1 did. Anything else
+    /// is the user's own selection: the grid keeps it as fares — by (From IATA, To IATA, Date), as
+    /// RestoreSelection matches (01 §8.7) — across sorting, streaming, view switches and SetResults,
+    /// until Clear or the next change.
+    void select_rows(std::span<const std::size_t> display_rows, std::optional<std::size_t> current_display_row);
 
     /// `RestoreSelection(target, scrollTopIfMissing)` (01 §8.7): the first row in display
     /// order that is `target` itself or has its (From IATA, To IATA, Date) — ordinal —
@@ -232,6 +246,14 @@ public:
     [[nodiscard]] FlightResultPtr selected() const;
     /// `ExplicitSelection`: the fare the user picked since the last Clear, or null.
     [[nodiscard]] const FlightResultPtr& explicit_selection() const noexcept { return picked_; }
+    /// The selected rows in display order (D-76): the rows of the user's selected fares that the view
+    /// shows — in Cheapest per destination also the row of a selected fare's destination when that
+    /// fare is not shown, as RestoreSelection falls back — while the fares themselves stay selected
+    /// for a view that shows them again; without a selection of the user's (and after Clear), or when
+    /// none of it is shown, the current row, as the single selection of 01 §8.1 did. Empty without rows.
+    [[nodiscard]] std::vector<std::size_t> selected_rows() const;
+    /// Whether the user's own selection is in force (D-76).
+    [[nodiscard]] bool selection_chosen() const noexcept { return selection_chosen_; }
     /// `_cheapest`: the lowest TotalConverted of the current view (NoPrice if none).
     [[nodiscard]] const Decimal& cheapest() const noexcept { return cheapest_; }
     [[nodiscard]] RowTone tone(std::size_t display_row) const;
@@ -262,8 +284,13 @@ public:
     [[nodiscard]] std::vector<std::string> visible_rows_text(std::size_t max) const;
     /// `CurrentRowText`.
     [[nodiscard]] std::string current_row_text() const;
-    /// "Copy details" of the current row; nullopt without a current row.
+    /// "Copy details" (01 §8.9, D-76): the text of every selected row in display order, a blank line
+    /// between two; nullopt without rows. One selected row gives 01 §8.9's text unchanged.
     [[nodiscard]] std::optional<std::string> copy_selected_text() const;
+    /// "Copy as table" (D-76): a header line of the visible columns' headers, then one line per
+    /// selected row with its cells as the grid shows them, tab-separated, CRLF between lines;
+    /// nullopt without rows.
+    [[nodiscard]] std::optional<std::string> copy_table_text() const;
 
 private:
     void rebuild(bool keep_top_if_not_picked);
@@ -271,6 +298,16 @@ private:
     [[nodiscard]] bool row_less(std::size_t a, std::size_t b) const;
     [[nodiscard]] std::optional<std::size_t> position_of(std::size_t idx) const noexcept;
     void make_current(std::size_t display_row, ScrollRequest scroll);
+    void set_selection(std::vector<FlightResultPtr> fares);
+
+    /// A fare as a selection matches it: (From IATA, To IATA, Date), ordinal (01 §8.7).
+    struct FareKey {
+        std::string from;
+        std::string to;
+        Date date;
+        friend auto operator<=>(const FareKey&, const FareKey&) = default;
+    };
+    [[nodiscard]] static FareKey key_of(const FlightResult& flight);
 
     std::shared_ptr<const Locale> locale_;
     bool offer_plan_return_ = true;
@@ -288,6 +325,9 @@ private:
     std::optional<ColumnSort<FlightColumn>> user_sort_;
     std::optional<std::size_t> current_;  ///< Idx of the current row
     ScrollRequest scroll_ = ScrollRequest::none;
+    bool selection_chosen_ = false;                ///< the user selected rows since the last Clear (D-76)
+    std::vector<FlightResultPtr> selected_fares_;  ///< their fares (also ones the view does not show)
+    std::set<FareKey> selected_keys_;              ///< the same fares' keys
     mutable Work work_;  ///< counted in const comparisons too
 };
 

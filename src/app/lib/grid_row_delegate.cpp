@@ -50,15 +50,15 @@ void GridRowDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     const bool selected = option.state.testFlag(QStyle::State_Selected);
     const bool focused = view->hasFocus();
     const QModelIndex current = view->currentIndex();
-    const bool keyboard_row = focused && current.isValid() && current.row() == index.row();
-    if (!selected && !keyboard_row) {
+    if (!current.isValid() || current.row() != index.row() || (!selected && !focused)) {
         return;
     }
-    // A 3 px bar at the row's left edge: the accent on the selected row of a focused grid and
-    // on its current row even when that is not selected (Ctrl+Space, Ctrl+click), so the
-    // keyboard focus always shows; the muted text colour on the selected row of a grid without
-    // focus, so the row the menu and Copy act on stays marked beyond its tint. High Contrast:
-    // the selected row is the system highlight, so the bar takes its text colour.
+    // A 3 px bar at the left edge of the current row, the one Open, Search return and Homes act
+    // on (D-76: the other selected rows have only the tint): the accent in a focused grid, also
+    // when the current row is not selected (Ctrl+Space, Ctrl+click), so the keyboard focus always
+    // shows; the muted text colour on a selected current row of a grid without focus, so the row
+    // the menu acts on stays marked beyond its tint. High Contrast: the selected row is the
+    // system highlight, so the bar takes its text colour.
     QColor bar = focused ? theme.accent_line : theme.text_muted;
     if (theme.high_contrast) {
         bar = selected ? theme.selection_text : theme.text;

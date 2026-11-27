@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QItemSelectionModel>
 #include <QStyle>
 
 #include <gtest/gtest.h>
@@ -51,6 +52,16 @@ TEST(GridSnapshots, Render_the_grids)
     outbound.grid.table()->setFocus();
     settle();
     EXPECT_TRUE(outbound.grid.grab().save(dir + "/flight_grid_selected_row.png"));
+    // Several selected rows (D-76): rows 3, 5 and 6, the current row 6 with the bar.
+    {
+        QItemSelectionModel& selection = *outbound.grid.table()->selectionModel();
+        const int last = outbound.grid.model()->columnCount() - 1;
+        selection.setCurrentIndex(outbound.grid.model()->index(6, col(FlightColumn::from)), QItemSelectionModel::NoUpdate);
+        selection.select(QItemSelection(outbound.grid.model()->index(5, 0), outbound.grid.model()->index(6, last)),
+                         QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+    settle();
+    EXPECT_TRUE(outbound.grid.grab().save(dir + "/flight_grid_selected_rows.png"));
 
     // Anywhere: Cheapest per destination, no "km from dest." column.
     GridFixture anywhere;

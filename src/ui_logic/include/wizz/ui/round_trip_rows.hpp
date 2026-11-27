@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -81,6 +82,12 @@ struct TripRow {
 /// Ascending comparison of one column (01 §8.4 rules, null first).
 [[nodiscard]] int compare_trip_rows(const TripRow& a, const TripRow& b, TripColumn column, const Locale& locale);
 
+/// "Copy details" of a round trip (DECISIONS D-76): the outbound's and the return's
+/// copy_details_text (01 §8.9: each with its booking URL), then round_trip_copy_line with the
+/// trip's total in `currency` (none: "price: check on site"), then the combined booking URL
+/// when the trip has one (what "Open on wizzair.com" opens); CRLF between lines.
+[[nodiscard]] std::string round_trip_copy_text(const RoundTrip& trip, std::string_view currency, const Locale& locale);
+
 class RoundTripGridModel {
 public:
     /// Default display sort (01 §9.2): Total, Out date ascending, then Idx (combiner order).
@@ -105,6 +112,11 @@ public:
     void mouse_down(std::size_t display_row, MouseButton button);
     /// Keyboard navigation moved the current row.
     void set_current_row(std::size_t display_row);
+    /// The user changed the grid's selection (D-76): `display_rows` are now the selected rows and
+    /// `current_display_row` the view's current row. Exactly the current row keeps following the
+    /// current row; anything else is kept as trips across sorting until the next SetTrips (which
+    /// resets to row 0, 01 §9.3).
+    void select_rows(std::span<const std::size_t> display_rows, std::optional<std::size_t> current_display_row);
 
     [[nodiscard]] std::size_t count() const noexcept { return trips_.size(); }
     [[nodiscard]] std::span<const RoundTrip> trips() const noexcept { return trips_; }
@@ -115,6 +127,15 @@ public:
     [[nodiscard]] std::optional<std::size_t> current_row() const;
     /// The current trip, or nullptr.
     [[nodiscard]] const RoundTrip* selected() const noexcept;
+    /// The selected rows in display order (D-76): the user's selected trips; before the user
+    /// selected (and after SetTrips), or when they selected none, the current row. Empty without rows.
+    [[nodiscard]] std::vector<std::size_t> selected_rows() const;
+    /// "Copy details" (D-76): round_trip_copy_text of every selected row in display order, a blank
+    /// line between two; nullopt without rows.
+    [[nodiscard]] std::optional<std::string> copy_selected_text() const;
+    /// "Copy as table" (D-76): the visible columns' headers, then one line per selected row with its
+    /// cells as shown, tab-separated, CRLF between lines; nullopt without rows.
+    [[nodiscard]] std::optional<std::string> copy_table_text() const;
     [[nodiscard]] std::string cell_text(std::size_t display_row, TripColumn column) const;
     [[nodiscard]] std::string header(TripColumn column) const { return trip_column_header(column, currency_); }
     [[nodiscard]] const std::optional<ColumnSort<TripColumn>>& user_sort() const noexcept { return user_sort_; }
@@ -142,6 +163,8 @@ private:
     std::optional<ColumnSort<TripColumn>> user_sort_;
     std::optional<std::size_t> current_;
     ScrollRequest scroll_ = ScrollRequest::none;
+    bool selection_chosen_ = false;      ///< the user selected rows since the last SetTrips (D-76)
+    std::set<std::size_t> selected_;     ///< their trips' indexes (trips_ changes only in SetTrips)
 };
 
 /// What RecomputeTrips hands to SetTrips.

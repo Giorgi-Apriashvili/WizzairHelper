@@ -238,7 +238,7 @@ TEST(Strings, D_72_Homes_on_Airbnb_texts)
 {
     EXPECT_EQ(kHomesOnAirbnb, "Homes on Airbnb");
     EXPECT_EQ(kHomesToolTip, "Open Airbnb in your browser with the homes around the city centre of the selected row's "
-                             "destination, for its stay dates");
+                             "destination, for its stay dates (with several rows selected, the row you clicked last)");
     EXPECT_EQ(homes_stay_text("04 Dec", "08 Dec", 2), "04 Dec – 08 Dec, 2 adults");
     EXPECT_EQ(homes_stay_text("04 Dec", "05 Dec", 1), "04 Dec – 05 Dec, 1 adult");
     EXPECT_EQ(homes_lookup_log("London Luton"), "Homes on Airbnb: looking up the centre of London Luton…");

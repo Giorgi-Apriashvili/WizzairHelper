@@ -259,6 +259,12 @@ std::string_view homes_radius_label(HomesRadius radius) noexcept
     return "5 km";
 }
 
+std::string round_trip_copy_line(int nights, std::string_view total)
+{
+    return std::format("Round trip, {} {}: {}", nights, nights == 1 ? "night" : "nights",
+                       total.empty() ? kCopyCheckOnSite : total);
+}
+
 std::string_view theme_choice_label(ThemeChoice choice) noexcept
 {
     switch (choice) {

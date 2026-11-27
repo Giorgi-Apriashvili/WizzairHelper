@@ -15,7 +15,10 @@
 
 #include <QFont>
 
+#include <cstddef>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -53,6 +56,8 @@ public:
     void mouse_down(int row, ui::MouseButton button);
     /// The view's current row moved.
     void set_current_row(int row);
+    /// The user changed the view's selection (D-76): its rows in display order and its current row.
+    void select_rows(std::span<const std::size_t> rows, std::optional<std::size_t> current);
     /// The filter checkboxes; true when the value changed.
     bool set_require_same_home(bool value) noexcept { return grid_.set_require_same_home(value); }
     bool set_require_same_away(bool value) noexcept { return grid_.set_require_same_away(value); }

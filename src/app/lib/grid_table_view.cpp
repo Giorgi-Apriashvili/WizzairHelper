@@ -9,6 +9,7 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPersistentModelIndex>
@@ -49,7 +50,7 @@ GridTableView::GridTableView(QWidget* parent) : QTableView(parent)
 {
     setEditTriggers(NoEditTriggers);
     setSelectionBehavior(SelectRows);
-    setSelectionMode(SingleSelection);
+    setSelectionMode(ExtendedSelection);  // several rows, as Windows lists select (D-76)
     setFrameShape(QFrame::NoFrame);
     setWordWrap(false);
     setShowGrid(false);  // rows are separated by the delegate's line, columns by space
@@ -175,8 +176,8 @@ int GridTableView::row_height() const
     return fontMetrics().height() + 12;  // comfortable rows (D-53)
 }
 
-void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest request, int column,
-                                     bool keep_horizontal)
+void GridTableView::show_current_row(std::optional<int> row, std::span<const std::size_t> selected,
+                                     ui::ScrollRequest request, int column, bool keep_horizontal)
 {
     QItemSelectionModel* selection = selectionModel();
     if (!row) {
@@ -191,11 +192,30 @@ void GridTableView::show_current_row(std::optional<int> row, ui::ScrollRequest r
     const QModelIndex current = selection->currentIndex();
     const QModelIndex target =
         model()->index(*row, request == ui::ScrollRequest::none && current.isValid() ? current.column() : column);
-    if (current != target || !selection->isRowSelected(target.row())) {
+    if (current != target) {
         const bool auto_scroll = hasAutoScroll();
         setAutoScroll(false);  // the scroll position follows the request below
-        selection->setCurrentIndex(target, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        selection->setCurrentIndex(target, QItemSelectionModel::NoUpdate);
         setAutoScroll(auto_scroll);
+    }
+    // Exactly the model's selected rows, as runs of whole rows (one range for Ctrl+A), only when the
+    // rows differ: an unchanged selection keeps Qt's ranges and its Shift anchor as they are.
+    if (!std::ranges::equal(selected_rows(), selected)) {
+        QItemSelection rows;
+        const int last_column = model()->columnCount() - 1;
+        for (std::size_t i = 0; i < selected.size();) {
+            std::size_t end = i;
+            while (end + 1 < selected.size() && selected[end + 1] == selected[end] + 1) {
+                ++end;
+            }
+            rows.select(model()->index(static_cast<int>(selected[i]), 0),
+                        model()->index(static_cast<int>(selected[end]), last_column));
+            i = end + 1;
+        }
+        selection->select(rows, QItemSelectionModel::ClearAndSelect);
+        // Committed: Qt keeps a selection made without the Current flag as its uncommitted "current
+        // selection", which the next Shift+arrow or Shift+click (SelectCurrent) would replace.
+        selection->select(QModelIndex(), QItemSelectionModel::Select);
     }
     switch (request) {
     case ui::ScrollRequest::top:
@@ -223,12 +243,46 @@ void GridTableView::show_sort_indicator(int section, Qt::SortOrder order)
     }
 }
 
+std::vector<std::size_t> GridTableView::selected_rows() const
+{
+    // From the ranges (they span whole rows): selectedRows() asks isRowSelected() per row, which
+    // copies and scans every range each time — slow for a selection of thousands of pieces.
+    std::vector<std::size_t> rows;
+    for (const QItemSelectionRange& range : selectionModel()->selection()) {
+        for (int row = range.top(); row <= range.bottom(); ++row) {
+            rows.push_back(static_cast<std::size_t>(row));
+        }
+    }
+    std::ranges::sort(rows);
+    const auto [first, last] = std::ranges::unique(rows);
+    rows.erase(first, last);
+    return rows;
+}
+
+QItemSelectionModel::SelectionFlags GridTableView::selectionCommand(const QModelIndex& index, const QEvent* event) const
+{
+    // A plain left press on a selected row selects it alone at once. Qt waits for the release (for a
+    // drag, which these tables do not start), and a streamed flush between the press and the release
+    // invalidates the pressed row, so the release would keep the old selection (D-76).
+    if (event != nullptr && event->type() == QEvent::MouseButtonPress && index.isValid()) {
+        const auto& press = *static_cast<const QMouseEvent*>(event);
+        if (press.button() == Qt::LeftButton && press.modifiers() == Qt::NoModifier &&
+            selectionModel()->isSelected(index)) {
+            return QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows;
+        }
+    }
+    return QTableView::selectionCommand(index, event);
+}
+
 bool GridTableView::event(QEvent* event)
 {
-    // Claim Enter before any window shortcut (the AcceptButton emulation) can take it.
-    if (event->type() == QEvent::ShortcutOverride && is_enter(*static_cast<QKeyEvent*>(event))) {
-        event->accept();
-        return true;
+    // Claim Enter and Ctrl+C before any window shortcut (the AcceptButton emulation) can take them.
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto& key = *static_cast<QKeyEvent*>(event);
+        if (is_enter(key) || key.matches(QKeySequence::Copy)) {
+            event->accept();
+            return true;
+        }
     }
     return QTableView::event(event);
 }
@@ -294,6 +348,11 @@ void GridTableView::keyPressEvent(QKeyEvent* event)
     if (is_enter(*event)) {
         event->accept();  // handled: no move to the next row, no default button (01 §8.8)
         Q_EMIT enter_pressed();
+        return;
+    }
+    if (event->matches(QKeySequence::Copy)) {
+        event->accept();  // the grid's copy of the selected rows, not Qt's copy of one cell (D-76)
+        Q_EMIT copy_requested();
         return;
     }
     QTableView::keyPressEvent(event);

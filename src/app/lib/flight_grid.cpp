@@ -13,6 +13,7 @@
 #include <QComboBox>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QScopedValueRollback>
@@ -108,6 +109,9 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     menu_ = new QMenu(this);
     open_ = menu_->addAction(grid_bar::text(ui::strings::kOpenOnWizzair));
     copy_ = menu_->addAction(grid_bar::text(ui::strings::kCopyDetails));
+    copy_->setShortcut(QKeySequence::Copy);  // shown in the menu; the table handles Ctrl+C itself
+    copy_->setShortcutContext(Qt::WidgetShortcut);
+    copy_table_ = menu_->addAction(grid_bar::text(ui::strings::kCopyAsTable));
     homes_action_ = menu_->addAction(grid_bar::text(ui::strings::kHomesOnAirbnb));
     connect(homes_action_, &QAction::triggered, this, &FlightGrid::request_homes);
     connect(homes_, &QPushButton::clicked, this, &FlightGrid::request_homes);
@@ -118,20 +122,21 @@ FlightGrid::FlightGrid(std::shared_ptr<const Locale> locale, bool offer_plan_ret
     }
     connect(open_, &QAction::triggered, this, &FlightGrid::open_selected);
     connect(copy_, &QAction::triggered, this, &FlightGrid::copy_selected);
-
-    clipboard_retry_.setSingleShot(true);
-    clipboard_retry_.setInterval(kClipboardRetryDelay);
-    connect(&clipboard_retry_, &QTimer::timeout, this, &FlightGrid::try_copy);
+    connect(copy_table_, &QAction::triggered, this, &FlightGrid::copy_table);
+    clipboard_ = new ClipboardCopy(actions_, this);
 
     connect(view_, &QComboBox::activated, this, &FlightGrid::on_view_activated);  // user changes only
     connect(table_->horizontalHeader(), &QHeaderView::sectionClicked, this, &FlightGrid::on_header_clicked);
     connect(table_, &GridTableView::data_cell_pressed, this, &FlightGrid::on_cell_pressed);
     connect(table_, &GridTableView::data_cell_double_clicked, this, [this](int) { open_selected(); });
     connect(table_, &GridTableView::enter_pressed, this, &FlightGrid::open_selected);
+    connect(table_, &GridTableView::copy_requested, this, &FlightGrid::copy_selected);
     connect(table_, &GridTableView::navigation_key_released, this, [this] { model_->navigation_key_up(); });
     connect(table_, &GridTableView::context_menu_requested, this, &FlightGrid::show_context_menu);
     connect(table_->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
             [this](const QModelIndex& current, const QModelIndex&) { on_current_row_changed(current); });
+    connect(table_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this] { on_selection_changed(); });
 
     after_change();
 }
@@ -255,14 +260,26 @@ void FlightGrid::open_selected()
 
 void FlightGrid::copy_selected()
 {
-    const std::optional<std::string> text = model_->state().copy_selected_text();
-    if (!text) {
-        return;
+    if (const std::optional<std::string> text = model_->state().copy_selected_text()) {
+        clipboard_->copy(QString::fromStdString(*text));
     }
-    clipboard_retry_.stop();
-    pending_copy_ = QString::fromStdString(*text);
-    copy_attempts_left_ = kClipboardAttempts;
-    try_copy();
+}
+
+void FlightGrid::copy_table()
+{
+    if (const std::optional<std::string> text = model_->state().copy_table_text()) {
+        clipboard_->copy(QString::fromStdString(*text));
+    }
+}
+
+void FlightGrid::on_selection_changed()
+{
+    if (!syncing_) {
+        const std::vector<std::size_t> rows = table_->selected_rows();
+        const QModelIndex current = table_->selectionModel()->currentIndex();  // already the new one
+        model_->select_rows(rows, current.isValid() ? std::optional<std::size_t>{static_cast<std::size_t>(current.row())}
+                                                    : std::nullopt);  // the user's selection, kept by the model (D-76)
+    }
 }
 
 void FlightGrid::request_plan_return()
@@ -301,6 +318,7 @@ QMenu* FlightGrid::prepare_context_menu()
     const ui::FlightMenuState state = model_->state().context_menu(is_busy_ && is_busy_());
     open_->setEnabled(state.open_enabled);
     copy_->setEnabled(state.copy_enabled);
+    copy_table_->setEnabled(state.copy_enabled);
     homes_action_->setEnabled(selected_stay().has_value());
     refresh_homes();
     if (plan_return_ != nullptr) {
@@ -363,25 +381,6 @@ void FlightGrid::show_context_menu(QPoint global_pos)
     prepare_context_menu()->popup(global_pos);
 }
 
-void FlightGrid::try_copy()
-{
-    if (copy_attempts_left_ <= 0) {
-        return;
-    }
-    --copy_attempts_left_;
-    if (!actions_.try_set_clipboard || actions_.try_set_clipboard(pending_copy_)) {
-        copy_attempts_left_ = 0;
-        return;
-    }
-    if (copy_attempts_left_ > 0) {
-        clipboard_retry_.start();  // another program holds the clipboard: try again shortly
-        return;
-    }
-    if (actions_.show_message) {
-        actions_.show_message(QMessageBox::Information, grid_bar::text(ui::strings::kClipboardBusy));
-    }
-}
-
 void FlightGrid::after_change()
 {
     update_headers();
@@ -424,7 +423,8 @@ void FlightGrid::sync_current_row()
     const std::optional<std::size_t> row = model_->state().current_row();
     {
         const QScopedValueRollback guard{syncing_, true};
-        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, request,
+        const std::vector<std::size_t> selected = model_->state().selected_rows();
+        table_->show_current_row(row ? std::optional<int>{static_cast<int>(*row)} : std::nullopt, selected, request,
                                  section(FlightColumn::date), keep_horizontal);
     }
     refresh_homes();

@@ -7,10 +7,15 @@
 // Enter open the combined booking or the outbound then the return booking;
 // right-click makes the row current and opens the menu "Open on wizzair.com",
 // "Open outbound only", "Open return only" (always enabled; no-ops without a
-// current trip) and, after a separator, "Homes on Airbnb" (D-72), which like the
-// button at the right end of the top bar is enabled while there is a current
-// trip and raises homes_requested with its stay. UI thread only.
+// current trip), after a separator "Copy details" (also Ctrl+C) and "Copy as
+// table" of the selected trips (D-76; enabled while there are trips), and after
+// another "Homes on Airbnb" (D-72), which like the button at the right end of the
+// top bar is enabled while there is a current trip and raises homes_requested with
+// its stay. Several trips can be selected (D-76); they stay selected through a
+// sort until the next set_trips; the open items and Homes act on the current
+// trip. UI thread only.
 
+#include "clipboard_copy.hpp"
 #include "grid_actions.hpp"
 #include "round_trip_table_model.hpp"
 
@@ -81,12 +86,17 @@ public:
     void open_outbound();
     /// "Open return only".
     void open_return();
+    /// "Copy details" (also Ctrl+C, D-76): both legs' details and the total of every selected
+    /// trip on the clipboard, retried like the flight grids' copy.
+    void copy_selected();
+    /// "Copy as table" (D-76): the selected trips as a tab-separated table.
+    void copy_table();
     /// The current trip's stay ("Homes on Airbnb", ui::stay_for_trip), or nullopt.
     [[nodiscard]] std::optional<ui::HomesStay> selected_stay() const;
     /// "Homes on Airbnb": raises homes_requested with the current trip's stay, if any.
     void request_homes();
-    /// The context menu with "Homes on Airbnb" enabled for the current trip (the three
-    /// booking items are always enabled).
+    /// The context menu with "Homes on Airbnb" enabled for the current trip and the two copy
+    /// items while there are trips (the three booking items are always enabled).
     QMenu* prepare_context_menu();
     [[nodiscard]] QMenu* context_menu() const noexcept { return menu_; }
 
@@ -111,6 +121,7 @@ private:
     void open_urls(const std::vector<std::string>& urls);
     void on_header_clicked(int section);
     void on_cell_pressed(int row, Qt::MouseButton button);
+    void on_selection_changed();
     void update_sort_indicator();
     void sync_current_row();
     /// The button follows whether there is a current trip.
@@ -123,9 +134,12 @@ private:
     ElidedLabel* summary_ = nullptr;
     GridBarButton* homes_ = nullptr;
     QMenu* menu_ = nullptr;
+    QAction* copy_action_ = nullptr;
+    QAction* copy_table_action_ = nullptr;
     QAction* homes_action_ = nullptr;
     std::function<Date()> today_;
     GridActions actions_;
+    ClipboardCopy* clipboard_ = nullptr;
     bool syncing_ = false;  ///< model-driven view changes are not user navigation
 };
 

@@ -3,12 +3,16 @@
 
 #include "wizz/ui/round_trip_rows.hpp"
 
+#include "wizz/ui/strings.hpp"
+
 #include "wizz/core/round_trips.hpp"
 
 #include "ui_logic/ui_samples.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -192,6 +196,80 @@ TEST(RecomputeTrips, MatchLegs_problems_become_the_summary)
     view = recompute_trips(&out, &ret, 2, 10, false, false, "EUR", en());
     EXPECT_EQ(view.summary,
               "Outbound was searched for 2 adult(s) but the return for 1. Search both legs with the same number.");
+}
+
+
+// --- Several selected trips (DECISIONS D-76) ------------------------------------------
+
+TEST(TripGrid, D_76_Selected_trips_stay_across_a_sort_and_SetTrips_resets_them)
+{
+    RoundTripGridModel grid{en_ptr()};
+    EXPECT_TRUE(grid.selected_rows().empty());
+    grid.set_trips(rt01_trips(), "EUR", "");
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{0});
+    grid.select_rows(std::vector<std::size_t>{3, 1}, grid.current_row());
+    const RoundTrip* first = &grid.trips()[grid.row(1).idx];
+    const RoundTrip* fourth = &grid.trips()[grid.row(3).idx];
+    grid.sort_by_column(TripColumn::out_date);
+    std::vector<const RoundTrip*> kept;
+    for (const std::size_t row : grid.selected_rows()) {
+        kept.push_back(&grid.trips()[grid.row(row).idx]);
+    }
+    ASSERT_EQ(kept.size(), 2u);
+    EXPECT_TRUE(std::ranges::contains(kept, first));
+    EXPECT_TRUE(std::ranges::contains(kept, fourth));
+    grid.select_rows(std::vector<std::size_t>{}, grid.current_row());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{*grid.current_row()}) << "none: the current row";
+    grid.set_current_row(1);
+    grid.select_rows(std::vector<std::size_t>{1}, 1u);  // a plain click: follows the current row
+    grid.set_current_row(3);
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{3});
+    grid.select_rows(std::vector<std::size_t>{2}, 3u);
+    grid.set_trips(rt01_trips(), "EUR", "");  // a recompute: back to row 0 (01 §9.3)
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{0});
+}
+
+TEST(TripGrid, D_76_Copy_details_has_both_legs_the_total_and_a_combined_booking)
+{
+    const std::vector<RoundTrip> trips = rt01_trips();
+    for (const RoundTrip& trip : trips) {
+        const std::string text = round_trip_copy_text(trip, "EUR", en());
+        EXPECT_TRUE(text.starts_with(copy_details_text(*trip.outbound, en()) + "\r\n" +
+                                     copy_details_text(*trip.inbound, en()) + "\r\nRound trip, "))
+            << text;
+        EXPECT_EQ(text.ends_with(trip.combined_booking_url.value_or("\x01")), trip.combined_booking_url.has_value())
+            << text;
+    }
+    // The worked trip of the cells test: 4 nights, 25.00 EUR, two bookings (no combined URL).
+    const std::string first = round_trip_copy_text(trips[0], "EUR", en());
+    EXPECT_EQ(first, copy_details_text(*trips[0].outbound, en()) + "\r\n" + copy_details_text(*trips[0].inbound, en()) +
+                         "\r\nRound trip, 4 nights: 25.00 EUR");
+    EXPECT_EQ(strings::round_trip_copy_line(1, "50.00 EUR"), "Round trip, 1 night: 50.00 EUR");
+    EXPECT_EQ(strings::round_trip_copy_line(5, ""), "Round trip, 5 nights: price: check on site");
+
+    RoundTripGridModel grid{en_ptr()};
+    EXPECT_FALSE(grid.copy_selected_text());
+    grid.set_trips(trips, "EUR", "");
+    grid.select_rows(std::vector<std::size_t>{2, 0}, grid.current_row());
+    EXPECT_EQ(grid.copy_selected_text(),
+              round_trip_copy_text(grid.trips()[grid.row(0).idx], "EUR", en()) + "\r\n\r\n" +
+                  round_trip_copy_text(grid.trips()[grid.row(2).idx], "EUR", en()));
+}
+
+TEST(TripGrid, D_76_Copy_as_table_has_the_visible_columns)
+{
+    RoundTripGridModel grid{en_ptr()};
+    EXPECT_FALSE(grid.copy_table_text());
+    grid.set_trips(rt01_trips(), "EUR", "");
+    grid.select_rows(std::vector<std::size_t>{0, 1}, grid.current_row());
+    const std::string table = *grid.copy_table_text();
+    const std::size_t first_break = table.find("\r\n");
+    ASSERT_NE(first_break, std::string::npos);
+    EXPECT_EQ(table.substr(0, first_break),
+              "Total (EUR)\tNights\tOut date\tOutbound\tOut price\tReturn date\tReturn\tReturn price\tBooking / notes");
+    EXPECT_EQ(std::ranges::count(table, '\n'), 2) << "a header and two rows";
+    EXPECT_TRUE(table.substr(first_break + 2).starts_with(grid.cell_text(0, TripColumn::total) + "\t" +
+                                                          grid.cell_text(0, TripColumn::nights) + "\t"));
 }
 
 } // namespace

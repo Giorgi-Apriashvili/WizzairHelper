@@ -4,7 +4,7 @@
 // colour on its surface colour (ui_style.hpp; never the grey read-only colour,
 // whatever the Qt style paints), no frame of its own: the results card frames it.
 // While it has the keyboard focus, a 3 px accent bar runs down its left edge (the
-// grids mark their selected row the same way). The colours follow the look.
+// grids mark their current row the same way). The colours follow the look.
 // append_line writes "[" + local now "HH:mm:ss" (culture time separator) + "] "
 // + line + CRLF through wizz::ui::log_entry, moves the caret to the end and
 // scrolls there. There is no size limit; the log lives in memory only.

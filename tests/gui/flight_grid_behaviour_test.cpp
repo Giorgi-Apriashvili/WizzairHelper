@@ -18,6 +18,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QScrollBar>
@@ -444,36 +445,41 @@ TEST(FlightGridBehaviour, UI_9_Context_menu_texts_and_enabled_states)
     bool busy = false;
     f.grid.set_busy_query([&] { return busy; });
     QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
-    ASSERT_EQ(actions.size(), 5);
+    ASSERT_EQ(actions.size(), 6);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Copy details"));
-    EXPECT_EQ(actions[2]->text(), QStringLiteral("Homes on Airbnb"));  // D-72
-    EXPECT_TRUE(actions[3]->isSeparator());
-    EXPECT_EQ(actions[4]->text(), QStringLiteral("Search return flights from this destination"));
+    EXPECT_EQ(actions[1]->shortcut(), QKeySequence(QKeySequence::Copy)) << "shown as Ctrl+C (D-76)";
+    EXPECT_EQ(actions[2]->text(), QStringLiteral("Copy as table"));  // D-76
+    EXPECT_EQ(actions[3]->text(), QStringLiteral("Homes on Airbnb"));  // D-72
+    EXPECT_TRUE(actions[4]->isSeparator());
+    EXPECT_EQ(actions[5]->text(), QStringLiteral("Search return flights from this destination"));
     EXPECT_FALSE(actions[0]->isEnabled());  // no rows: Selected is null
     EXPECT_FALSE(actions[1]->isEnabled());
     EXPECT_FALSE(actions[2]->isEnabled());
-    EXPECT_FALSE(actions[4]->isEnabled());
+    EXPECT_FALSE(actions[3]->isEnabled());
+    EXPECT_FALSE(actions[5]->isEnabled());
 
     f.grid.set_results(fss01(), "EUR", "");
     actions = f.grid.prepare_context_menu()->actions();
     EXPECT_TRUE(actions[0]->isEnabled());
     EXPECT_TRUE(actions[1]->isEnabled());
-    EXPECT_FALSE(actions[2]->isEnabled()) << "no stay query: Homes on Airbnb stays disabled";
-    EXPECT_TRUE(actions[4]->isEnabled());
+    EXPECT_TRUE(actions[2]->isEnabled());
+    EXPECT_FALSE(actions[3]->isEnabled()) << "no stay query: Homes on Airbnb stays disabled";
+    EXPECT_TRUE(actions[5]->isEnabled());
 
     busy = true;
     actions = f.grid.prepare_context_menu()->actions();
     EXPECT_TRUE(actions[0]->isEnabled());
     EXPECT_TRUE(actions[1]->isEnabled());
-    EXPECT_FALSE(actions[4]->isEnabled());
-    EXPECT_EQ(actions[4]->text().toStdString(),
+    EXPECT_TRUE(actions[2]->isEnabled());
+    EXPECT_FALSE(actions[5]->isEnabled());
+    EXPECT_EQ(actions[5]->text().toStdString(),
               "Search return flights from this destination (finish or cancel the current search first)");
 
     busy = false;
     actions = f.grid.prepare_context_menu()->actions();
-    EXPECT_TRUE(actions[4]->isEnabled());
-    EXPECT_EQ(actions[4]->text(), QStringLiteral("Search return flights from this destination"));
+    EXPECT_TRUE(actions[5]->isEnabled());
+    EXPECT_EQ(actions[5]->text(), QStringLiteral("Search return flights from this destination"));
 }
 
 TEST(FlightGridBehaviour, Return_grid_menu_has_no_plan_return_item)
@@ -481,10 +487,11 @@ TEST(FlightGridBehaviour, Return_grid_menu_has_no_plan_return_item)
     Fixture f{false};
     f.grid.set_results(fss01(), "EUR", "");
     const QList<QAction*> actions = f.grid.prepare_context_menu()->actions();
-    ASSERT_EQ(actions.size(), 3);
+    ASSERT_EQ(actions.size(), 4);
     EXPECT_EQ(actions[0]->text(), QStringLiteral("Open on wizzair.com"));
     EXPECT_EQ(actions[1]->text(), QStringLiteral("Copy details"));
-    EXPECT_EQ(actions[2]->text(), QStringLiteral("Homes on Airbnb"));
+    EXPECT_EQ(actions[2]->text(), QStringLiteral("Copy as table"));
+    EXPECT_EQ(actions[3]->text(), QStringLiteral("Homes on Airbnb"));
     EXPECT_FALSE(f.grid.offers_plan_return());
 }
 
@@ -527,10 +534,10 @@ TEST(FlightGridBehaviour, D_72_Homes_on_Airbnb_follows_the_current_rows_stay)
     EXPECT_EQ(requested[0].check_out, first->date().add_days(2));
 
     // The menu item raises the same request; a row without a stay disables both.
-    f.grid.prepare_context_menu()->actions()[2]->trigger();
+    f.grid.prepare_context_menu()->actions()[3]->trigger();
     EXPECT_EQ(requested.size(), 2u);
     usable = false;
-    EXPECT_FALSE(f.grid.prepare_context_menu()->actions()[2]->isEnabled());
+    EXPECT_FALSE(f.grid.prepare_context_menu()->actions()[3]->isEnabled());
     EXPECT_FALSE(button->isEnabled());
     f.grid.request_homes();
     EXPECT_EQ(requested.size(), 2u) << "nothing to request";

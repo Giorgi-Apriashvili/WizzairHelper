@@ -212,6 +212,25 @@ std::string copy_details_text(const FlightResult& flight, const Locale& locale)
     return text;
 }
 
+std::string table_cell_text(std::string_view text)
+{
+    std::string cell{text};
+    std::ranges::replace_if(cell, [](char c) { return c == '\t' || c == '\r' || c == '\n'; }, ' ');
+    return cell;
+}
+
+std::string join_copied_rows(std::span<const std::string> blocks)
+{
+    std::string text;
+    for (const std::string& block : blocks) {
+        if (!text.empty()) {
+            text += "\r\n\r\n";
+        }
+        text += block;
+    }
+    return text;
+}
+
 std::string_view plan_return_menu_text(bool busy) noexcept
 {
     return busy ? strings::kPlanReturnMenuBusy : strings::kPlanReturnMenu;
@@ -353,6 +372,7 @@ void FlightGridModel::clear(std::string_view currency, bool anywhere, std::strin
     currency_ = text::to_upper_invariant(currency);
     anywhere_ = anywhere;
     picked_.reset();
+    set_selection({});  // a new leg: the selection follows the current row again (D-76)
     if (!user_chose_view_) {
         mode_ = anywhere ? ViewMode::cheapest_per_destination : ViewMode::all_fares;  // not a user choice
     }
@@ -464,6 +484,40 @@ void FlightGridModel::navigation_key_up()
     }
 }
 
+FlightGridModel::FareKey FlightGridModel::key_of(const FlightResult& flight)
+{
+    return FareKey{std::string{iata_of(flight.from_airport)}, std::string{iata_of(flight.to_airport)}, flight.date()};
+}
+
+void FlightGridModel::set_selection(std::vector<FlightResultPtr> fares)
+{
+    selection_chosen_ = !fares.empty();
+    selected_keys_.clear();
+    for (const FlightResultPtr& fare : fares) {
+        selected_keys_.insert(key_of(*fare));
+    }
+    selected_fares_ = std::move(fares);
+}
+
+void FlightGridModel::select_rows(std::span<const std::size_t> display_rows,
+                                  std::optional<std::size_t> current_display_row)
+{
+    if (display_rows.size() == 1 && current_display_row && display_rows.front() == *current_display_row) {
+        set_selection({});  // exactly the current row: it follows the current row (01 §8.1)
+        return;
+    }
+    std::vector<std::size_t> rows{display_rows.begin(), display_rows.end()};
+    std::ranges::sort(rows);
+    std::vector<FlightResultPtr> fares;
+    for (const std::size_t row : rows) {
+        if (row < order_.size() && rows_[order_[row]].fare) {
+            fares.push_back(rows_[order_[row]].fare);
+        }
+    }
+    set_selection(std::move(fares));
+    selection_chosen_ = true;  // also none: the user cleared it (Ctrl+click, Ctrl+Space)
+}
+
 void FlightGridModel::restore_selection(const FlightResultPtr& target, bool scroll_top_if_missing)
 {
     if (order_.empty()) {
@@ -503,6 +557,52 @@ const FlightRow& FlightGridModel::row(std::size_t display_row) const
 std::optional<std::size_t> FlightGridModel::current_row() const
 {
     return current_ ? position_of(*current_) : std::nullopt;
+}
+
+std::vector<std::size_t> FlightGridModel::selected_rows() const
+{
+    std::vector<std::size_t> selected;
+    if (selection_chosen_ && !selected_keys_.empty()) {
+        std::vector<bool> marked(order_.size(), false);
+        std::set<FareKey> shown;
+        for (std::size_t position = 0; position < order_.size(); ++position) {
+            const FlightResultPtr& fare = rows_[order_[position]].fare;
+            if (!fare) {
+                continue;
+            }
+            FareKey key = key_of(*fare);
+            if (selected_keys_.contains(key)) {
+                marked[position] = true;
+                shown.insert(std::move(key));
+            }
+        }
+        if (mode_ == ViewMode::cheapest_per_destination && shown.size() < selected_keys_.size()) {
+            // A selected fare this view does not show: its destination's row, as RestoreSelection falls back.
+            std::set<std::string> groups;
+            for (const FlightResultPtr& fare : selected_fares_) {
+                if (fare->to_airport && !shown.contains(key_of(*fare))) {
+                    groups.insert(fare->to_airport->group_key());
+                }
+            }
+            for (std::size_t position = 0; position < order_.size(); ++position) {
+                const FlightResultPtr& fare = rows_[order_[position]].fare;
+                if (fare && fare->to_airport && groups.contains(fare->to_airport->group_key())) {
+                    marked[position] = true;
+                }
+            }
+        }
+        for (std::size_t position = 0; position < marked.size(); ++position) {
+            if (marked[position]) {
+                selected.push_back(position);
+            }
+        }
+    }
+    if (selected.empty()) {
+        if (const std::optional<std::size_t> current = current_row()) {
+            selected.push_back(*current);
+        }
+    }
+    return selected;
 }
 
 FlightResultPtr FlightGridModel::selected() const
@@ -556,11 +656,46 @@ std::string FlightGridModel::current_row_text() const
 
 std::optional<std::string> FlightGridModel::copy_selected_text() const
 {
-    const FlightResultPtr current = selected();
-    if (!current) {
+    const std::vector<std::size_t> rows = selected_rows();
+    if (rows.empty()) {
         return std::nullopt;
     }
-    return copy_details_text(*current, *locale_);
+    std::vector<std::string> blocks;
+    blocks.reserve(rows.size());
+    for (const std::size_t row : rows) {
+        blocks.push_back(copy_details_text(*rows_[order_[row]].fare, *locale_));
+    }
+    return join_copied_rows(blocks);
+}
+
+std::optional<std::string> FlightGridModel::copy_table_text() const
+{
+    const std::vector<std::size_t> rows = selected_rows();
+    if (rows.empty()) {
+        return std::nullopt;
+    }
+    std::vector<FlightColumn> columns;
+    for (const FlightColumn column : kFlightColumns) {
+        if (column_visible(column)) {
+            columns.push_back(column);
+        }
+    }
+    const auto line = [&columns](const auto& cell) {
+        std::string text;
+        for (const FlightColumn column : columns) {
+            if (!text.empty() || column != columns.front()) {
+                text += '\t';
+            }
+            text += table_cell_text(cell(column));
+        }
+        return text;
+    };
+    std::string table = line([this](FlightColumn column) { return header(column); });
+    for (const std::size_t row : rows) {
+        table += "\r\n";
+        table += line([this, row](FlightColumn column) { return cell_text(row, column); });
+    }
+    return table;
 }
 
 void FlightGridModel::rebuild(bool keep_top_if_not_picked)

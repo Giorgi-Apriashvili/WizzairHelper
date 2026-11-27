@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -86,6 +87,8 @@ public:
     void mouse_down(int row, ui::MouseButton button);
     /// The view's current row moved (keyboard, click); the pick is unchanged.
     void set_current_row(int row);
+    /// The user changed the view's selection (D-76): its rows in display order and its current row.
+    void select_rows(std::span<const std::size_t> rows, std::optional<std::size_t> current);
     /// Key-up of a navigation key: the current fare becomes the explicit pick.
     void navigation_key_up();
 

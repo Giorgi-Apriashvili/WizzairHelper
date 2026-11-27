@@ -17,8 +17,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <ranges>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -766,6 +769,216 @@ TEST(FlightGrid, R_03_Streaming_into_a_grouped_view_formats_only_the_new_rows)
     EXPECT_EQ(grid.all_results().size(), kManyFares);
     const std::vector<FlightResultPtr> per_day = view_list(grid.all_results(), ViewMode::cheapest_per_day);
     EXPECT_TRUE(std::ranges::equal(grid.shown_results(), per_day)) << "one row per day";
+}
+
+
+// --- Several selected rows (DECISIONS D-76) -------------------------------------------
+
+/// The fare shown at `display_row`.
+[[nodiscard]] FlightResultPtr fare_at(const FlightGridModel& grid, std::size_t display_row)
+{
+    return grid.row(display_row).fare;
+}
+
+TEST(FlightGrid, D_76_Without_a_user_selection_the_current_row_is_the_selection)
+{
+    FlightGridModel grid{en_ptr()};
+    EXPECT_TRUE(grid.selected_rows().empty());
+    grid.set_results(fss01(), "EUR", "");
+    EXPECT_FALSE(grid.selection_chosen());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{0});
+    grid.mouse_down(4, MouseButton::left);
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{4}) << "follows the current row";
+    grid.select_rows(std::vector<std::size_t>{4}, 4u);  // a plain click: exactly the current row
+    EXPECT_FALSE(grid.selection_chosen()) << "still follows the current row";
+    grid.set_current_row(5);
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{5});
+    grid.select_rows(std::vector<std::size_t>{2}, 5u);  // one row that is not current (Ctrl+click off)
+    EXPECT_TRUE(grid.selection_chosen());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{2});
+    grid.select_rows(std::vector<std::size_t>{}, 5u);  // the user cleared it (Ctrl+Space)
+    EXPECT_TRUE(grid.selection_chosen());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{5}) << "none selected: the current row";
+}
+
+TEST(FlightGrid, D_76_A_plain_click_or_arrow_key_keeps_the_selection_on_the_current_row_while_streaming)
+{
+    // U-09: a flush returns the current row to the pick. A selection of exactly the current row
+    // goes back with it, so the tint and the bar never part (Copy and Open act on one row).
+    const std::vector<FlightResultPtr> fares = fss01();
+    FlightGridModel grid{en_ptr()};
+    grid.clear("EUR", false);
+    grid.append(std::span{fares}.first(6));
+    grid.mouse_down(2, MouseButton::left);  // the pick
+    grid.select_rows(std::vector<std::size_t>{2}, 2u);
+    grid.set_current_row(3);  // Down, before its key-up
+    grid.select_rows(std::vector<std::size_t>{3}, 3u);
+    grid.append(std::span{fares}.subspan(6));
+    ASSERT_TRUE(grid.current_row());
+    EXPECT_EQ(grid.selected(), grid.explicit_selection()) << "back on the pick";
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{*grid.current_row()});
+}
+
+TEST(FlightGrid, D_76_The_user_selection_stays_on_its_fares_across_sorting_streaming_and_set_results)
+{
+    FlightGridModel grid{en_ptr()};
+    std::vector<FlightResultPtr> fares = fss01();
+    const std::vector<FlightResultPtr> first{fares.begin(), fares.begin() + 6};
+    const std::vector<FlightResultPtr> rest{fares.begin() + 6, fares.end()};
+    grid.clear("EUR", false);
+    grid.append(first);
+    grid.select_rows(std::vector<std::size_t>{4, 1}, grid.current_row());  // any order
+    const FlightResultPtr a = fare_at(grid, 1);
+    const FlightResultPtr b = fare_at(grid, 4);
+    const auto selected_fares = [&grid] {
+        std::vector<FlightResultPtr> out;
+        for (const std::size_t row : grid.selected_rows()) {
+            out.push_back(fare_at(grid, row));
+        }
+        return out;
+    };
+    EXPECT_EQ(selected_fares(), (std::vector<FlightResultPtr>{a, b}));
+    grid.append(rest);  // streaming in All fares
+    EXPECT_EQ(selected_fares().size(), 2u);
+    EXPECT_TRUE(std::ranges::contains(selected_fares(), a));
+    EXPECT_TRUE(std::ranges::contains(selected_fares(), b));
+    grid.sort_by_column(FlightColumn::date);
+    EXPECT_EQ(selected_fares().size(), 2u);
+    EXPECT_TRUE(std::ranges::contains(selected_fares(), a));
+    EXPECT_TRUE(std::ranges::contains(selected_fares(), b));
+    const std::vector<std::size_t> rows = grid.selected_rows();
+    EXPECT_TRUE(std::ranges::is_sorted(rows)) << "display order";
+    // The final result: other objects with the same (From, To, Date) keep the selection.
+    grid.set_results(fss01(), "EUR", "");
+    ASSERT_EQ(selected_fares().size(), 2u);
+    for (const FlightResultPtr& fare : selected_fares()) {
+        EXPECT_TRUE((fare->fare.from == a->fare.from && fare->date() == a->date()) ||
+                    (fare->fare.from == b->fare.from && fare->date() == b->date()));
+    }
+    // A new leg: the selection follows the current row again.
+    grid.clear("EUR", false);
+    grid.set_results(fss01(), "EUR", "");
+    EXPECT_FALSE(grid.selection_chosen());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{0});
+}
+
+TEST(FlightGrid, D_76_A_view_switch_shows_the_selected_fares_it_has_and_keeps_the_others)
+{
+    FlightGridModel grid{en_ptr()};
+    grid.set_results(fss01(), "EUR", "");
+    // Row 1 (BUD>LTN 14 Nov, its day's cheapest) and BUD>LTN 12 Nov, which Cheapest per day hides
+    // behind BTS>LTN 12 Nov.
+    std::size_t hidden = grid.row_count();
+    for (std::size_t row = 0; row < grid.row_count(); ++row) {
+        if (fare_at(grid, row)->fare.from == "BUD" && fare_at(grid, row)->date() == day(11, 12)) {
+            hidden = row;
+            break;
+        }
+    }
+    ASSERT_LT(hidden, grid.row_count());
+    const FlightResultPtr shown_fare = fare_at(grid, 1);
+    const FlightResultPtr hidden_fare = fare_at(grid, hidden);
+    grid.select_rows(std::vector<std::size_t>{1, hidden}, grid.current_row());
+    grid.choose_view(ViewMode::cheapest_per_day);
+    EXPECT_TRUE(grid.selection_chosen());
+    ASSERT_EQ(grid.selected_rows().size(), 1u) << "the per-day view shows one of the two";
+    EXPECT_EQ(fare_at(grid, grid.selected_rows()[0])->fare.from, shown_fare->fare.from);
+    EXPECT_EQ(fare_at(grid, grid.selected_rows()[0])->date(), shown_fare->date());
+    grid.choose_view(ViewMode::all_fares);
+    std::vector<FlightResultPtr> back;
+    for (const std::size_t row : grid.selected_rows()) {
+        back.push_back(fare_at(grid, row));
+    }
+    EXPECT_EQ(back.size(), 2u) << "both again: the hidden one stayed selected";
+    EXPECT_TRUE(std::ranges::contains(back, shown_fare));
+    EXPECT_TRUE(std::ranges::contains(back, hidden_fare));
+}
+
+TEST(FlightGrid, D_76_Cheapest_per_destination_keeps_a_destination_whose_cheapest_fare_changed)
+{
+    const AirportPtr bud = airport("BUD", "Budapest");
+    const AirportPtr ltn = airport("LTN", "London Luton");
+    const AirportPtr cph = airport("CPH", "Copenhagen");
+    const FlightResultPtr london = hand_fare(bud, ltn, day(11, 10), 6, 0, "50", "EUR", "50");
+    const FlightResultPtr copenhagen = hand_fare(bud, cph, day(11, 10), 7, 0, "40", "EUR", "40");
+    const FlightResultPtr cheaper_london = hand_fare(bud, ltn, day(11, 12), 6, 0, "45", "EUR", "45");
+    FlightGridModel grid{en_ptr()};
+    grid.clear("EUR", true);  // anywhere: Cheapest per destination
+    ASSERT_EQ(grid.mode(), ViewMode::cheapest_per_destination);
+    grid.append(std::vector<FlightResultPtr>{london, copenhagen});
+    ASSERT_EQ(grid.row_count(), 2u);
+    ASSERT_EQ(fare_at(grid, 0), copenhagen) << "the cheaper destination first, and current";
+    grid.select_rows(std::vector<std::size_t>{1}, grid.current_row());  // London, not the current row
+    ASSERT_TRUE(grid.selection_chosen());
+    grid.append(std::vector<FlightResultPtr>{cheaper_london});  // London's row now shows another fare
+    ASSERT_EQ(fare_at(grid, 1), cheaper_london);
+    EXPECT_TRUE(grid.selection_chosen());
+    EXPECT_EQ(grid.selected_rows(), std::vector<std::size_t>{1}) << "the destination stays selected";
+    // The fare itself stays selected: All fares shows it again, not its replacement.
+    grid.choose_view(ViewMode::all_fares);
+    ASSERT_EQ(grid.selected_rows().size(), 1u);
+    EXPECT_EQ(fare_at(grid, grid.selected_rows()[0]), london);
+}
+
+TEST(FlightGrid, D_76_Copy_details_of_several_rows_in_display_order_a_blank_line_between)
+{
+    FlightGridModel grid{en_ptr()};
+    grid.set_results(fss01(), "EUR", "");
+    grid.select_rows(std::vector<std::size_t>{2, 0}, grid.current_row());
+    const std::string first = copy_details_text(*fare_at(grid, 0), en());
+    const std::string third = copy_details_text(*fare_at(grid, 2), en());
+    EXPECT_EQ(grid.copy_selected_text(), first + "\r\n\r\n" + third);
+    grid.select_rows(std::vector<std::size_t>{2}, grid.current_row());
+    EXPECT_EQ(grid.copy_selected_text(), third) << "one row: 01 §8.9's text";
+    EXPECT_EQ(join_copied_rows(std::vector<std::string>{}), "");
+    EXPECT_EQ(join_copied_rows(std::vector<std::string>{"a"}), "a");
+}
+
+TEST(FlightGrid, D_76_Copy_as_table_has_the_visible_columns_and_one_line_per_selected_row)
+{
+    FlightGridModel grid{en_ptr()};
+    EXPECT_FALSE(grid.copy_table_text());
+    grid.set_results(fss01(), "EUR", "");
+    grid.select_rows(std::vector<std::size_t>{1, 3}, grid.current_row());
+    const std::optional<std::string> table = grid.copy_table_text();
+    ASSERT_TRUE(table);
+    std::vector<std::string> lines;
+    for (const auto line : std::views::split(*table, std::string_view{"\r\n"})) {
+        lines.emplace_back(line.begin(), line.end());
+    }
+    ASSERT_EQ(lines.size(), 3u);
+    std::vector<std::string> headers;
+    for (const FlightColumn column : kFlightColumns) {
+        if (grid.column_visible(column)) {
+            headers.push_back(grid.header(column));
+        }
+    }
+    std::string header_line;
+    for (const std::string& header : headers) {
+        header_line += (header_line.empty() ? "" : "\t") + header;
+    }
+    EXPECT_EQ(lines[0], header_line);
+    EXPECT_TRUE(lines[0].starts_with("Date\tDeparts\tFrom\t")) << lines[0];
+    EXPECT_FALSE(lines[0].contains("Idx")) << "hidden columns stay out";
+    EXPECT_TRUE(lines[1].starts_with(grid.cell_text(1, FlightColumn::date) + "\t" +
+                                     grid.cell_text(1, FlightColumn::departs) + "\t"));
+    EXPECT_TRUE(lines[2].starts_with(grid.cell_text(3, FlightColumn::date) + "\t"));
+    EXPECT_EQ(std::ranges::count(lines[1], '\t'), static_cast<std::ptrdiff_t>(headers.size() - 1));
+    // Anywhere: no "km from dest." column.
+    grid.clear("EUR", true);
+    grid.set_results(fss01(), "EUR", "");
+    EXPECT_FALSE(grid.copy_table_text()->contains("km from dest"));
+    // A tab or line break inside a cell becomes a space.
+    EXPECT_EQ(table_cell_text("a\tb\r\nc"), "a b  c");
+}
+
+TEST(FlightGrid, D_76_The_menu_offers_both_copies_while_there_is_a_row)
+{
+    FlightGridModel grid{en_ptr()};
+    EXPECT_FALSE(grid.context_menu(false).copy_enabled);
+    grid.set_results(fss01(), "EUR", "");
+    grid.select_rows(std::vector<std::size_t>{}, grid.current_row());
+    EXPECT_TRUE(grid.context_menu(false).copy_enabled) << "nothing selected: the current row is copied";
 }
 
 } // namespace
