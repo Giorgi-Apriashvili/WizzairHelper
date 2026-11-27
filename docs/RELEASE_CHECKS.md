@@ -19,6 +19,22 @@ the end-to-end runs) and `cmake --build --preset package`; details in [`BUILDING
 | [2.3.1](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.3.1) | 2026-11-19 | `1ded54e` | Fix: a retired Wizz Air API version answering HTTP 503 made every search fail "Wizz Air is busy"; the address is now looked up again on such a page and after 24 hours (DECISIONS D-71). |
 | [2.4.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.4.0) | 2026-11-19 | `3f9438d` | Homes on Airbnb: a button above each results table and a menu item open Airbnb's search around the destination city's centre for the row's stay, within 2 / 5 / 10 / 25 km set in Settings > Searches (DECISIONS D-72, D-73). |
 | [2.5.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.5.0) | 2026-11-19 | `29c9fad` | The update's button (Restart and update / Update now / Download) right under Check now in the Settings window, also after Later; the Settings window no longer grows for a two-line status (DECISIONS D-74). |
+| [2.6.0](https://github.com/Giorgi-Apriashvili/WizzairHelper/releases/tag/v2.6.0) | 2026-11-27 | `b38bb7c` | A Theme switch (Auto / Dark / Light) beside Close in the Settings window (DECISIONS D-75); several selected results in the three tables, with Copy details (also Ctrl+C) and Copy as table (D-76); Tab into the install choices lands on the saved one. |
+
+v2.6.0 verification: CI run 45903348462 on `8a22f35` (the Theme switch and the Tab fix), CI run 46042468342 on
+`033360d` (several selected results) and the tag's run 46045084831 on `b38bb7c` passed on all three legs and published
+the release. Locally the changes passed 1791 / 1791 and then 1809 / 1809 tests in Release (all end-to-end runs, two new
+ones with a saved Theme); the Debug and clang-cl suites ran on CI only (a local run was stopped for low memory). 23 rules
+of D-75 and the Tab fix and 21 of D-76 were each broken on purpose and a test failed every time. Independent reviews
+found 5 problems in D-75 (among them a High Contrast focus frame all but invisible on the selected Theme segment) and 12
+in D-76 (among them the selection and the current row parting after an arrow key while results stream, a Shift range
+losing rows after a reload, a click during streaming keeping the old selection), all fixed before the release. The
+Settings window with the switch (light, dark, High Contrast) and the grids with several selected rows (light, dark) were
+rendered and checked by eye. `tools/release_check.ps1 -Tag v2.6.0`: three assets (installer 10,185,266 bytes, ZIP
+11,794,803 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints
+`WizzairHelper 2.6.0`, and `releases/latest` is v2.6.0. Not verified: switching Windows' app mode and a contrast theme by
+hand with the installed app (the owner's display settings were not changed), a real Shift+click (a widget test cannot
+synthesize it, D-76), a real update to 2.6.0 run by the installed app.
 
 v2.5.0 verification: CI run 44578932427 on `96a6ca9` and the tag's run 44584889106 on `29c9fad` passed on all three legs and published the release. Locally the change passed 1770 / 1770 tests in Release (all end-to-end runs), Debug and with clang-cl 22.1.8; 9 rules of the change were each broken on purpose and a test failed every time; an independent review found one bug (a button beside "Downloading" that would have installed an older ready version), fixed before the release. The Settings window was rendered in light, dark and High Contrast at 100 % and 150 % and checked by eye. `tools/release_check.ps1 -Tag v2.5.0`: three assets (installer 10,203,494 bytes, ZIP 11,778,198 bytes, `SHA256SUMS.txt`), both checksums match, the packaged `WizzairHelper.exe --version` prints `WizzairHelper 2.5.0`, and `releases/latest` is v2.5.0. Not verified: a real update to 2.5.0 run by the installed app, and the new button with a real release (the tests script the updater).
 
